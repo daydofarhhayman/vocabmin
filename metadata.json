@@ -1,0 +1,6 @@
+{
+  "name": "VocabMin - 智能單字記憶與複習測驗系統",
+  "description": "高效單字記憶、間隔重複(SRS)卡片複習、多模式練習測驗(四選一、聽力、拼字)與沉浸式文章書籍朗讀助手。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

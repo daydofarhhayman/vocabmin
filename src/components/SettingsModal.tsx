@@ -1,0 +1,332 @@
+import React from 'react';
+import {
+  X,
+  Moon,
+  Sun,
+  Sliders,
+  Sparkles,
+  CloudCheck,
+  LogIn,
+  LogOut,
+  ArrowRight,
+  Bot,
+  Layout,
+  Palette
+} from 'lucide-react';
+import { AppSettings } from '../types';
+import { TRANSLATIONS } from '../utils/translations';
+import { User } from 'firebase/auth';
+
+interface SettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  settings: AppSettings;
+  onUpdateSettings: (settings: Partial<AppSettings>) => void;
+  user: User | null;
+  onLogin: () => void;
+  onLogout: () => void;
+  onSyncCloud: () => void;
+  onOpenAI?: () => void;
+  onOpenCustomizeHome?: () => void;
+}
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({
+  isOpen,
+  onClose,
+  settings,
+  onUpdateSettings,
+  user,
+  onLogin,
+  onLogout,
+  onSyncCloud,
+  onOpenAI,
+  onOpenCustomizeHome
+}) => {
+  const t = TRANSLATIONS[settings.lang];
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-enter">
+      <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border border-slate-100 dark:border-slate-700 max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-700 mb-4 flex-shrink-0">
+          <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-black text-xl">
+            <Sliders className="w-5 h-5" />
+            <span>{t.title_settings}</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar space-y-5 pr-1">
+          {/* Home Screen Widgets & Visual Assembler Callout */}
+          {onOpenCustomizeHome && (
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 border border-indigo-500/25 backdrop-blur space-y-3 shadow-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 font-bold shrink-0">
+                    <Layout className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <span>主畫面小工具自由拼裝工坊</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 font-extrabold">
+                        NEW
+                      </span>
+                    </h4>
+                    <span className="text-xs text-slate-400">
+                      自選 9 款實用模組與 7 款配色
+                    </span>
+                  </div>
+                </div>
+
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300">
+                  手機桌面模式
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                如同手機桌布的小工具編輯方式，直接在主畫面上隨心拖曳拉動您想要的小工具、任意切換整行/半行欄寬與色彩風格，所見即所得！
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenCustomizeHome();
+                }}
+                className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shadow-md transition active:scale-95 flex items-center justify-center gap-2"
+              >
+                <Palette className="w-4 h-4" />
+                <span>進入主畫面桌面編輯模式（直接拖曳） →</span>
+              </button>
+            </div>
+          )}
+
+          {/* AI Multi-Scenario Assistant Banner */}
+          {onOpenAI && (
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-pink-500/10 border border-purple-500/20 backdrop-blur flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-purple-500/20 shrink-0">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                    <span>AI 智能多場景語伴</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 font-extrabold">
+                      4大場景
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    全能問答、生詞擴充、寫作文法診斷與實戰模擬
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  onClose();
+                  onOpenAI();
+                }}
+                className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow transition active:scale-95 shrink-0 ml-2"
+              >
+                <span>前往語伴</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Cloud Sync Account */}
+          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3 flex items-center gap-1.5">
+              <CloudCheck className="w-4 h-4" />
+              <span>{t.sec_cloud}</span>
+            </h4>
+
+            {user ? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-bold text-slate-800 dark:text-white block">
+                    {user.displayName || user.email}
+                  </span>
+                  <span className="text-xs text-slate-400">雲端即時同步已啟用</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={onSyncCloud}
+                    className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition"
+                  >
+                    立即同步
+                  </button>
+                  <button
+                    onClick={onLogout}
+                    className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition"
+                  >
+                    登出
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-bold text-slate-800 dark:text-white block">
+                    訪客本機模式 (Guest)
+                  </span>
+                  <span className="text-xs text-slate-400">登入後可跨裝置同步單字庫與閱讀進度</span>
+                </div>
+                <button
+                  onClick={onLogin}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md transition flex items-center gap-1.5"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Google 登入</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Review & Quiz Settings */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+              {t.sec_review}
+            </h4>
+
+            {/* Review limit */}
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  {t.opt_review_limit}
+                </span>
+                <span className="text-xs text-slate-400">{t.desc_review_limit}</span>
+              </div>
+              <select
+                value={settings.reviewLimit}
+                onChange={(e) => onUpdateSettings({ reviewLimit: parseInt(e.target.value) })}
+                className="p-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold outline-none cursor-pointer"
+              >
+                <option value="10">10 個</option>
+                <option value="20">20 個</option>
+                <option value="30">30 個</option>
+                <option value="50">50 個</option>
+                <option value="100">100 個</option>
+                <option value="9999">無限制</option>
+              </select>
+            </div>
+
+            {/* Show Timer in Review */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  顯示答題即時碼錶
+                </span>
+                <span className="text-xs text-slate-400">
+                  在複習題目右上角顯示秒數。若感到時間壓力可關閉（背後仍會默默自適應推算）。
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.showTimerInReview ?? true}
+                onChange={(e) => onUpdateSettings({ showTimerInReview: e.target.checked })}
+                className="w-5 h-5 accent-indigo-600 cursor-pointer"
+              />
+            </div>
+
+            {/* Show Feedback in Review */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  顯示作答速度與評級判定
+                </span>
+                <span className="text-xs text-slate-400">
+                  答題後顯示「秒殺/流暢/猶豫」及等級變化。關閉後僅顯示簡約正確標記，無評判壓力。
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.showFeedbackInReview ?? true}
+                onChange={(e) => onUpdateSettings({ showFeedbackInReview: e.target.checked })}
+                className="w-5 h-5 accent-indigo-600 cursor-pointer"
+              />
+            </div>
+
+            {/* Built-in SRS Decay explanation */}
+            <div className="p-3 rounded-xl bg-slate-100/80 dark:bg-slate-700/50 border border-slate-200/60 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400 space-y-1 mt-2">
+              <div className="font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span>智能遺忘衰減機制（系統內建常駐）</span>
+              </div>
+              <p className="leading-relaxed text-[11px]">
+                系統會自動追蹤嚴重逾期未複習的單字，並依時間差平緩調整熟練度，無需手動開關或設定。
+              </p>
+            </div>
+          </div>
+
+          {/* Appearance & Language */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+              {t.sec_appearance}
+            </h4>
+
+            {/* Dark Mode */}
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                {t.opt_dark_mode}
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.darkMode}
+                onChange={(e) => onUpdateSettings({ darkMode: e.target.checked })}
+                className="w-5 h-5 accent-indigo-600 cursor-pointer"
+              />
+            </div>
+
+            {/* Language */}
+            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                    {t.sec_language}
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {settings.lang === 'zh'
+                      ? '單字庫與複習測驗主要顯示「中文解釋」'
+                      : 'Vocabulary & reviews primarily display "English definitions"'}
+                  </span>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ lang: 'zh' })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      settings.lang === 'zh'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    繁體中文
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ lang: 'en' })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      settings.lang === 'en'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    English
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
