@@ -6,12 +6,17 @@ interface CambridgeModalProps {
   word: string;
   isOpen: boolean;
   onClose: () => void;
+  lang?: 'en' | 'zh-tw'; // 'en' = 英文版, 'zh-tw' = 英漢雙語版
 }
 
-export const CambridgeModal: React.FC<CambridgeModalProps> = ({ word, isOpen, onClose }) => {
+export const CambridgeModal: React.FC<CambridgeModalProps> = ({ word, isOpen, onClose, lang = 'en' }) => {
   if (!isOpen || !word) return null;
 
-  const dictionaryUrl = `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(word)}`;
+  const dictionaryUrl = lang === 'zh-tw'
+    ? `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(word)}`
+    : `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(word)}`;
+  const langLabel = lang === 'zh-tw' ? '英漢雙語版' : '英文版';
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-enter">
@@ -45,7 +50,7 @@ export const CambridgeModal: React.FC<CambridgeModalProps> = ({ word, isOpen, on
           </div>
 
           <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            您可在 Cambridge 劍橋權威英漢雙解字典中查看完整英英例句、同義詞、音標及發音示範。
+            將於劍橋權威字典（<span className="font-bold text-indigo-600 dark:text-indigo-400">{langLabel}</span>）中查看完整例句、同義詞、音標及發音示範。
           </p>
 
           <div className="bg-slate-50 dark:bg-slate-900/60 rounded-xl p-3 border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-500 break-all">
@@ -65,7 +70,7 @@ export const CambridgeModal: React.FC<CambridgeModalProps> = ({ word, isOpen, on
               rel="noopener noreferrer"
               className="px-5 py-2.5 text-sm font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md flex items-center gap-2 transition active:scale-95"
             >
-              <span>前往劍橋線上字典</span>
+              <span>前往劍橋字典（{langLabel}）</span>
               <ExternalLink className="w-4 h-4" />
             </a>
           </div>

@@ -329,6 +329,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Cambridge Dictionary Language */}
+            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                    劍橋字典語言版本
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {(settings.cambridgeLang ?? 'en') === 'zh-tw' ? '開啟英漢雙語版頁面' : '開啟英文版頁面'}
+                  </span>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ cambridgeLang: 'en' })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      (settings.cambridgeLang ?? 'en') === 'en'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    英文版
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ cambridgeLang: 'zh-tw' })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      settings.cambridgeLang === 'zh-tw'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    英漢雙語
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Article Reader AI Lookup Mode */}
+            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                    文章閱讀 AI 查詢模式
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {settings.autoAILookup ? '點擊單字立即自動查詢 AI（耗用額度）' : '點擊單字後手動按鈕查詢（節省額度）'}
+                  </span>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ autoAILookup: false })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      !settings.autoAILookup
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    手動查詢
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ autoAILookup: true })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      settings.autoAILookup
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    自動查詢
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* About / Version + Changelog */}

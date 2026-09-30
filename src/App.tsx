@@ -887,6 +887,7 @@ export default function App() {
         word={cambridgeWord || ''}
         isOpen={!!cambridgeWord}
         onClose={() => setCambridgeWord(null)}
+        lang={settings.cambridgeLang ?? 'en'}
       />
 
       {/* Toast Notification */}

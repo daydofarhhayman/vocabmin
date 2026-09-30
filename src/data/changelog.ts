@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.3.4',
+    date: '2026-09-30',
+    type: 'feat',
+    changes: [
+      '✨ 文章閱讀：點擊單字不再自動耗用 AI 額度，改為顯示「點擊使用 AI 查詢」按鈕，由使用者手動觸發',
+      '✨ 設定頁新增「文章閱讀 AI 查詢模式」：可切換手動/自動查詢',
+      '✨ 設定頁新增「劍橋字典語言版本」：可選擇英文版或英漢雙語版',
+    ]
+  },
+  {
     version: '1.3.3',
     date: '2026-09-30',
     type: 'fix',

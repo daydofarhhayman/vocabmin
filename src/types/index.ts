@@ -43,6 +43,8 @@ export interface AppSettings {
   reviewLimit: number; // Max cards per review session
   showTimerInReview?: boolean; // 是否在複習時顯示計時碼錶
   showFeedbackInReview?: boolean; // 是否在答題後顯示即時評判與速度標籤
+  cambridgeLang?: 'en' | 'zh-tw'; // 劍橋字典語言：英文版 or 中文版
+  autoAILookup?: boolean; // 點擊單字時是否自動呼叫 AI 查詢（預設 false）
   // Backward compatibility optional fields
   mergeReview?: boolean;
   autoPlayAudio?: boolean;

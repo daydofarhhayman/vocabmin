@@ -10,7 +10,8 @@ import {
   ReaderSettings,
   SentenceAnalysisData,
   WordAnalysisData,
-  ArticleChatMessage
+  ArticleChatMessage,
+  AppSettings
 } from '../types';
 import { storage, DEFAULT_READER_SETTINGS } from '../services/storage';
 import { tts, FormattedVoiceOption } from '../services/tts';
@@ -69,6 +70,7 @@ interface ArticleReaderViewProps {
   onClearInitialArticleId?: () => void;
   articles?: Article[];
   onArticlesChange?: (updated: Article[]) => void;
+  appSettings?: AppSettings;
 }
 
 interface InspectedWordData {
@@ -83,6 +85,7 @@ interface InspectedWordData {
   existingWord?: Word;
   isLoading?: boolean;
   hasAILookup?: boolean;
+  needsAILookup?: boolean;
 }
 
 export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
@@ -93,7 +96,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   initialArticleId,
   onClearInitialArticleId,
   articles: externalArticles,
-  onArticlesChange
+  onArticlesChange,
+  appSettings
 }) => {
   // State: Articles List & Active Article
   const [articles, setArticles] = useState<Article[]>(() => externalArticles || storage.getLocalArticles());
@@ -364,7 +368,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       return;
     }
 
-    // 3. Brand-new word: Auto-fetch with AI in background & cache
+    // 3. Brand-new word: show placeholder. Auto-fetch only if autoAILookup is enabled.
     setInspectedWord({
       term: cleanTerm,
       pos: 'n.',
@@ -375,14 +379,18 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       exampleZh: '',
       sentenceContext: sentenceContext.trim(),
       existingWord: undefined,
-      isLoading: true,
-      hasAILookup: true
+      isLoading: appSettings?.autoAILookup === true, // only show spinner if auto mode
+      hasAILookup: true,
+      needsAILookup: appSettings?.autoAILookup !== true // flag: waiting for manual trigger
     });
     setCustomDefEdit('');
     setIsEditingDef(false);
     setCustomExEdit('');
     setIsEditingEx(false);
     setShowOriginalContext(false);
+
+    // Only auto-fetch if user has enabled autoAILookup in settings
+    if (appSettings?.autoAILookup !== true) return;
 
     try {
       const res = await fetch('/api/ai/article-lookup', {
@@ -425,6 +433,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             example: analysisData.ex,
             exampleZh: analysisData.exZh,
             isLoading: false,
+            needsAILookup: false,
             hasAILookup: true
           };
         });
@@ -443,10 +452,67 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     }
   };
 
-  // Re-query word with AI (forceRefresh)
-  const handleAILookupForCurrentWord = () => {
+  // Re-query word with AI — always fires regardless of autoAILookup setting (manual intent)
+  const handleAILookupForCurrentWord = async () => {
     if (!inspectedWord) return;
-    handleWordClick(inspectedWord.term, inspectedWord.sentenceContext, true);
+    const cleanTerm = inspectedWord.term;
+    const lowerTerm = cleanTerm.toLowerCase();
+
+    // Show loading state immediately
+    setInspectedWord((prev) =>
+      prev ? { ...prev, isLoading: true, needsAILookup: false } : null
+    );
+
+    try {
+      const res = await fetch('/api/ai/article-lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          word: cleanTerm,
+          sentence: inspectedWord.sentenceContext,
+          forceRefresh: true
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const analysisData: WordAnalysisData = {
+          term: data.term || cleanTerm,
+          pos: (data.pos as POS) || 'n.',
+          def: data.def || cleanTerm,
+          defEn: data.defEn || '',
+          phonetic: data.phonetic || '',
+          ex: data.ex || `Learning ${cleanTerm} helps improve English proficiency.`,
+          exZh: data.exZh || '',
+          fromCache: false,
+          cachedAt: Date.now()
+        };
+        storage.saveWordAnalysis(cleanTerm, analysisData);
+        setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
+        setInspectedWord((prev) =>
+          prev ? {
+            ...prev,
+            term: analysisData.term,
+            pos: analysisData.pos,
+            def: analysisData.def,
+            defEn: analysisData.defEn,
+            phonetic: analysisData.phonetic,
+            example: analysisData.ex,
+            exampleZh: analysisData.exZh,
+            isLoading: false,
+            needsAILookup: false,
+            hasAILookup: true
+          } : null
+        );
+        setCustomDefEdit(analysisData.def);
+        setCustomExEdit(analysisData.ex || '');
+      } else {
+        setInspectedWord((prev) => prev ? { ...prev, isLoading: false } : null);
+      }
+    } catch (err) {
+      console.error('AI Word lookup error:', err);
+      setInspectedWord((prev) => prev ? { ...prev, isLoading: false } : null);
+    }
   };
 
   // Send message to AI Reading Companion
@@ -2160,6 +2226,18 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           AI 智能結合語境解析中（精準釋義、英英解釋與短例句）...
                         </span>
                         <div className="h-4 bg-indigo-100/60 dark:bg-indigo-950/40 rounded-lg animate-pulse w-3/4"></div>
+                      </div>
+                    ) : (inspectedWord as any).needsAILookup ? (
+                      /* Manual AI lookup button — no auto query, save quota */
+                      <div className="py-1 space-y-2">
+                        <p className="text-sm text-slate-400 dark:text-slate-500 italic">尚未查詢此單字的 AI 解析</p>
+                        <button
+                          onClick={() => handleAILookupForCurrentWord()}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow transition active:scale-95"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          點擊使用 AI 查詢（精準釋義＋例句）
+                        </button>
                       </div>
                     ) : (
                       <div>
