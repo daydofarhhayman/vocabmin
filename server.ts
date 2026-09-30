@@ -1054,6 +1054,92 @@ You must strictly output JSON matching this schema:
       }
     }
 
+    // ── Fallback: Article intent detected but AI forgot to fill article field ──
+    // When user clearly wants an article but AI only replied in text (article is undefined),
+    // auto-generate the article via the dedicated endpoint logic and attach it.
+    if (!parsedData.article) {
+      const promptLower = rawUserPrompt.toLowerCase();
+      const wantsArticle =
+        (promptLower.includes('文章') || promptLower.includes('article') || promptLower.includes('短文') || promptLower.includes('閱讀')) &&
+        (promptLower.includes('生成') || promptLower.includes('幫我') || promptLower.includes('寫') ||
+         promptLower.includes('加入') || promptLower.includes('新增') || promptLower.includes('create') ||
+         promptLower.includes('generate') || promptLower.includes('make'));
+
+      if (wantsArticle) {
+        try {
+          const levelMatch = rawUserPrompt.match(/\b(A1|A2|B1|B2|C1|C2)\b/i);
+          const requestedLevel = levelMatch ? levelMatch[1].toUpperCase() : 'B2';
+
+          const articlePrompt = `Based on this user request: "${rawUserPrompt}"
+
+Create a captivating, authentic English reading article at CEFR ${requestedLevel} level.
+
+Return ONLY valid JSON with these exact fields:
+{
+  "title": "English article title",
+  "subtitle": "Brief thematic subtitle",
+  "author": "VocabMin AI Scholar",
+  "source": "VocabMin AI",
+  "level": "${requestedLevel}",
+  "category": "Tech",
+  "content": "Full English article text (3-5 paragraphs, separated by \\n\\n)",
+  "translationZh": "Paragraph-by-paragraph Traditional Chinese translation",
+  "summary": "1-2 sentence Traditional Chinese summary",
+  "grammarPoints": [{"sentence":"...","structure":"...","explanation":"...","grammarType":"..."}],
+  "keyVocabulary": [{"term":"...","pos":"n.","def":"中文釋義","defEn":"English definition","level":"${requestedLevel}","ex":"Example sentence"}]
+}`;
+
+          const articleResponse = await generateWithModelFallback(
+            ai,
+            { temperature: 0.6, responseMimeType: 'application/json' },
+            [{ role: 'user', parts: [{ text: articlePrompt }] }]
+          );
+
+          const articleRaw = articleResponse.text || '{}';
+          let articleParsed: any;
+          try {
+            articleParsed = JSON.parse(articleRaw);
+          } catch {
+            articleParsed = null;
+          }
+
+          if (articleParsed && articleParsed.content && articleParsed.content.length > 50) {
+            const wordCount = articleParsed.content.split(/\s+/).filter(Boolean).length;
+            parsedData.article = {
+              id: `art-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              title: articleParsed.title || 'AI Generated Article',
+              subtitle: articleParsed.subtitle || '',
+              author: articleParsed.author || 'VocabMin AI Scholar',
+              source: articleParsed.source || 'VocabMin AI',
+              level: articleParsed.level || requestedLevel,
+              category: articleParsed.category || 'Custom',
+              content: articleParsed.content,
+              translationZh: articleParsed.translationZh || '',
+              summary: articleParsed.summary || '',
+              wordCount,
+              readTimeMinutes: Math.max(1, Math.round(wordCount / 120)),
+              savedWordTerms: [],
+              isCustom: true,
+              grammarPoints: Array.isArray(articleParsed.grammarPoints) ? articleParsed.grammarPoints : [],
+              keyVocabulary: Array.isArray(articleParsed.keyVocabulary) ? articleParsed.keyVocabulary : [],
+              quiz: Array.isArray(articleParsed.quiz) ? articleParsed.quiz : []
+            };
+            parsedData.words = [];
+            parsedData.action = {
+              type: 'save_article',
+              summary: `收錄文章《${parsedData.article.title}》至文章閱讀庫`,
+              saveArticle: parsedData.article
+            };
+            if (!parsedData.reply || parsedData.reply.length < 10) {
+              parsedData.reply = `已為您生成文章《${parsedData.article.title}》，請點擊下方卡片按鈕收錄至文章閱讀庫！`;
+            }
+          }
+        } catch (articleErr) {
+          console.error('Article fallback generation failed:', articleErr);
+        }
+      }
+    }
+
     return res.json(parsedData);
   } catch (error: any) {
     console.error('Error generating vocabulary from Gemini:', error);
