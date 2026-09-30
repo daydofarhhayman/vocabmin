@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.3.5',
+    date: '2026-09-30',
+    type: 'improve',
+    changes: [
+      '🧹 精簡設定頁面：移除與設定無關的橫幅廣告卡片（AI 語伴宣傳、桌面小工具宣傳）',
+      '📑 重構設定分類架構：依功能清晰劃分為「雲端同步與帳號」、「閱讀與字典設定」、「複習與測驗設定」、「介面與外觀」及「關於與更新日誌」',
+      '🎨 優化字典與閱讀設定排版，設定更一目了然且容易操作',
+    ]
+  },
+  {
     version: '1.3.4',
     date: '2026-09-30',
     type: 'feat',

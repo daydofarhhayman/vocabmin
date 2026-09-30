@@ -1,21 +1,16 @@
 import React, { useState } from 'react';
 import {
   X,
-  Moon,
-  Sun,
   Sliders,
-  Sparkles,
   CloudCheck,
   LogIn,
   LogOut,
-  ArrowRight,
-  Bot,
-  Layout,
-  Palette,
   Info,
   ChevronDown,
   ChevronUp,
-  History
+  History,
+  BookOpen,
+  Palette
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
@@ -43,9 +38,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   user,
   onLogin,
   onLogout,
-  onSyncCloud,
-  onOpenAI,
-  onOpenCustomizeHome
+  onSyncCloud
 }) => {
   const t = TRANSLATIONS[settings.lang];
 
@@ -62,93 +55,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+            className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+            title="關閉"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar space-y-5 pr-1">
-          {/* Home Screen Widgets & Visual Assembler Callout */}
-          {onOpenCustomizeHome && (
-            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 border border-indigo-500/25 backdrop-blur space-y-3 shadow-xs">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 font-bold shrink-0">
-                    <Layout className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                      <span>主畫面小工具自由拼裝工坊</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 font-extrabold">
-                        NEW
-                      </span>
-                    </h4>
-                    <span className="text-xs text-slate-400">
-                      自選 9 款實用模組與 7 款配色
-                    </span>
-                  </div>
-                </div>
-
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300">
-                  手機桌面模式
-                </span>
-              </div>
-
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                如同手機桌布的小工具編輯方式，直接在主畫面上隨心拖曳拉動您想要的小工具、任意切換整行/半行欄寬與色彩風格，所見即所得！
-              </p>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onOpenCustomizeHome();
-                }}
-                className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-xl text-xs font-bold shadow-md transition active:scale-95 flex items-center justify-center gap-2"
-              >
-                <Palette className="w-4 h-4" />
-                <span>進入主畫面桌面編輯模式（直接拖曳） →</span>
-              </button>
-            </div>
-          )}
-
-          {/* AI Multi-Scenario Assistant Banner */}
-          {onOpenAI && (
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-pink-500/10 border border-purple-500/20 backdrop-blur flex items-center justify-between shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-purple-500/20 shrink-0">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                    <span>AI 智能多場景語伴</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 font-extrabold">
-                      4大場景
-                    </span>
-                  </h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    全能問答、生詞擴充、寫作文法診斷與實戰模擬
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  onClose();
-                  onOpenAI();
-                }}
-                className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow transition active:scale-95 shrink-0 ml-2"
-              >
-                <span>前往語伴</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
-          {/* Cloud Sync Account */}
-          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3 flex items-center gap-1.5">
+        {/* Content - Categorized Settings */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+          {/* ── 1. 雲端同步與帳號 (Cloud & Account) ── */}
+          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
               <CloudCheck className="w-4 h-4" />
               <span>{t.sec_cloud}</span>
             </h4>
@@ -170,9 +88,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </button>
                   <button
                     onClick={onLogout}
-                    className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition"
+                    className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition flex items-center gap-1"
                   >
-                    登出
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>登出</span>
                   </button>
                 </div>
               </div>
@@ -195,10 +114,91 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
 
-          {/* Review & Quiz Settings */}
+          {/* ── 2. 閱讀與字典設定 (Reading & Dictionary) ── */}
           <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              {t.sec_review}
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <BookOpen className="w-4 h-4 text-indigo-500" />
+              <span>閱讀與字典設定</span>
+            </h4>
+
+            {/* Article Reader AI Lookup Mode */}
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  文章閱讀 AI 查詢模式
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {settings.autoAILookup ? '點擊單字立即自動查詢 AI（耗用額度）' : '點擊單字後手動按鈕查詢（節省額度）'}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ autoAILookup: false })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    !settings.autoAILookup
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  手動查詢
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ autoAILookup: true })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    settings.autoAILookup
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  自動查詢
+                </button>
+              </div>
+            </div>
+
+            {/* Cambridge Dictionary Language */}
+            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  劍橋字典語言版本
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {(settings.cambridgeLang ?? 'en') === 'zh-tw' ? '開啟英漢雙語繁中頁面' : '開啟英英完整頁面'}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ cambridgeLang: 'en' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    (settings.cambridgeLang ?? 'en') === 'en'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  英文版
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ cambridgeLang: 'zh-tw' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    settings.cambridgeLang === 'zh-tw'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  英漢雙語
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ── 3. 複習與測驗設定 (Review & Quiz) ── */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <Sliders className="w-4 h-4 text-indigo-500" />
+              <span>{t.sec_review}</span>
             </h4>
 
             {/* Review limit */}
@@ -271,17 +271,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Appearance & Language */}
+          {/* ── 4. 介面與外觀 (Appearance & Display) ── */}
           <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              {t.sec_appearance}
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <Palette className="w-4 h-4 text-indigo-500" />
+              <span>{t.sec_appearance}</span>
             </h4>
 
             {/* Dark Mode */}
             <div className="flex items-center justify-between">
-              <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
-                {t.opt_dark_mode}
-              </span>
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  {t.opt_dark_mode}
+                </span>
+                <span className="text-xs text-slate-400">切換深色主題護眼模式</span>
+              </div>
               <input
                 type="checkbox"
                 checked={settings.darkMode}
@@ -291,123 +295,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Language */}
-            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-                    {t.sec_language}
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {settings.lang === 'zh'
-                      ? '單字庫與複習測驗主要顯示「中文解釋」'
-                      : 'Vocabulary & reviews primarily display "English definitions"'}
-                  </span>
-                </div>
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ lang: 'zh' })}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      settings.lang === 'zh'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    繁體中文
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ lang: 'en' })}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      settings.lang === 'en'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    English
-                  </button>
-                </div>
+            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  {t.sec_language}
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {settings.lang === 'zh'
+                    ? '單字庫與複習測驗主要顯示「中文解釋」'
+                    : 'Vocabulary & reviews primarily display "English definitions"'}
+                </span>
               </div>
-            </div>
-
-            {/* Cambridge Dictionary Language */}
-            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-                    劍橋字典語言版本
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {(settings.cambridgeLang ?? 'en') === 'zh-tw' ? '開啟英漢雙語版頁面' : '開啟英文版頁面'}
-                  </span>
-                </div>
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ cambridgeLang: 'en' })}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      (settings.cambridgeLang ?? 'en') === 'en'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    英文版
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ cambridgeLang: 'zh-tw' })}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      settings.cambridgeLang === 'zh-tw'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    英漢雙語
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Article Reader AI Lookup Mode */}
-            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
-                    文章閱讀 AI 查詢模式
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {settings.autoAILookup ? '點擊單字立即自動查詢 AI（耗用額度）' : '點擊單字後手動按鈕查詢（節省額度）'}
-                  </span>
-                </div>
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ autoAILookup: false })}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      !settings.autoAILookup
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    手動查詢
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ autoAILookup: true })}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                      settings.autoAILookup
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    自動查詢
-                  </button>
-                </div>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ lang: 'zh' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    settings.lang === 'zh'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  繁體中文
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ lang: 'en' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    settings.lang === 'en'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  English
+                </button>
               </div>
             </div>
           </div>
 
-          {/* About / Version + Changelog */}
+          {/* ── 5. 關於與更新日誌 (About & Changelog) ── */}
           <AboutSection />
         </div>
       </div>
@@ -430,7 +356,7 @@ const AboutSection: React.FC = () => {
     <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
       {/* Title row */}
       <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-        <Info className="w-3.5 h-3.5" />
+        <Info className="w-3.5 h-3.5 text-indigo-500" />
         <span>關於 VocabMin</span>
       </h4>
 
