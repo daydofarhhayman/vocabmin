@@ -10,12 +10,15 @@ import {
   ChevronUp,
   History,
   BookOpen,
-  Palette
+  Palette,
+  Check,
+  Layout
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { User } from 'firebase/auth';
 import { CHANGELOG, APP_VERSION } from '../data/changelog';
+import { COLOR_THEMES, HomeAccentColor } from '../utils/homeConfig';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -38,7 +41,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   user,
   onLogin,
   onLogout,
-  onSyncCloud
+  onSyncCloud,
+  onOpenCustomizeHome
 }) => {
   const t = TRANSLATIONS[settings.lang];
 
@@ -271,15 +275,159 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* ── 4. 介面與外觀 (Appearance & Display) ── */}
-          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
+          {/* ── 4. 介面與外觀個性化 (Appearance & Personalization) ── */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-4">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Palette className="w-4 h-4 text-indigo-500" />
-              <span>{t.sec_appearance}</span>
+              <span>介面與外觀個性化</span>
             </h4>
 
+            {/* Accent Theme Colors */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  主題色彩風格
+                </span>
+                <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+                  {COLOR_THEMES[(settings.accentColor as HomeAccentColor) || 'indigo']?.name || '經典靛藍'}
+                </span>
+              </div>
+              <div className="grid grid-cols-7 gap-2 pt-1">
+                {(Object.keys(COLOR_THEMES) as HomeAccentColor[]).map((cKey) => {
+                  const item = COLOR_THEMES[cKey];
+                  const isSelected = ((settings.accentColor as HomeAccentColor) || 'indigo') === cKey;
+                  return (
+                    <button
+                      key={cKey}
+                      type="button"
+                      onClick={() => onUpdateSettings({ accentColor: cKey as any })}
+                      className={`group relative flex flex-col items-center gap-1.5 p-2 rounded-xl transition ${
+                        isSelected
+                          ? 'bg-white dark:bg-slate-800 shadow-sm ring-2 ring-indigo-500'
+                          : 'hover:bg-white/60 dark:hover:bg-slate-800/60'
+                      }`}
+                      title={item.name}
+                    >
+                      <div
+                        className={`w-7 h-7 rounded-full ${item.swatch} flex items-center justify-center shadow-xs transition-transform group-hover:scale-110`}
+                      >
+                        {isSelected && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
+                      </div>
+                      <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 truncate w-full text-center">
+                        {item.name.split(' ')[0]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Custom App / Learning Space Name */}
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                    學習空間自訂名稱
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    顯示於左上角 Logo 與專屬學習空間
+                  </span>
+                </div>
+                {settings.appNickname && settings.appNickname !== 'VocabMin' && (
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ appNickname: 'VocabMin' })}
+                    className="text-[11px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-semibold"
+                  >
+                    恢復預設
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  maxLength={18}
+                  value={settings.appNickname ?? 'VocabMin'}
+                  onChange={(e) => onUpdateSettings({ appNickname: e.target.value })}
+                  placeholder="輸入您的專屬 App 空間名稱..."
+                  className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            {/* Font Scale */}
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  閱讀字體大小
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  調節單字與閱讀文章字體舒適度
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                {[
+                  { key: 'normal', label: '標準' },
+                  { key: 'medium', label: '舒適' },
+                  { key: 'large', label: '放大' }
+                ].map((sizeOpt) => {
+                  const isCur = (settings.fontSize || 'normal') === sizeOpt.key;
+                  return (
+                    <button
+                      key={sizeOpt.key}
+                      type="button"
+                      onClick={() => onUpdateSettings({ fontSize: sizeOpt.key as any })}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        isCur
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                      }`}
+                    >
+                      {sizeOpt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Card Texture Style */}
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
+                  卡片視覺風格
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {settings.themeStyle === 'simple' ? '極簡純色俐落無光暈' : '現代毛玻璃微光半透明'}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ themeStyle: 'glass' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    settings.themeStyle !== 'simple'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  微光玻璃
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateSettings({ themeStyle: 'simple' })}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                    settings.themeStyle === 'simple'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600'
+                  }`}
+                >
+                  極簡純色
+                </button>
+              </div>
+            </div>
+
             {/* Dark Mode */}
-            <div className="flex items-center justify-between">
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
               <div>
                 <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
                   {t.opt_dark_mode}
@@ -295,7 +443,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {/* Language */}
-            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between">
               <div>
                 <span className="text-sm font-bold text-slate-800 dark:text-slate-200 block">
                   {t.sec_language}
@@ -331,6 +479,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Customize Home Layout Shortcut Button */}
+            {onOpenCustomizeHome && (
+              <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenCustomizeHome();
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition flex items-center justify-between group"
+                >
+                  <span className="flex items-center gap-2">
+                    <Layout className="w-4 h-4 text-indigo-500" />
+                    <span>首頁小工具桌面自由排版模式</span>
+                  </span>
+                  <span className="text-[11px] text-indigo-600 dark:text-indigo-400 group-hover:translate-x-0.5 transition-transform">
+                    進入拖曳編輯 →
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* ── 5. 關於與更新日誌 (About & Changelog) ── */}

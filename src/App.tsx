@@ -165,7 +165,7 @@ export default function App() {
     return () => unsubscribe();
   }, [showToast]);
 
-  // Apply Dark Mode & Theme class to HTML root
+  // Apply Dark Mode, Font Scale & Theme class to HTML root
   useEffect(() => {
     const root = document.documentElement;
     if (settings.darkMode) {
@@ -179,7 +179,10 @@ export default function App() {
     } else {
       document.body.classList.remove('theme-simple');
     }
-  }, [settings.darkMode, settings.themeStyle]);
+
+    root.classList.toggle('font-scale-medium', settings.fontSize === 'medium');
+    root.classList.toggle('font-scale-large', settings.fontSize === 'large');
+  }, [settings.darkMode, settings.themeStyle, settings.fontSize]);
 
   // Count due words today
   const dueWordsCount = useMemo(() => {
@@ -218,6 +221,15 @@ export default function App() {
         }
         return merged;
       });
+
+      // Synchronize accentColor with homeConfig so the entire app matches
+      if (newSettings.accentColor) {
+        setHomeConfig((prevHome) => {
+          const updatedHome = { ...prevHome, accentColor: newSettings.accentColor as any };
+          saveHomeConfig(updatedHome);
+          return updatedHome;
+        });
+      }
     },
     [words, dailyStats, user]
   );
@@ -635,12 +647,24 @@ export default function App() {
     showToast('已同步最新進度至雲端！');
   };
 
+  const currentAccent = (settings.accentColor as string) || 'indigo';
+  const ambientGlowMap: Record<string, [string, string]> = {
+    indigo: ['bg-indigo-300 dark:bg-indigo-900/40', 'bg-purple-300 dark:bg-purple-900/40'],
+    ocean: ['bg-sky-300 dark:bg-sky-900/40', 'bg-blue-300 dark:bg-blue-900/40'],
+    emerald: ['bg-emerald-300 dark:bg-emerald-900/40', 'bg-teal-300 dark:bg-teal-900/40'],
+    sunset: ['bg-rose-300 dark:bg-rose-900/40', 'bg-amber-300 dark:bg-amber-900/40'],
+    cyber: ['bg-purple-300 dark:bg-purple-900/40', 'bg-pink-300 dark:bg-pink-900/40'],
+    mocha: ['bg-amber-300 dark:bg-amber-900/40', 'bg-orange-300 dark:bg-orange-900/40'],
+    rose: ['bg-pink-300 dark:bg-pink-900/40', 'bg-rose-300 dark:bg-rose-900/40']
+  };
+  const [ambientGlowTop, ambientGlowBottom] = ambientGlowMap[currentAccent] || ambientGlowMap.indigo;
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-300">
-      {/* Decorative ambient background */}
-      <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none opacity-40 dark:opacity-15">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-300 rounded-full blur-[130px] mix-blend-multiply filter"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-300 rounded-full blur-[130px] mix-blend-multiply filter"></div>
+      {/* Decorative ambient background with dynamic theme colors */}
+      <div className="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none opacity-40 dark:opacity-20 transition-all duration-700">
+        <div className={`absolute top-[-10%] left-[-10%] w-[50%] h-[50%] ${ambientGlowTop} rounded-full blur-[130px] mix-blend-multiply filter transition-colors duration-700`}></div>
+        <div className={`absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] ${ambientGlowBottom} rounded-full blur-[130px] mix-blend-multiply filter transition-colors duration-700`}></div>
       </div>
 
       {/* Header */}

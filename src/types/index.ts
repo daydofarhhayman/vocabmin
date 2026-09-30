@@ -34,6 +34,15 @@ export interface DailyStats {
   [dateString: string]: DayStat;
 }
 
+export type AccentColor =
+  | 'indigo'
+  | 'ocean'
+  | 'emerald'
+  | 'sunset'
+  | 'cyber'
+  | 'mocha'
+  | 'rose';
+
 export interface AppSettings {
   darkMode: boolean;
   lang: 'zh' | 'en';
@@ -45,6 +54,9 @@ export interface AppSettings {
   showFeedbackInReview?: boolean; // 是否在答題後顯示即時評判與速度標籤
   cambridgeLang?: 'en' | 'zh-tw'; // 劍橋字典語言：英文版 or 中文版
   autoAILookup?: boolean; // 點擊單字時是否自動呼叫 AI 查詢（預設 false）
+  accentColor?: AccentColor; // 全域主題配色
+  fontSize?: 'normal' | 'medium' | 'large'; // 閱讀字體級距
+  appNickname?: string; // 個性化空間自訂名稱
   // Backward compatibility optional fields
   mergeReview?: boolean;
   autoPlayAudio?: boolean;

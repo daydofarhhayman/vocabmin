@@ -52,7 +52,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   basicMode: true,
   reviewLimit: 30,
   showTimerInReview: true,
-  showFeedbackInReview: true
+  showFeedbackInReview: true,
+  cambridgeLang: 'en',
+  autoAILookup: false,
+  accentColor: 'indigo',
+  fontSize: 'normal',
+  appNickname: 'VocabMin'
 };
 
 // Initialize Firebase with fallback tolerance

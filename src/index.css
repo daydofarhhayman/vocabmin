@@ -125,7 +125,12 @@
   50% { opacity: 1; transform: scale(1.005); }
 }
 
-.drop-indicator-pulse {
-  animation: drop-pulse 1.4s ease-in-out infinite;
+/* Font Scaling Classes for Reading Comfort */
+html.font-scale-medium {
+  font-size: 106%;
+}
+
+html.font-scale-large {
+  font-size: 114%;
 }
 

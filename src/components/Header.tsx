@@ -17,6 +17,7 @@ import {
 import { ViewTab, AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { User } from 'firebase/auth';
+import { COLOR_THEMES, HomeAccentColor } from '../utils/homeConfig';
 
 interface HeaderProps {
   currentTab: ViewTab;
@@ -42,6 +43,9 @@ export const Header: React.FC<HeaderProps> = ({
   dueCount
 }) => {
   const t = TRANSLATIONS[settings.lang];
+  const accentKey = (settings.accentColor as HomeAccentColor) || 'indigo';
+  const theme = COLOR_THEMES[accentKey] || COLOR_THEMES.indigo;
+  const brandName = settings.appNickname?.trim() || 'VocabMin';
 
   return (
     <header className="glass-panel sticky top-0 z-40 flex-shrink-0 transition-colors duration-300">
@@ -51,13 +55,13 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={() => setTab('home')}
           className="flex items-center gap-3 cursor-pointer group select-none"
         >
-          <div className="w-10 h-10 bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-500/20 group-hover:scale-105 transition-transform duration-200">
+          <div className={`w-10 h-10 bg-gradient-to-tr ${theme.primaryGradient} rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-500/20 group-hover:scale-105 transition-transform duration-200`}>
             <BookOpen className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
-                VocabMin
+              <span className={`text-xl font-extrabold tracking-tight bg-gradient-to-r ${theme.primaryGradient} bg-clip-text text-transparent`}>
+                {brandName}
               </span>
             </div>
             <p className="text-[10px] text-slate-400 hidden sm:block font-medium">
@@ -72,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setTab('home')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
               currentTab === 'home'
-                ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
+                ? `bg-white dark:bg-slate-700 ${theme.textAccent} shadow-sm`
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
