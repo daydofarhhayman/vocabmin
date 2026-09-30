@@ -729,6 +729,7 @@ export default function App() {
             onBackToHome={() => setCurrentTab('home')}
             initialArticleId={activeReaderArticleId}
             onClearInitialArticleId={() => setActiveReaderArticleId(null)}
+            appSettings={settings}
           />
         )}
 
