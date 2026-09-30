@@ -497,16 +497,16 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     const text = promptToSend.trim();
     if (!text || isLoading) return;
 
-    // Check if the user is confirming a pending action
-    const trimmedLower = text.toLowerCase();
-    const isConfirming =
-      trimmedLower.includes('確認') ||
-      trimmedLower.includes('確定') ||
-      trimmedLower.includes('執行') ||
-      trimmedLower === '好' ||
-      trimmedLower === '是';
+    // Check if the user is confirming a pending action.
+    // IMPORTANT: Only treat as confirmation when:
+    //   1. There IS a pending (un-executed) action waiting.
+    //   2. The message is a very short, standalone confirmation phrase (≤ 6 chars),
+    //      NOT a full sentence like「幫我確認一下單字數量」which happens to contain「確認」.
+    const trimmedLower = text.toLowerCase().trim();
+    const STANDALONE_CONFIRMS = ['確認', '確定', '執行', '好', '是', 'yes', 'ok', 'confirm', '好的', '對', '沒錯'];
+    const isStandaloneConfirm = STANDALONE_CONFIRMS.includes(trimmedLower);
 
-    if (isConfirming) {
+    if (isStandaloneConfirm) {
       const pendingMsg = [...messages].reverse().find((m) => m.action && !executedActions[m.id]);
       if (pendingMsg && pendingMsg.action) {
         handleExecuteAction(pendingMsg.action, pendingMsg.id);
@@ -969,7 +969,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                                       ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300'
                                       : 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300'
                                   }`}>
-                                    {executedActions[msg.id] ? '已完成' : '待確認彈窗'}
+                                    {executedActions[msg.id] ? '已完成' : '待確認'}
                                   </span>
                                 </div>
 
@@ -995,7 +995,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                                     ) : (
                                       <>
                                         <ShieldCheck className="w-4 h-4" />
-                                        <span>🚨 點擊開啟確認彈窗 (立即執行)</span>
+                                        <span>🚨 點擊開啟確認視窗</span>
                                       </>
                                     )}
                                   </button>
