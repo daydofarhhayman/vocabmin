@@ -151,11 +151,11 @@ async function fetchExternalUrlContent(url: string): Promise<{ title: string; te
       extractedText = pMatches
         .map((p) => p.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim())
         .filter((t) => t.length > 25)
-        .slice(0, 16)
+        .slice(0, 60)
         .join('\n\n');
     }
     if (!extractedText || extractedText.length < 100) {
-      extractedText = clean.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 3200);
+      extractedText = clean.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 15000);
     }
     return { title, text: extractedText };
   } catch (e) {
@@ -1193,7 +1193,7 @@ Process and transform the following external input into a master-grade English r
 【Input Source】: ${sourceName}
 ${articleTitle ? `【Original Title】: ${articleTitle}\n` : ''}
 ${topic ? `【Topic/Subject】: ${topic}\n` : ''}
-${sourceContent ? `【Article Content / Raw Text】:\n${sourceContent.slice(0, 4000)}\n` : `【Topic Direction】: Create an authentic, publication-quality reading article on "${topic || 'Global Innovation'}"`}
+${sourceContent ? `【Article Content / Raw Text】:\n${sourceContent.slice(0, 12000)}\n` : `【Topic Direction】: Create an authentic, publication-quality reading article on "${topic || 'Global Innovation'}"`}
 
 CEFR Level: ${requestedLevel}
 Category: ${requestedCategory}
@@ -1205,8 +1205,8 @@ CRITICAL REQUIREMENTS:
 4. "source": "${sourceName.startsWith('http') ? sourceName : 'External Web'}".
 5. "level": "${requestedLevel}".
 6. "category": "${requestedCategory}".
-7. "content": The polished English article text across 3-5 coherent paragraphs separated by double newlines (\\n\\n).
-8. "translationZh": High-grade, elegant Traditional Chinese (繁體中文) translation matching paragraph by paragraph (\\n\\n).
+7. "content": The COMPLETE, FAITHFUL English article text preserving ALL original paragraphs separated by double newlines (\\n\\n). Do NOT truncate, summarize, or shorten the original — include every paragraph fully.
+8. "translationZh": High-grade, elegant Traditional Chinese (繁體中文) translation matching paragraph by paragraph (\\n\\n). Every paragraph in "content" must have a corresponding translation paragraph.
 9. "summary": 1-2 sentence Traditional Chinese core summary.
 10. "grammarPoints": 4 to 6 in-depth grammatical breakdown items for core or complex sentences from the article:
     - sentence: Exact English sentence from the article
