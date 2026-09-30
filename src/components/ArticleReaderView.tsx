@@ -2342,7 +2342,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   <span>問 AI 伴讀此詞用法</span>
                 </button>
 
-                {!inspectedWord.existingWord && !inspectedWord.isLoading && (
+                {!inspectedWord.existingWord && !inspectedWord.isLoading && !(inspectedWord as any).needsAILookup && (
                   <button
                     onClick={handleAILookupForCurrentWord}
                     className="text-[11px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 font-semibold hover:underline flex items-center gap-1"
