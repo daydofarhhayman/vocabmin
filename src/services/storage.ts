@@ -62,19 +62,21 @@ let googleProvider: any = null;
 
 try {
   const firebaseConfig = {
-    apiKey: "AIzaSyBQ7hfoJkvMNRT4qPoSz5CyJ2KisOAYXSA",
-    authDomain: "vocabmin-app.firebaseapp.com",
-    projectId: "vocabmin-app",
-    storageBucket: "vocabmin-app.firebasestorage.app",
-    messagingSenderId: "995953552362",
-    appId: "1:995953552362:web:2b36cd803765a622bca093",
-    measurementId: "G-TLX1STZPB3"
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBQ7hfoJkvMNRT4qPoSz5CyJ2KisOAYXSA",
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "vocabmin-app.firebaseapp.com",
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "vocabmin-app",
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "vocabmin-app.firebasestorage.app",
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "995953552362",
+    appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:995953552362:web:2b36cd803765a622bca093",
+    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-TLX1STZPB3"
   };
 
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  firestoreDb = getFirestore(app);
-  firebaseAuth = getAuth(app);
-  googleProvider = new GoogleAuthProvider();
+  if (firebaseConfig.apiKey) {
+    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    firestoreDb = getFirestore(app);
+    firebaseAuth = getAuth(app);
+    googleProvider = new GoogleAuthProvider();
+  }
 } catch (e) {
   console.warn('Firebase initialization skipped or failed:', e);
 }
