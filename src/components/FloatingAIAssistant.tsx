@@ -24,7 +24,9 @@ import {
   ShieldCheck,
   AlertTriangle,
   Flame,
-  ArrowRight
+  ArrowRight,
+  Square,
+  Dices
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
 import { AIArticleCard } from './AIArticleCard';
@@ -96,7 +98,10 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
     chips: [
       '根據我今日的待複習狀況，為我規劃最高效的學習順序',
       '從我目前的字庫中隨機挑選 3 個進階生詞並提示記憶技巧',
-      '請給我一句今日英語勵志金句，並深度剖析其句型文法'
+      '請給我一句今日英語勵志金句，並深度剖析其句型文法',
+      '分析我近期的單字掌握趨勢，給我下週的學習衝刺建議',
+      '為我推薦 3 個實用的日常英文片語並附帶地道生活情境',
+      '請為我出一個快速的單字快問快答熱身'
     ]
   },
   review: {
@@ -113,7 +118,9 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
       '請以「字根字首（Etymology）」深度拆解我正在背的單字',
       '為我設計一段幽默好記的「諧音或圖像記憶聯想口訣」',
       '這個單字在母語者日常中最常搭配哪些介係詞或動詞？',
-      '請點出這個詞在考試中最容易犯錯的文法陷阱'
+      '請點出這個詞在考試中最容易犯錯的文法陷阱',
+      '請提供 3 個常與此詞混淆的同義詞，並逐一比較細微語感',
+      '請用這個單字造 2 句適合放入履歷或面試的高級例句'
     ]
   },
   quiz: {
@@ -130,7 +137,9 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
       '幫我深入剖析目前題目的文法句型與破題邏輯',
       '為什麼其他選項不適合？請提供詳細排除理由',
       '教我下次遇到這類克漏字/填空題的高分應試技巧',
-      '請針對這個考點再出一題相似難度的題目考考我'
+      '請針對這個考點再出一題相似難度的題目考考我',
+      '這道題目中的核心字彙有哪些高頻同義替換詞？',
+      '請傳授我多益/雅思閱讀題的快速關鍵字定位法'
     ]
   },
   reader: {
@@ -147,7 +156,9 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
       '請幫我加入一篇關於科技與AI創新的B2雙語文章，並進行長難句文法解析',
       '為我推薦並收錄一篇雅思/托福閱讀長文到文章庫',
       '幫我深度拆解文章中最複雜的長難句結構（主幹與修飾語）',
-      '請提取文章中 5 個最值得背誦的高級寫作搭配詞'
+      '請提取文章中 5 個最值得背誦的高級寫作搭配詞',
+      '請總結本文的核心論點並分析作者的語氣與立場',
+      '幫我把文章第二段的生動修辭手法解析給我聽'
     ]
   },
   list: {
@@ -164,7 +175,9 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
       '分析我現有單字庫的詞彙等級分佈，點出盲點與強項',
       '為我推薦 5 個與我現有字庫主題相符的進階高分詞彙',
       '我想針對「商務談判」主題擴充 4 個專業表達方式',
-      '幫我檢查字庫是否有缺少完整例句或詞性的詞條'
+      '幫我檢查字庫是否有缺少完整例句或詞性的詞條',
+      '請為我推薦 5 個高頻職場會議常用英文動詞',
+      '我想學習 4 個描述情緒或心理狀態的精準英文詞彙'
     ]
   },
   ai: {
@@ -180,7 +193,10 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
     chips: [
       '請深入解析「serendipity」的精準語感與常見搭配詞',
       '請診斷我寫的這句英文文法是否自然地道：',
-      '請為我出一道多益聽力常見的情境商務對話短題'
+      '請為我出一道多益聽力常見的情境商務對話短題',
+      '請教我如何用自然地道的美語表達「我贊同你的觀點」',
+      '請將一段中文日常口語翻譯成地道美式英文',
+      '請向我解釋現在完成式與過去簡單式的決定性差異'
     ]
   },
   settings: {
@@ -196,7 +212,8 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
     chips: [
       '記憶曲線艾賓浩斯間隔的最佳複習節奏是什麼？',
       '如何根據我的工作忙碌程度自訂每日學習目標？',
-      '雲端同步備份機制的安全性與運作原理說明'
+      '雲端同步備份機制的安全性與運作原理說明',
+      '如何善用自訂主題色彩與字體大小提升長時間學習專注力？'
     ]
   }
 };
@@ -225,16 +242,60 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const FLOATING_AI_STORAGE_KEY = 'vocabmin_floating_ai_history';
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('vocabmin_floating_ai_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [addedWordsMap, setAddedWordsMap] = useState<Record<string, boolean>>({});
   const [savedArticlesMap, setSavedArticlesMap] = useState<Record<string, boolean>>({});
   const [executedActions, setExecutedActions] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [chipOffsets, setChipOffsets] = useState<Record<string, number>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Auto-persist messages to localStorage
+  useEffect(() => {
+    try {
+      if (messages.length > 0) {
+        localStorage.setItem(FLOATING_AI_STORAGE_KEY, JSON.stringify(messages.slice(-30)));
+      } else {
+        localStorage.removeItem(FLOATING_AI_STORAGE_KEY);
+      }
+    } catch (e) {
+      console.error('Failed to save floating AI chat history:', e);
+    }
+  }, [messages]);
+
+  // Cancel generation handler
+  const handleCancelGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsLoading(false);
+    }
+  };
+
+  // Next chips generator
+  const handleNextChips = (scId: string) => {
+    setChipOffsets((prev) => {
+      const allChips = scenario.chips || [];
+      const current = prev[scId] || 0;
+      return {
+        ...prev,
+        [scId]: (current + 3) % (allChips.length || 1)
+      };
+    });
+  };
 
   // Active scenario config based on the user's current functional tab
   const scenario = useMemo(() => {
@@ -560,9 +621,13 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         content: m.content
       }));
 
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           userPrompt: text,
           scenario: scenario.title,
@@ -613,6 +678,19 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         setSavedArticlesMap((prev) => ({ ...prev, [articleData.id || botMsg.id]: true }));
       }
     } catch (err: any) {
+      if (err.name === 'AbortError') {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `bot-abort-${Date.now()}`,
+            role: 'assistant',
+            content: '⏹️ 已依您的要求停止生成。',
+            timestamp: Date.now(),
+            scenarioTab: currentTab
+          }
+        ]);
+        return;
+      }
       console.error('Floating AI error:', err);
       setMessages((prev) => [
         ...prev,
@@ -626,6 +704,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
       ]);
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -803,24 +882,41 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                         已為您連線當前「{scenario.title}」場景。點擊下方快捷靈感，或直接輸入任何英文疑問：
                       </p>
 
-                      {/* Tailored Scenario Chips */}
+                      {/* Tailored Scenario Chips with Next Chips button */}
                       <div className="w-full space-y-2 text-left">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                          <Lightbulb className="w-3 h-3 text-amber-500" />
-                          <span>當前場景推薦協助（點擊直接發送）：</span>
-                        </span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                            <Lightbulb className="w-3 h-3 text-amber-500" />
+                            <span>推薦靈感（點擊發送）：</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleNextChips(scenario.id)}
+                            className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                          >
+                            <Dices className="w-3 h-3" />
+                            <span>換一批</span>
+                          </button>
+                        </div>
 
                         <div className="flex flex-col gap-1.5">
-                          {scenario.chips.map((chip, idx) => (
-                            <button
-                              key={idx}
-                              onClick={() => handleSendMessage(chip)}
-                              className="p-2.5 rounded-xl text-xs text-left bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-200 transition flex items-center justify-between group shadow-xs active:scale-[0.99]"
-                            >
-                              <span className="line-clamp-2">{chip}</span>
-                              <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition shrink-0 ml-1.5" />
-                            </button>
-                          ))}
+                          {(() => {
+                            const offset = chipOffsets[scenario.id] || 0;
+                            const slice = scenario.chips.slice(offset, offset + 3);
+                            const list = slice.length < 3
+                              ? [...slice, ...scenario.chips.slice(0, 3 - slice.length)]
+                              : slice;
+                            return list.map((chip, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => handleSendMessage(chip)}
+                                className="p-2.5 rounded-xl text-xs text-left bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-200 transition flex items-center justify-between group shadow-xs active:scale-[0.99]"
+                              >
+                                <span className="line-clamp-2">{chip}</span>
+                                <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition shrink-0 ml-1.5" />
+                              </button>
+                            ));
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -1072,18 +1168,30 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                       className="w-full py-2.5 pl-3.5 pr-12 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 outline-none text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-400 resize-none transition"
                     />
 
-                    <button
-                      type="submit"
-                      disabled={!inputText.trim() || isLoading}
-                      className={`absolute right-1.5 p-2 rounded-lg text-white transition ${
-                        !inputText.trim() || isLoading
-                          ? 'bg-slate-300 dark:bg-slate-700 text-slate-400 cursor-not-allowed'
-                          : `bg-gradient-to-r ${scenario.accentGradient} hover:opacity-95 active:scale-95 shadow-xs`
-                      }`}
-                      title="發送"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                    </button>
+                    {isLoading ? (
+                      <button
+                        type="button"
+                        onClick={handleCancelGeneration}
+                        className="absolute right-1.5 px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-[11px] font-bold flex items-center gap-1 shadow-xs transition"
+                        title="停止生成"
+                      >
+                        <Square className="w-3 h-3 fill-current" />
+                        <span>停止</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={!inputText.trim()}
+                        className={`absolute right-1.5 p-2 rounded-lg text-white transition ${
+                          !inputText.trim()
+                            ? 'bg-slate-300 dark:bg-slate-700 text-slate-400 cursor-not-allowed'
+                            : `bg-gradient-to-r ${scenario.accentGradient} hover:opacity-95 active:scale-95 shadow-xs`
+                        }`}
+                        title="發送"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </form>
                 </div>
               </>

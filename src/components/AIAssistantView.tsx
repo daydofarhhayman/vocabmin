@@ -20,7 +20,9 @@ import {
   GraduationCap,
   Layers,
   HelpCircle,
-  X
+  X,
+  Square,
+  Dices
 } from 'lucide-react';
 import { Word, AppSettings, Article, POS } from '../types';
 import { AIArticleCard } from './AIArticleCard';
@@ -74,7 +76,10 @@ const SCENARIOS = [
     chips: [
       '請解析「serendipity」的精準語感與常見搭配詞',
       '「affect」與「effect」究竟該如何正確區分？',
-      '請給我 3 句在地美式口語中表達「太贊同你了」的道地說法'
+      '請給我 3 句在地美式口語中表達「太贊同你了」的道地說法',
+      '請為我拆解「nuance」與「subtlety」在文意中的細微差別',
+      '外商商務信件中，如何優雅且堅定地催促合作夥伴回覆進度？',
+      '請分享 3 個英美日常文化背景中非常有趣的俚語故事'
     ]
   },
   {
@@ -88,7 +93,10 @@ const SCENARIOS = [
     chips: [
       '請為我推薦 5 個多益（TOEIC）高頻商務談判單字並附英英雙解',
       '我想學習 4 個描述心理學「認知偏誤」的高級詞彙',
-      '請幫我生成 5 個雅思（IELTS）寫作 7 分必備的學術替換動詞'
+      '請幫我生成 5 個雅思（IELTS）寫作 7 分必備的學術替換動詞',
+      '請推薦 5 個在科技創新與 AI 領域最前沿的專業英文生詞',
+      '請生成 4 個日常生活高頻、但台灣學習者常講錯的地道片語',
+      '為我整理 5 個描述情緒「喜怒哀樂」高階 CEFR C1 精準形容詞'
     ]
   },
   {
@@ -102,7 +110,10 @@ const SCENARIOS = [
     chips: [
       '請幫我仔細診斷這句話的文法，並提供母語者高階潤飾版本：',
       '請將以下段落改寫為學術期刊（Academic English）正式風格：',
-      '請幫我拆解這個長難句的主幹與從屬子句結構：'
+      '請幫我拆解這個長難句的主幹與從屬子句結構：',
+      '如何將這句簡單句昇華為含有分詞構句與倒裝句的高級複合金句？',
+      '請幫我把這封請假/延期 Email 潤飾得更客氣且符合外商商務禮儀：',
+      '請檢查這段英文中介係詞使用是否精準自然：'
     ]
   },
   {
@@ -116,7 +127,10 @@ const SCENARIOS = [
     chips: [
       '請為我出一題托福學術閱讀克漏字選擇題，附繁體中文破題思維',
       '請進行一場外商產品經理的英文面試模擬提問（STAR原則）',
-      '請隨機出一題關於假設語氣（Subjunctive Mood）的進階測驗題'
+      '請隨機出一題關於假設語氣（Subjunctive Mood）的進階測驗題',
+      '請為我設計一題多益聽力 Part 3 常見的職場情境對話理解題',
+      '請出一題易混淆動詞片語（Phrasal Verbs）測驗題附解析',
+      '請為我提供一場雅思口說 Part 2 的一分鐘即席演講題目與架構提示'
     ]
   }
 ];
@@ -140,17 +154,61 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   onClearAllArticles,
   onDeleteArticle
 }) => {
+  const AI_VIEW_STORAGE_KEY = 'vocabmin_ai_assistant_view_history';
   const [activeScenario, setActiveScenario] = useState<AIScenario>('all');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = localStorage.getItem('vocabmin_ai_assistant_view_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [inputPrompt, setInputPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [addedWordsMap, setAddedWordsMap] = useState<Record<string, boolean>>({});
   const [savedArticlesMap, setSavedArticlesMap] = useState<Record<string, boolean>>({});
   const [executedActions, setExecutedActions] = useState<Record<string, boolean>>({});
+  const [chipOffsets, setChipOffsets] = useState<Record<string, number>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Auto-persist messages to localStorage
+  useEffect(() => {
+    try {
+      if (messages.length > 0) {
+        localStorage.setItem(AI_VIEW_STORAGE_KEY, JSON.stringify(messages.slice(-30)));
+      } else {
+        localStorage.removeItem(AI_VIEW_STORAGE_KEY);
+      }
+    } catch (e) {
+      console.error('Failed to save AI assistant view history:', e);
+    }
+  }, [messages]);
+
+  // Cancel generation handler
+  const handleCancelGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsLoading(false);
+    }
+  };
+
+  // Rotate recommended chips
+  const handleNextChips = (scId: string) => {
+    setChipOffsets((prev) => {
+      const allChips = currentScenario.chips || [];
+      const current = prev[scId] || 0;
+      return {
+        ...prev,
+        [scId]: (current + 3) % (allChips.length || 1)
+      };
+    });
+  };
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -192,6 +250,10 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
     const text = promptToSend.trim();
     if (!text || isLoading) return;
 
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     const userMsgId = `user-${Date.now()}`;
     const newMsg: Message = {
       id: userMsgId,
@@ -231,6 +293,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           userPrompt: text,
           scenario: currentScenario.name,
@@ -276,6 +339,19 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         setSavedArticlesMap((prev) => ({ ...prev, [articleData.id || botMsgId]: true }));
       }
     } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        const botMsgId = `bot-abort-${Date.now()}`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: botMsgId,
+            role: 'assistant',
+            content: '⏹️ 已停止生成回答。',
+            timestamp: Date.now()
+          }
+        ]);
+        return;
+      }
       console.error('AI chat failed:', err);
       const errMsgId = `bot-err-${Date.now()}`;
       setMessages((prev) => [
@@ -288,6 +364,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         }
       ]);
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
     }
   };
@@ -443,25 +520,42 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
 
             {/* Smart Scenario Starter Chips */}
             <div className="w-full text-left space-y-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
-                <span>場景推薦靈感快速發送：</span>
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                  <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                  <span>場景推薦靈感快速發送：</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleNextChips(currentScenario.id)}
+                  className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1 px-2 py-0.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition active:scale-95"
+                  title="換一批推薦靈感"
+                >
+                  <Dices className="w-3.5 h-3.5" />
+                  <span>換一批</span>
+                </button>
+              </div>
 
               <div className="flex flex-col gap-2">
-                {currentScenario.chips.map((chip, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => {
-                      setInputPrompt(chip);
-                      inputRef.current?.focus();
-                    }}
-                    className="p-3 rounded-xl text-xs font-medium text-left bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm text-slate-700 dark:text-slate-200 transition flex items-center justify-between group active:scale-[0.99]"
-                  >
-                    <span>{chip}</span>
-                    <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition shrink-0 ml-2" />
-                  </button>
-                ))}
+                {(() => {
+                  const offset = chipOffsets[currentScenario.id] || 0;
+                  const allChips = currentScenario.chips || [];
+                  const displayed = allChips.slice(offset, offset + 3);
+                  const finalChips = displayed.length < 3 ? [...displayed, ...allChips.slice(0, 3 - displayed.length)] : displayed;
+                  return finalChips.map((chip, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setInputPrompt(chip);
+                        inputRef.current?.focus();
+                      }}
+                      className="p-3 rounded-xl text-xs font-medium text-left bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm text-slate-700 dark:text-slate-200 transition flex items-center justify-between group active:scale-[0.99]"
+                    >
+                      <span>{chip}</span>
+                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition shrink-0 ml-2" />
+                    </button>
+                  ));
+                })()}
               </div>
             </div>
           </div>
@@ -729,18 +823,29 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           />
 
           <div className="absolute right-2 flex items-center gap-1.5">
-            <button
-              type="submit"
-              disabled={!inputPrompt.trim() || isLoading}
-              className={`p-2 rounded-xl text-white transition shadow-sm flex items-center justify-center ${
-                !inputPrompt.trim() || isLoading
-                  ? 'bg-slate-300 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                  : `bg-gradient-to-r ${currentScenario.accent} hover:opacity-95 active:scale-95`
-              }`}
-              title="發送訊息"
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            {isLoading ? (
+              <button
+                type="button"
+                onClick={handleCancelGeneration}
+                className="p-2 rounded-xl text-white bg-rose-500 hover:bg-rose-600 active:scale-95 transition shadow-sm flex items-center justify-center animate-pulse"
+                title="停止生成 (Cancel)"
+              >
+                <Square className="w-4 h-4 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!inputPrompt.trim() || isLoading}
+                className={`p-2 rounded-xl text-white transition shadow-sm flex items-center justify-center ${
+                  !inputPrompt.trim() || isLoading
+                    ? 'bg-slate-300 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                    : `bg-gradient-to-r ${currentScenario.accent} hover:opacity-95 active:scale-95`
+                }`}
+                title="發送訊息"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </form>
 

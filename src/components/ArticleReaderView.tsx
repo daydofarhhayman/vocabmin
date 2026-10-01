@@ -2762,24 +2762,42 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     {/* Message Actions */}
                     {msg.role === 'model' && (
                       <div className="flex items-center gap-2 mt-1 px-1">
-                        <button
-                          onClick={() => tts.speak(msg.content.slice(0, 200))}
-                          className="text-[10px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-0.5"
-                          title="語音朗讀"
-                        >
-                          <Volume2 className="w-3 h-3" />
-                          <span>朗讀</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(msg.content);
-                          }}
-                          className="text-[10px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-0.5"
-                          title="複製內容"
-                        >
-                          <Copy className="w-3 h-3" />
-                          <span>複製</span>
-                        </button>
+                        {msg.id.startsWith('err-') || msg.content.includes('重試') ? (
+                          <button
+                            onClick={() => {
+                              const lastUserMsg = [...articleChatMessages].reverse().find((m) => m.role === 'user');
+                              if (lastUserMsg) {
+                                handleSendArticleChat(lastUserMsg.content, lastUserMsg.highlightedSentence);
+                              }
+                            }}
+                            className="text-[10px] text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 flex items-center gap-1 font-semibold bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-lg border border-rose-200 dark:border-rose-800 transition active:scale-95"
+                            title="重新發送上一條問題"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>點擊重試 🔄</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => tts.speak(msg.content.slice(0, 200))}
+                              className="text-[10px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-0.5"
+                              title="語音朗讀"
+                            >
+                              <Volume2 className="w-3 h-3" />
+                              <span>朗讀</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(msg.content);
+                              }}
+                              className="text-[10px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-0.5"
+                              title="複製內容"
+                            >
+                              <Copy className="w-3 h-3" />
+                              <span>複製</span>
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
