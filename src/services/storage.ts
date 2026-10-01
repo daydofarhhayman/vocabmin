@@ -57,7 +57,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoAILookup: false,
   accentColor: 'indigo',
   fontSize: 'normal',
-  appNickname: 'VocabMin'
+  appNickname: 'VocabMin',
+  geminiApiKey: ''
 };
 
 // Initialize Firebase with fallback tolerance
@@ -297,7 +298,16 @@ export class StorageService {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.WORD_ANALYSES);
       if (data) {
-        return JSON.parse(data);
+        const parsed = JSON.parse(data);
+        const cleaned: Record<string, WordAnalysisData> = {};
+        for (const [key, val] of Object.entries(parsed)) {
+          const v = val as WordAnalysisData;
+          // Purge corrupt cache entries where Chinese definition is just the English term itself or empty
+          if (v && v.def && v.def.trim().toLowerCase() !== key.trim().toLowerCase() && v.def.trim().length > 0) {
+            cleaned[key] = v;
+          }
+        }
+        return cleaned;
       }
     } catch {}
     return {};
@@ -305,8 +315,12 @@ export class StorageService {
 
   public saveWordAnalysis(term: string, analysis: WordAnalysisData): void {
     try {
-      const all = this.getLocalWordAnalyses();
       const cleanKey = term.trim().toLowerCase();
+      // Never store corrupt entry where Chinese definition is just the English term itself or empty
+      if (!analysis.def || analysis.def.trim().toLowerCase() === cleanKey) {
+        return;
+      }
+      const all = this.getLocalWordAnalyses();
       all[cleanKey] = {
         ...analysis,
         cachedAt: Date.now()

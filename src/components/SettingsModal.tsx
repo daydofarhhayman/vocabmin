@@ -12,7 +12,8 @@ import {
   BookOpen,
   Palette,
   Check,
-  Layout
+  Layout,
+  Sparkles
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
@@ -116,6 +117,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             )}
+            {/* Custom Gemini API Key */}
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Google Gemini API Key（選填）</span>
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  {settings.geminiApiKey ? '✅ 已配置專屬金鑰' : '未配置（自動使用內建雙語詞典與伺服器通道）'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                若您擁有個人 Google AI Studio API Key，可在此貼上以享最高優先級與專屬配額。若未提供，系統亦會自動透過權威雙語詞典與伺服器通道提供繁中與英英釋義。
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={settings.geminiApiKey || ''}
+                  onChange={(e) => onUpdateSettings({ geminiApiKey: e.target.value.trim() })}
+                  placeholder="輸入您的 Gemini API Key (AIzaSy...)"
+                  className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-mono text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                {settings.geminiApiKey && (
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ geminiApiKey: '' })}
+                    className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-300 transition"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* ── 2. 閱讀與字典設定 (Reading & Dictionary) ── */}

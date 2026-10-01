@@ -626,7 +626,10 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
 
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings?.geminiApiKey ? { 'x-gemini-api-key': settings.geminiApiKey } : {})
+        },
         signal: controller.signal,
         body: JSON.stringify({
           userPrompt: text,
@@ -641,7 +644,8 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
             : undefined,
           messages: historyToSend,
           existingWordsSummary,
-          existingArticlesSummary
+          existingArticlesSummary,
+          apiKey: settings?.geminiApiKey
         })
       });
 

@@ -99,6 +99,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   onArticlesChange,
   appSettings
 }) => {
+  const effectiveApiKey = appSettings?.geminiApiKey || storage.getLocalSettings()?.geminiApiKey;
+
   // State: Articles List & Active Article
   const [articles, setArticles] = useState<Article[]>(() => externalArticles || storage.getLocalArticles());
   const [activeArticleId, setActiveArticleId] = useState<string | null>(initialArticleId || null);
@@ -346,7 +348,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     }
 
     // 2. If cached in local storage from previous query, instant display (0 AI quota!)
-    if (cachedAnalysis && cachedAnalysis.def) {
+    const isCachedDefValid =
+      cachedAnalysis &&
+      cachedAnalysis.def &&
+      cachedAnalysis.def.trim().toLowerCase() !== lowerTerm &&
+      cachedAnalysis.def.trim().length > 0;
+
+    if (isCachedDefValid) {
       setInspectedWord({
         term: cleanTerm,
         pos: cachedAnalysis.pos || 'n.',
@@ -395,31 +403,38 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/article-lookup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(appSettings?.geminiApiKey ? { 'x-gemini-api-key': appSettings.geminiApiKey } : {})
+        },
         body: JSON.stringify({
           word: cleanTerm,
           sentence: sentenceContext,
-          forceRefresh
+          forceRefresh,
+          apiKey: appSettings?.geminiApiKey
         })
       });
 
       if (res.ok) {
         const data = await res.json();
+        const validDef = data.def && data.def.trim().toLowerCase() !== lowerTerm ? data.def : '';
         const analysisData: WordAnalysisData = {
           term: data.term || cleanTerm,
           pos: (data.pos as POS) || 'n.',
-          def: data.def || cleanTerm,
+          def: validDef,
           defEn: data.defEn || '',
           phonetic: data.phonetic || '',
-          ex: data.ex || `Learning ${cleanTerm} helps improve English proficiency.`,
+          ex: data.ex || sentenceContext.trim() || '',
           exZh: data.exZh || '',
           fromCache: data.fromCache || false,
           cachedAt: Date.now()
         };
 
-        // Cache in background
-        storage.saveWordAnalysis(cleanTerm, analysisData);
-        setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
+        // Cache in background only if definition is valid
+        if (validDef) {
+          storage.saveWordAnalysis(cleanTerm, analysisData);
+          setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
+        }
 
         setInspectedWord((prev) => {
           if (!prev || prev.term.toLowerCase() !== lowerTerm) return prev;
@@ -427,7 +442,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             ...prev,
             term: analysisData.term,
             pos: analysisData.pos,
-            def: analysisData.def,
+            def: validDef,
             defEn: analysisData.defEn,
             phonetic: analysisData.phonetic,
             example: analysisData.ex,
@@ -437,17 +452,17 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             hasAILookup: true
           };
         });
-        setCustomDefEdit(analysisData.def);
+        setCustomDefEdit(validDef);
         setCustomExEdit(analysisData.ex || '');
       } else {
         setInspectedWord((prev) =>
-          prev ? { ...prev, isLoading: false, def: cleanTerm } : null
+          prev ? { ...prev, isLoading: false, needsAILookup: true } : null
         );
       }
     } catch (err) {
       console.error('AI Word lookup error:', err);
       setInspectedWord((prev) =>
-        prev ? { ...prev, isLoading: false, def: cleanTerm } : null
+        prev ? { ...prev, isLoading: false, needsAILookup: true } : null
       );
     }
   };
@@ -466,35 +481,44 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/article-lookup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(appSettings?.geminiApiKey ? { 'x-gemini-api-key': appSettings.geminiApiKey } : {})
+        },
         body: JSON.stringify({
           word: cleanTerm,
           sentence: inspectedWord.sentenceContext,
-          forceRefresh: true
+          forceRefresh: true,
+          apiKey: appSettings?.geminiApiKey
         })
       });
 
       if (res.ok) {
         const data = await res.json();
+        const validDef = data.def && data.def.trim().toLowerCase() !== lowerTerm ? data.def : '';
         const analysisData: WordAnalysisData = {
           term: data.term || cleanTerm,
           pos: (data.pos as POS) || 'n.',
-          def: data.def || cleanTerm,
+          def: validDef,
           defEn: data.defEn || '',
           phonetic: data.phonetic || '',
-          ex: data.ex || `Learning ${cleanTerm} helps improve English proficiency.`,
+          ex: data.ex || inspectedWord.sentenceContext || '',
           exZh: data.exZh || '',
           fromCache: false,
           cachedAt: Date.now()
         };
-        storage.saveWordAnalysis(cleanTerm, analysisData);
-        setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
+
+        if (validDef) {
+          storage.saveWordAnalysis(cleanTerm, analysisData);
+          setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
+        }
+
         setInspectedWord((prev) =>
           prev ? {
             ...prev,
             term: analysisData.term,
             pos: analysisData.pos,
-            def: analysisData.def,
+            def: validDef,
             defEn: analysisData.defEn,
             phonetic: analysisData.phonetic,
             example: analysisData.ex,
@@ -504,14 +528,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             hasAILookup: true
           } : null
         );
-        setCustomDefEdit(analysisData.def);
+        setCustomDefEdit(validDef);
         setCustomExEdit(analysisData.ex || '');
       } else {
-        setInspectedWord((prev) => prev ? { ...prev, isLoading: false } : null);
+        setInspectedWord((prev) => prev ? { ...prev, isLoading: false, needsAILookup: true } : null);
       }
     } catch (err) {
       console.error('AI Word lookup error:', err);
-      setInspectedWord((prev) => prev ? { ...prev, isLoading: false } : null);
+      setInspectedWord((prev) => prev ? { ...prev, isLoading: false, needsAILookup: true } : null);
     }
   };
 
@@ -541,7 +565,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/article-chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(appSettings?.geminiApiKey ? { 'x-gemini-api-key': appSettings.geminiApiKey } : {})
+        },
         body: JSON.stringify({
           article: {
             title: currentArticle.title,
@@ -552,7 +579,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           },
           messages: newHistory.map((m) => ({ role: m.role, content: m.content })),
           userPrompt: userMsgContent,
-          selectedContext: ctx || undefined
+          selectedContext: ctx || undefined,
+          apiKey: appSettings?.geminiApiKey
         })
       });
 
@@ -692,8 +720,15 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/analyze-sentence', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sentence: clean, forceRefresh })
+        headers: {
+          'Content-Type': 'application/json',
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
+        },
+        body: JSON.stringify({
+          sentence: clean,
+          forceRefresh,
+          apiKey: effectiveApiKey
+        })
       });
 
       if (res.ok) {
@@ -843,8 +878,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     if (!currentArticle) return;
     setIsVocabDrawerOpen(true);
 
-    if (currentArticle.keyVocabulary && currentArticle.keyVocabulary.length > 0) {
-      setExtractedKeywords(currentArticle.keyVocabulary);
+    const existingVocab = currentArticle.keyVocabulary;
+    const hasValidVocab =
+      Array.isArray(existingVocab) &&
+      existingVocab.length > 0 &&
+      existingVocab.every(
+        (k) => k.def && k.def.trim().toLowerCase() !== k.term.trim().toLowerCase()
+      );
+
+    if (hasValidVocab) {
+      setExtractedKeywords(existingVocab);
       return;
     }
 
@@ -852,8 +895,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/extract-vocabulary', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: currentArticle.content })
+        headers: {
+          'Content-Type': 'application/json',
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
+        },
+        body: JSON.stringify({
+          text: currentArticle.content,
+          apiKey: effectiveApiKey
+        })
       });
 
       if (res.ok) {
@@ -879,8 +928,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/translate-article', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: currentArticle.content })
+        headers: {
+          'Content-Type': 'application/json',
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
+        },
+        body: JSON.stringify({
+          content: currentArticle.content,
+          apiKey: effectiveApiKey
+        })
       });
       if (res.ok) {
         const data = await res.json();
@@ -906,10 +961,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       const res = await fetch('/api/ai/generate-quiz', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
+        },
         body: JSON.stringify({
           title: currentArticle.title,
-          content: currentArticle.content
+          content: currentArticle.content,
+          apiKey: effectiveApiKey
         })
       });
       if (res.ok) {
@@ -935,16 +994,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const handleBatchAddKeywords = (keywordsToBatch: ArticleKeyWord[]) => {
     if (!currentArticle || keywordsToBatch.length === 0) return;
 
-    const newWords: Partial<Word>[] = keywordsToBatch.map((k) => ({
-      term: k.term,
-      pos: k.pos || 'n.',
-      def: k.def,
-      defEn: k.defEn || '',
-      ex: k.ex || `From article: ${currentArticle.title}`,
-      level: 0,
-      interval: 1,
-      easeFactor: 2.5
-    }));
+    const newWords: Partial<Word>[] = keywordsToBatch.map((k) => {
+      const safeDef =
+        k.def && k.def.trim().toLowerCase() !== k.term.trim().toLowerCase()
+          ? k.def.trim()
+          : k.defEn || k.term;
+
+      return {
+        term: k.term,
+        pos: k.pos || 'n.',
+        def: safeDef,
+        defEn: k.defEn || '',
+        ex: k.ex || `From article: ${currentArticle.title}`,
+        level: 0,
+        interval: 1,
+        easeFactor: 2.5
+      };
+    });
 
     onAddWords(newWords);
 
@@ -973,12 +1039,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
       const res = await fetch('/api/ai/generate-article', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
+        },
         body: JSON.stringify({
           topic: genTopic.trim() || 'Modern Science and Curiosity',
           level: genLevel,
           category: genCategory,
-          targetWords
+          targetWords,
+          apiKey: effectiveApiKey
         })
       });
 
@@ -2241,7 +2311,22 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                       </div>
                     ) : (
                       <div>
-                        <p>{inspectedWord.def || inspectedWord.term}</p>
+                        {inspectedWord.def && inspectedWord.def.trim().toLowerCase() !== inspectedWord.term.trim().toLowerCase() ? (
+                          <p className="text-base text-slate-800 dark:text-slate-100">{inspectedWord.def}</p>
+                        ) : (
+                          <div className="space-y-1.5 py-1">
+                            <p className="text-xs text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+                              ⚠️ 尚未獲取精準中文釋義
+                            </p>
+                            <button
+                              onClick={() => handleAILookupForCurrentWord()}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold shadow-xs transition active:scale-95"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>立即查詢權威繁體中文釋義</span>
+                            </button>
+                          </div>
+                        )}
                         <div className="flex items-center gap-2 mt-1.5">
                           {cachedWordMap[inspectedWord.term.toLowerCase()] ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80">
@@ -2250,7 +2335,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/80">
                               <Sparkles className="w-2.5 h-2.5" />
-                              AI 語境深度解析
+                              AI 與權威詞典深度解析
                             </span>
                           )}
                         </div>
@@ -2259,11 +2344,22 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   </div>
                 )}
 
-                {inspectedWord.defEn && !inspectedWord.isLoading && (
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 italic bg-slate-50 dark:bg-slate-800/50 p-2 rounded-xl border border-slate-200/50 dark:border-slate-700/50">
-                    <span className="font-semibold text-slate-600 dark:text-slate-300 not-italic mr-1">En:</span>
+                {inspectedWord.defEn && !inspectedWord.isLoading ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 italic bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl border border-slate-200/50 dark:border-slate-700/50 leading-relaxed">
+                    <span className="font-semibold text-slate-600 dark:text-slate-300 not-italic mr-1.5">En:</span>
                     {inspectedWord.defEn}
                   </p>
+                ) : !inspectedWord.isLoading && !inspectedWord.needsAILookup && (
+                  <div className="mt-2 flex items-center justify-between bg-slate-50 dark:bg-slate-800/30 p-2 rounded-xl border border-slate-200/40 dark:border-slate-700/40">
+                    <span className="text-[11px] text-slate-400 italic">尚未收錄英英釋義</span>
+                    <button
+                      onClick={() => handleAILookupForCurrentWord()}
+                      className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline flex items-center gap-1"
+                    >
+                      <Sparkles className="w-2.5 h-2.5" />
+                      補全英英釋義
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -2314,7 +2410,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   ) : (
                     <div>
                       <p className="text-xs font-medium text-slate-800 dark:text-slate-200 leading-relaxed italic">
-                        "{inspectedWord.example || `Practice using ${inspectedWord.term} in daily conversations.`}"
+                        "{inspectedWord.example || (inspectedWord.sentenceContext ? inspectedWord.sentenceContext : `Learning ${inspectedWord.term} in context improves language mastery.`)}"
                       </p>
                       {inspectedWord.exampleZh && (
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-sans">
@@ -3005,7 +3101,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                                 )}
                               </div>
                               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                                {kw.def}
+                                {kw.def && kw.def.trim().toLowerCase() !== kw.term.trim().toLowerCase() ? (
+                                  kw.def
+                                ) : (
+                                  <span className="text-amber-500 dark:text-amber-400 font-medium text-[11px]">
+                                    ⚠️ 暫缺繁中釋義
+                                  </span>
+                                )}
                               </p>
                               {kw.defEn && (
                                 <p className="text-[11px] text-slate-400 italic">{kw.defEn}</p>

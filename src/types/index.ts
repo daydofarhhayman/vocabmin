@@ -57,6 +57,7 @@ export interface AppSettings {
   accentColor?: AccentColor; // 全域主題配色
   fontSize?: 'normal' | 'medium' | 'large'; // 閱讀字體級距
   appNickname?: string; // 個性化空間自訂名稱
+  geminiApiKey?: string; // 自訂 Google Gemini API Key
   // Backward compatibility optional fields
   mergeReview?: boolean;
   autoPlayAudio?: boolean;

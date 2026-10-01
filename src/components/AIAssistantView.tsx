@@ -292,7 +292,10 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
 
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings?.geminiApiKey ? { 'x-gemini-api-key': settings.geminiApiKey } : {})
+        },
         signal: controller.signal,
         body: JSON.stringify({
           userPrompt: text,
@@ -300,7 +303,8 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           scenarioDesc: currentScenario.desc,
           messages: historyToSend,
           existingWordsSummary,
-          existingArticlesSummary
+          existingArticlesSummary,
+          apiKey: settings?.geminiApiKey
         })
       });
 

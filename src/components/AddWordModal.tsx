@@ -45,14 +45,21 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     const cleanTerm = term.trim();
     if (!cleanTerm || isAiLoading) return;
 
+    const currentSettings = storage.getLocalSettings();
+    const apiKey = currentSettings?.geminiApiKey;
+
     setIsAiLoading(true);
     try {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
+        },
         body: JSON.stringify({
           userPrompt: `請幫我標準化查詢這個英文單字「${cleanTerm}」，自動補齊標準詞性、清晰的繁體中文解釋與實用例句。`,
-          rawInputWords: [cleanTerm]
+          rawInputWords: [cleanTerm],
+          apiKey
         })
       });
 

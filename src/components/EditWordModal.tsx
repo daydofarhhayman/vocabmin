@@ -3,6 +3,7 @@ import { Edit2, Plus, Trash2, X, Check, Sparkles } from 'lucide-react';
 import { POS, Word } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { normalizePos } from '../utils/pos';
+import { storage } from '../services/storage';
 
 interface EditWordModalProps {
   isOpen: boolean;
@@ -40,14 +41,21 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     const cleanTerm = term.trim();
     if (!cleanTerm || isAiLoading) return;
 
+    const currentSettings = storage.getLocalSettings();
+    const apiKey = currentSettings?.geminiApiKey;
+
     setIsAiLoading(true);
     try {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
+        },
         body: JSON.stringify({
           userPrompt: `請幫我標準化潤飾與優化單字「${cleanTerm}」，提供精準標準的詞性、中文解釋與自然的現代英文例句。`,
-          rawInputWords: [cleanTerm]
+          rawInputWords: [cleanTerm],
+          apiKey
         })
       });
 

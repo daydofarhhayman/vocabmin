@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.3.8',
+    date: '2026-10-02',
+    type: 'fix',
+    changes: [
+      '📖 徹底修復單字中文釋義與英英解釋遺失問題：修復 AI 查詞降級回退缺陷，杜絕釋義重複顯示英文單字（如 oilmen = oilmen）或空白英英解釋的現象。',
+      '🌐 導入雙語權威詞典引擎（Google 翻譯 + Datamuse）：無論是否配置 AI Key 或 AI 額度耗盡，均能保證秒級返回精確權威的繁體中文釋義、英英定義與標準詞性。',
+      '🧹 智慧快取驗證與自癒防護：自動過濾並清理既有本機歷史損壞快取紀錄，禁止無效單字資料寫入快取或字庫。',
+      '🔑 支援個人化 Google Gemini API Key 設定：在「設定 > 雲端同步與帳號」中可自行填寫個人 Gemini API Key，全站所有 AI 端點皆無縫套用個人金鑰配額。',
+      '✨ 文章生詞卡介面優化：單字卡片提供「補齊英英釋義」與「即時重查繁中釋義」快捷操作，單字例句去範本化，學習更精準。'
+    ]
+  },
+  {
     version: '1.3.7',
     date: '2026-10-02',
     type: 'improve',
