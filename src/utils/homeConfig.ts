@@ -10,7 +10,12 @@ export type WidgetId =
   | 'randomWord'
   | 'quoteOfTheDay'
   | 'articleReading'
-  | 'quickAdd';
+  | 'quickAdd'
+  | 'speedQuiz'
+  | 'streakCalendar'
+  | 'stumbleWords'
+  | 'pomodoroTimer'
+  | 'rootOfTheDay';
 
 export type HomeAccentColor =
   | 'indigo'
@@ -58,6 +63,13 @@ export const WIDGET_METAS: Record<WidgetId, WidgetMeta> = {
     category: 'core',
     defaultWidth: 'full'
   },
+  speedQuiz: {
+    id: 'speedQuiz',
+    title: '單字即時速測挑戰',
+    desc: '直接在卡片上進行 4 選 1 抽測，免跳頁即時檢測單字記憶',
+    category: 'review',
+    defaultWidth: 'half'
+  },
   masteryStats: {
     id: 'masteryStats',
     title: '單字熟練度分佈',
@@ -67,15 +79,29 @@ export const WIDGET_METAS: Record<WidgetId, WidgetMeta> = {
   },
   studyPaths: {
     id: 'studyPaths',
-    title: '核心練習模式路徑',
-    desc: '選擇題測驗、挖空填空與文章閱讀的快速捷徑',
+    title: '核心練習模式捷徑',
+    desc: '選擇題辨析與例句填空拼寫的專屬直達通道',
     category: 'review',
     defaultWidth: 'half'
   },
   dailyGoal: {
     id: 'dailyGoal',
     title: '今日學習目標與進度',
-    desc: '每日目標複習數進度條與連續學習打卡狀態',
+    desc: '每日目標複習數進度條與達成狀態',
+    category: 'review',
+    defaultWidth: 'half'
+  },
+  streakCalendar: {
+    id: 'streakCalendar',
+    title: '7 天連續打卡週曆',
+    desc: '一週 7 天學習打卡熱力視覺化，激發持久學習動力',
+    category: 'review',
+    defaultWidth: 'half'
+  },
+  stumbleWords: {
+    id: 'stumbleWords',
+    title: '生疏弱點單字攻堅',
+    desc: '自動提煉字庫中最陌生的生詞，集中突破記憶弱項',
     category: 'review',
     defaultWidth: 'half'
   },
@@ -86,10 +112,24 @@ export const WIDGET_METAS: Record<WidgetId, WidgetMeta> = {
     category: 'tools',
     defaultWidth: 'half'
   },
+  pomodoroTimer: {
+    id: 'pomodoroTimer',
+    title: '專注學習番茄鐘',
+    desc: '沉浸式倒數專注計時器，打造高效率背單字節奏',
+    category: 'tools',
+    defaultWidth: 'half'
+  },
   recentWords: {
     id: 'recentWords',
     title: '最近收錄單字書架',
     desc: '展示最新收錄的單字卡片，支援朗讀與字典查詢',
+    category: 'tools',
+    defaultWidth: 'full'
+  },
+  rootOfTheDay: {
+    id: 'rootOfTheDay',
+    title: '每日詞根詞綴解密',
+    desc: '精選高頻拉丁/希臘詞根與衍生詞，科學成串記單字',
     category: 'tools',
     defaultWidth: 'full'
   },
@@ -223,11 +263,16 @@ export const DEFAULT_HOME_CONFIG: HomeConfig = {
   widgets: [
     { id: 'dueReview', enabled: true, width: 'full' },
     { id: 'quickSearch', enabled: true, width: 'full' },
-    { id: 'masteryStats', enabled: true, width: 'half' },
-    { id: 'studyPaths', enabled: true, width: 'half' },
+    { id: 'speedQuiz', enabled: true, width: 'half' },
     { id: 'dailyGoal', enabled: true, width: 'half' },
+    { id: 'streakCalendar', enabled: true, width: 'half' },
+    { id: 'masteryStats', enabled: true, width: 'half' },
+    { id: 'stumbleWords', enabled: true, width: 'half' },
     { id: 'randomWord', enabled: true, width: 'half' },
+    { id: 'studyPaths', enabled: true, width: 'half' },
+    { id: 'pomodoroTimer', enabled: false, width: 'half' },
     { id: 'recentWords', enabled: true, width: 'full' },
+    { id: 'rootOfTheDay', enabled: true, width: 'full' },
     { id: 'articleReading', enabled: true, width: 'full' },
     { id: 'quoteOfTheDay', enabled: true, width: 'full' },
     { id: 'quickAdd', enabled: false, width: 'half' }
@@ -324,6 +369,106 @@ export const DAILY_QUOTES: DailyQuote[] = [
   }
 ];
 
+export function getQuoteForToday(): DailyQuote {
+  const dayOfYear = Math.floor(
+    (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 1000 / 60 / 60 / 24
+  );
+  return DAILY_QUOTES[dayOfYear % DAILY_QUOTES.length];
+}
+
+// Root of the Day Library for the Root & Affix Widget
+export interface EtymologyRoot {
+  root: string;
+  meaning: string;
+  origin: string;
+  examples: {
+    word: string;
+    pos: string;
+    breakdown: string;
+    def: string;
+  }[];
+}
+
+export const DAILY_ROOTS: EtymologyRoot[] = [
+  {
+    root: 'spec / spect',
+    meaning: '看、觀察 (to look, see)',
+    origin: '拉丁語 spectare',
+    examples: [
+      { word: 'inspect', pos: 'v.', breakdown: 'in- (進入) + spect (看)', def: '檢查、審視' },
+      { word: 'prospect', pos: 'n.', breakdown: 'pro- (向前) + spect (看)', def: '前景、展望' },
+      { word: 'retrospect', pos: 'n.', breakdown: 'retro- (向後) + spect (看)', def: '回顧、追溯' }
+    ]
+  },
+  {
+    root: 'dict / dic',
+    meaning: '說、言談 (to say, speak)',
+    origin: '拉丁語 dicere',
+    examples: [
+      { word: 'predict', pos: 'v.', breakdown: 'pre- (預先) + dict (說)', def: '預測、預告' },
+      { word: 'contradict', pos: 'v.', breakdown: 'contra- (相反) + dict (說)', def: '反駁、與…矛盾' },
+      { word: 'verdict', pos: 'n.', breakdown: 'ver- (真實) + dict (說)', def: '裁定、判決' }
+    ]
+  },
+  {
+    root: 'chron',
+    meaning: '時間 (time)',
+    origin: '希臘語 khronos',
+    examples: [
+      { word: 'chronological', pos: 'adj.', breakdown: 'chron (時間) + -logical (邏輯順序)', def: '按時間順序的' },
+      { word: 'chronic', pos: 'adj.', breakdown: 'chron (時間) + -ic (形容詞)', def: '慢性的、長期的' },
+      { word: 'synchronize', pos: 'v.', breakdown: 'syn- (共同) + chron (時間) + -ize (動詞)', def: '使同步、同時發生' }
+    ]
+  },
+  {
+    root: 'port',
+    meaning: '運送、攜帶 (to carry)',
+    origin: '拉丁語 portare',
+    examples: [
+      { word: 'transport', pos: 'v.', breakdown: 'trans- (穿過) + port (運)', def: '傳送、運輸' },
+      { word: 'export', pos: 'v.', breakdown: 'ex- (向外) + port (運)', def: '輸出、出口' },
+      { word: 'portable', pos: 'adj.', breakdown: 'port (攜帶) + -able (可…的)', def: '輕便便攜的' }
+    ]
+  },
+  {
+    root: 'bene / bon',
+    meaning: '好、善 (good, well)',
+    origin: '拉丁語 bene',
+    examples: [
+      { word: 'benefit', pos: 'n.', breakdown: 'bene (好) + fit (做)', def: '利益、好處' },
+      { word: 'benevolent', pos: 'adj.', breakdown: 'bene (善) + vol (意向) + -ent', def: '仁慈的、親切的' },
+      { word: 'benefactor', pos: 'n.', breakdown: 'bene (好) + fac (做) + -or (人)', def: '恩人、捐助者' }
+    ]
+  },
+  {
+    root: 'tract',
+    meaning: '拉、吸引 (to pull, draw)',
+    origin: '拉丁語 trahere',
+    examples: [
+      { word: 'attract', pos: 'v.', breakdown: 'ad- (朝向) + tract (拉)', def: '吸引、引起興趣' },
+      { word: 'abstract', pos: 'adj.', breakdown: 'abs- (離開) + tract (抽取)', def: '抽象的、純理論的' },
+      { word: 'distract', pos: 'v.', breakdown: 'dis- (分散) + tract (拉)', def: '分散注意力、使分心' }
+    ]
+  },
+  {
+    root: 'aud / audit',
+    meaning: '聽、聽聞 (to hear, listen)',
+    origin: '拉丁語 audire',
+    examples: [
+      { word: 'audible', pos: 'adj.', breakdown: 'aud (聽) + -ible (可…的)', def: '聽得見的' },
+      { word: 'audience', pos: 'n.', breakdown: 'aud (聽) + -ience (人群)', def: '聽眾、觀眾' },
+      { word: 'auditory', pos: 'adj.', breakdown: 'audit (聽) + -ory (的)', def: '聽覺的' }
+    ]
+  }
+];
+
+export function getRootForToday(): EtymologyRoot {
+  const dayOfYear = Math.floor(
+    (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 1000 / 60 / 60 / 24
+  );
+  return DAILY_ROOTS[dayOfYear % DAILY_ROOTS.length];
+}
+
 export interface HomePreset {
   id: string;
   name: string;
@@ -337,80 +482,97 @@ export const HOME_PRESETS: HomePreset[] = [
   {
     id: 'classic',
     name: '🌟 經典全能',
-    desc: '標準豐富配置，包含待複習、搜尋、掌握度統計、路徑捷徑與生詞書架',
+    desc: '標準豐富配置：待複習焦點、即時速測、打卡週曆、生疏弱點攻堅與每日名言',
     accentColor: 'indigo',
     cardStyle: 'modern',
     widgets: [
       { id: 'dueReview', enabled: true, width: 'full' },
       { id: 'quickSearch', enabled: true, width: 'full' },
-      { id: 'masteryStats', enabled: true, width: 'half' },
-      { id: 'studyPaths', enabled: true, width: 'half' },
+      { id: 'speedQuiz', enabled: true, width: 'half' },
       { id: 'dailyGoal', enabled: true, width: 'half' },
+      { id: 'streakCalendar', enabled: true, width: 'half' },
+      { id: 'stumbleWords', enabled: true, width: 'half' },
+      { id: 'masteryStats', enabled: true, width: 'half' },
       { id: 'randomWord', enabled: true, width: 'half' },
+      { id: 'studyPaths', enabled: true, width: 'half' },
       { id: 'recentWords', enabled: true, width: 'full' },
+      { id: 'rootOfTheDay', enabled: true, width: 'full' },
       { id: 'quoteOfTheDay', enabled: true, width: 'full' },
+      { id: 'articleReading', enabled: false, width: 'full' },
+      { id: 'pomodoroTimer', enabled: false, width: 'half' },
       { id: 'quickAdd', enabled: false, width: 'half' }
     ]
   },
   {
     id: 'focus_srs',
-    name: '🎯 衝刺複習',
-    desc: '專為每日記憶複習打造，突顯今日待複習、每日目標進度與熟練度進度',
+    name: '🎯 衝刺記憶',
+    desc: '專為高強度單字衝刺打造：速測挑戰、弱點攻堅、待複習與番茄鐘專注計時',
     accentColor: 'emerald',
     cardStyle: 'modern',
     widgets: [
       { id: 'dueReview', enabled: true, width: 'full' },
+      { id: 'speedQuiz', enabled: true, width: 'half' },
+      { id: 'stumbleWords', enabled: true, width: 'half' },
+      { id: 'pomodoroTimer', enabled: true, width: 'half' },
+      { id: 'streakCalendar', enabled: true, width: 'half' },
       { id: 'dailyGoal', enabled: true, width: 'half' },
       { id: 'masteryStats', enabled: true, width: 'half' },
-      { id: 'studyPaths', enabled: true, width: 'full' },
-      { id: 'randomWord', enabled: true, width: 'half' },
-      { id: 'quickSearch', enabled: true, width: 'half' },
+      { id: 'studyPaths', enabled: true, width: 'half' },
+      { id: 'randomWord', enabled: false, width: 'half' },
       { id: 'recentWords', enabled: false, width: 'full' },
+      { id: 'rootOfTheDay', enabled: false, width: 'full' },
       { id: 'quoteOfTheDay', enabled: false, width: 'full' },
+      { id: 'articleReading', enabled: false, width: 'full' },
+      { id: 'quickSearch', enabled: true, width: 'full' },
       { id: 'quickAdd', enabled: false, width: 'half' }
     ]
   },
   {
     id: 'minimal_speed',
-    name: '⚡ 極簡高效',
-    desc: '極速直達，僅保留搜尋、待複習卡片與主畫面生詞快速便簽',
+    name: '⚡ 極簡高能',
+    desc: '極速直達：搜尋、待複習卡片、即時速測與隨機抽詞翻牌',
     accentColor: 'ocean',
     cardStyle: 'glass',
     widgets: [
       { id: 'quickSearch', enabled: true, width: 'full' },
       { id: 'dueReview', enabled: true, width: 'full' },
-      { id: 'quickAdd', enabled: true, width: 'half' },
+      { id: 'speedQuiz', enabled: true, width: 'half' },
       { id: 'randomWord', enabled: true, width: 'half' },
+      { id: 'streakCalendar', enabled: true, width: 'half' },
+      { id: 'quickAdd', enabled: true, width: 'half' },
+      { id: 'stumbleWords', enabled: false, width: 'half' },
       { id: 'masteryStats', enabled: false, width: 'half' },
       { id: 'studyPaths', enabled: false, width: 'half' },
       { id: 'dailyGoal', enabled: false, width: 'half' },
+      { id: 'pomodoroTimer', enabled: false, width: 'half' },
       { id: 'recentWords', enabled: false, width: 'full' },
-      { id: 'quoteOfTheDay', enabled: false, width: 'full' }
+      { id: 'rootOfTheDay', enabled: false, width: 'full' },
+      { id: 'quoteOfTheDay', enabled: false, width: 'full' },
+      { id: 'articleReading', enabled: false, width: 'full' }
     ]
   },
   {
     id: 'literary',
-    name: '📖 文藝晨讀',
-    desc: '結合每日英語金句、最近收錄書架與隨機抽詞翻牌，陶冶語感',
+    name: '📖 語感博學',
+    desc: '結合每日詞根解密、每日英語金句、最近收錄書架與沉浸式文章閱讀',
     accentColor: 'rose',
     cardStyle: 'vibrant',
     widgets: [
       { id: 'quoteOfTheDay', enabled: true, width: 'full' },
+      { id: 'rootOfTheDay', enabled: true, width: 'full' },
+      { id: 'articleReading', enabled: true, width: 'full' },
       { id: 'randomWord', enabled: true, width: 'half' },
-      { id: 'recentWords', enabled: true, width: 'half' },
+      { id: 'streakCalendar', enabled: true, width: 'half' },
       { id: 'dueReview', enabled: true, width: 'full' },
       { id: 'quickSearch', enabled: true, width: 'full' },
+      { id: 'recentWords', enabled: true, width: 'full' },
+      { id: 'speedQuiz', enabled: false, width: 'half' },
+      { id: 'stumbleWords', enabled: false, width: 'half' },
       { id: 'dailyGoal', enabled: false, width: 'half' },
       { id: 'masteryStats', enabled: false, width: 'half' },
       { id: 'studyPaths', enabled: false, width: 'half' },
+      { id: 'pomodoroTimer', enabled: false, width: 'half' },
       { id: 'quickAdd', enabled: false, width: 'half' }
     ]
   }
 ];
-
-export function getQuoteForToday(): DailyQuote {
-  const dayOfYear = Math.floor(
-    (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 1000 / 60 / 60 / 24
-  );
-  return DAILY_QUOTES[dayOfYear % DAILY_QUOTES.length];
-}

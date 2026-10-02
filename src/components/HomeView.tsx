@@ -29,8 +29,16 @@ import {
   RotateCcw,
   Sliders,
   Layers,
-  Wand2
+  Wand2,
+  Zap,
+  Calendar,
+  AlertCircle,
+  Timer,
+  Compass,
+  Play,
+  Pause
 } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { Word, ViewTab, AppSettings, DailyStats, POS } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { tts } from '../services/tts';
@@ -44,6 +52,8 @@ import {
   COLOR_THEMES,
   DEFAULT_HOME_CONFIG,
   getQuoteForToday,
+  getRootForToday,
+  EtymologyRoot,
   HomeCardStyle,
   WIDGET_METAS,
   WidgetId,
@@ -204,6 +214,169 @@ export const HomeView: React.FC<HomeViewProps> = ({
     setQuickAddSuccess(true);
     setTimeout(() => setQuickAddSuccess(false), 2500);
   };
+
+  // Speed Quiz Widget State & Logic
+  const [speedQuizTargetWord, setSpeedQuizTargetWord] = useState<Word | null>(null);
+  const [speedQuizOptions, setSpeedQuizOptions] = useState<{ text: string; isCorrect: boolean }[]>([]);
+  const [speedQuizSelectedIdx, setSpeedQuizSelectedIdx] = useState<number | null>(null);
+  const [speedQuizAnswered, setSpeedQuizAnswered] = useState(false);
+  const [speedQuizScore, setSpeedQuizScore] = useState(0);
+
+  const initSpeedQuiz = () => {
+    if (!words.length) {
+      setSpeedQuizTargetWord(null);
+      setSpeedQuizOptions([]);
+      setSpeedQuizSelectedIdx(null);
+      setSpeedQuizAnswered(false);
+      return;
+    }
+
+    const validWords = words.filter((w) => w.def && w.def.trim().length > 0);
+    const pool = validWords.length > 0 ? validWords : words;
+    const target = pool[Math.floor(Math.random() * pool.length)];
+
+    const otherDefs = pool
+      .filter((w) => w.term.toLowerCase() !== target.term.toLowerCase())
+      .map((w) => getWordDisplayDef(w, settings.lang))
+      .filter(Boolean);
+
+    const shuffledOthers = [...otherDefs].sort(() => Math.random() - 0.5).slice(0, 3);
+    const fallbackDistractors = ['持續堅持', '微小進展', '深刻認知', '靈光一現'];
+    while (shuffledOthers.length < 3) {
+      shuffledOthers.push(fallbackDistractors[shuffledOthers.length % fallbackDistractors.length]);
+    }
+
+    const correctDef = getWordDisplayDef(target, settings.lang);
+    const options = [
+      { text: correctDef, isCorrect: true },
+      ...shuffledOthers.map((d) => ({ text: d, isCorrect: false }))
+    ].sort(() => Math.random() - 0.5);
+
+    setSpeedQuizTargetWord(target);
+    setSpeedQuizOptions(options);
+    setSpeedQuizSelectedIdx(null);
+    setSpeedQuizAnswered(false);
+  };
+
+  useEffect(() => {
+    initSpeedQuiz();
+  }, [words.length]);
+
+  const handleSelectSpeedQuizOption = (idx: number) => {
+    if (speedQuizAnswered || !speedQuizTargetWord) return;
+    setSpeedQuizSelectedIdx(idx);
+    setSpeedQuizAnswered(true);
+
+    const chosen = speedQuizOptions[idx];
+    if (chosen?.isCorrect) {
+      setSpeedQuizScore((prev) => prev + 1);
+      tts.speak(speedQuizTargetWord.term);
+      try {
+        confetti({ particleCount: 20, spread: 50 });
+      } catch {}
+    }
+  };
+
+  // Pomodoro Timer Widget State & Logic
+  const [pomoPresetMinutes, setPomoPresetMinutes] = useState<number>(25);
+  const [pomoSecondsLeft, setPomoSecondsLeft] = useState<number>(25 * 60);
+  const [pomoIsActive, setPomoIsActive] = useState<boolean>(false);
+  const [pomoSessionsCompleted, setPomoSessionsCompleted] = useState<number>(() => {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const saved = localStorage.getItem(`vocabmin_pomo_${today}`);
+      return saved ? parseInt(saved, 10) : 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout | null = null;
+    if (pomoIsActive && pomoSecondsLeft > 0) {
+      timer = setInterval(() => {
+        setPomoSecondsLeft((prev) => {
+          if (prev <= 1) {
+            setPomoIsActive(false);
+            const nextCompleted = pomoSessionsCompleted + 1;
+            setPomoSessionsCompleted(nextCompleted);
+            try {
+              const today = new Date().toISOString().split('T')[0];
+              localStorage.setItem(`vocabmin_pomo_${today}`, nextCompleted.toString());
+              confetti({ particleCount: 40, spread: 70 });
+            } catch {}
+            return pomoPresetMinutes * 60;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [pomoIsActive, pomoSecondsLeft, pomoPresetMinutes, pomoSessionsCompleted]);
+
+  const handleSwitchPomoPreset = (mins: number) => {
+    setPomoIsActive(false);
+    setPomoPresetMinutes(mins);
+    setPomoSecondsLeft(mins * 60);
+  };
+
+  const handleTogglePomo = () => {
+    setPomoIsActive((prev) => !prev);
+  };
+
+  const handleResetPomo = () => {
+    setPomoIsActive(false);
+    setPomoSecondsLeft(pomoPresetMinutes * 60);
+  };
+
+  // 7-Day Streak Calendar Calculation
+  const weekCalendarDays = useMemo(() => {
+    const days: {
+      dateStr: string;
+      dayLabel: string;
+      dateNum: number;
+      isToday: boolean;
+      isCompleted: boolean;
+      count: number;
+    }[] = [];
+
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(now.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const stat = dailyStats?.[dateStr];
+      const count = (stat?.reviewed || 0) + (stat?.added || 0) + (stat?.quizzes || 0);
+      const isCompleted = count > 0;
+      const isToday = i === 0;
+
+      const weekdayNamesZh = ['日', '一', '二', '三', '四', '五', '六'];
+      const weekdayNamesEn = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const dayLabel = settings.lang === 'zh' ? weekdayNamesZh[d.getDay()] : weekdayNamesEn[d.getDay()];
+
+      days.push({
+        dateStr,
+        dayLabel,
+        dateNum: d.getDate(),
+        isToday,
+        isCompleted,
+        count
+      });
+    }
+
+    return days;
+  }, [dailyStats, settings.lang]);
+
+  // Stumble Weak Words (Lvl 0 and 1)
+  const stumbleWordsList = useMemo(() => {
+    const weak = words.filter((w) => (w.level || 0) <= 1);
+    return weak.slice(0, 3);
+  }, [words]);
+
+  // Root of the day
+  const rootData = useMemo(() => getRootForToday(), []);
 
   // Level counts
   const levelCounts = useMemo(() => {
@@ -1076,20 +1249,34 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   </div>
                 );
 
-              /* WIDGET 4: Core Study Paths */
+              /* WIDGET 4: Core Study Paths (Focused Quiz & Review Modes) */
               case 'studyPaths':
                 return renderWidgetWrapper(
                   widget,
                   index,
-                  <div className="space-y-3">
+                  <div className={`p-4 sm:p-5 rounded-2xl ${cardStyleClass} space-y-3`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-500 flex items-center justify-center">
+                          <BookOpen className="w-4 h-4" />
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          學習測驗模式
+                        </h3>
+                      </div>
+                      <span className="text-[11px] text-slate-400 font-medium">
+                        多維度複習鞏固
+                      </span>
+                    </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {/* Multiple Choice Review */}
                       <div
                         onClick={() => !isEditMode && setTab('review')}
-                        className={`p-3.5 sm:p-4 rounded-xl cursor-pointer group flex flex-col justify-between h-auto sm:h-28 transition hover:shadow ${cardStyleClass}`}
+                        className={`p-3.5 rounded-xl cursor-pointer group flex flex-col justify-between transition hover:shadow bg-slate-50/60 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 hover:border-indigo-400 dark:hover:border-indigo-500`}
                       >
                         <div className="flex items-start justify-between">
-                          <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center group-hover:scale-105 transition-transform">
                             <BookOpen className="w-4 h-4" />
                           </div>
                           {dueWordsCount > 0 && (
@@ -1098,12 +1285,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
                             </span>
                           )}
                         </div>
-                        <div className="mt-2 sm:mt-0">
+                        <div className="mt-3">
                           <h4 className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                            選擇題模式
+                            選擇題辨析
                           </h4>
-                          <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            單字釋義快速辨析
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            快速中英四選一精準判別
                           </p>
                         </div>
                       </div>
@@ -1111,72 +1298,477 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       {/* Cloze Fill-in Review */}
                       <div
                         onClick={() => !isEditMode && setTab('quiz')}
-                        className={`p-3.5 sm:p-4 rounded-xl cursor-pointer group flex flex-col justify-between h-auto sm:h-28 transition hover:shadow ${cardStyleClass}`}
+                        className={`p-3.5 rounded-xl cursor-pointer group flex flex-col justify-between transition hover:shadow bg-slate-50/60 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 hover:border-purple-400 dark:hover:border-purple-500`}
                       >
                         <div className="flex items-start justify-between">
-                          <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                          <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center group-hover:scale-105 transition-transform">
                             <PenTool className="w-4 h-4" />
                           </div>
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 dark:bg-purple-950 text-purple-600 dark:text-purple-400">
-                            拼寫
+                            拼寫填空
                           </span>
                         </div>
-                        <div className="mt-2 sm:mt-0">
+                        <div className="mt-3">
                           <h4 className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">
-                            例句填空題
+                            例句拼寫題
                           </h4>
-                          <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            語境拼寫鞏固記憶
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            根據語境與字義完整拼寫
                           </p>
                         </div>
                       </div>
                     </div>
+                  </div>
+                );
 
-                    {/* Article Reader Pathway Banner */}
-                    <div
-                      onClick={() => !isEditMode && setTab('reader')}
-                      className={`p-3.5 rounded-xl cursor-pointer group flex items-center justify-between transition hover:shadow ${cardStyleClass}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center group-hover:scale-105 transition-transform shrink-0">
-                          <BookOpen className="w-4 h-4" />
+              /* WIDGET: Speed Quiz (4-Option Fast Challenge) */
+              case 'speedQuiz':
+                return renderWidgetWrapper(
+                  widget,
+                  index,
+                  <div className={`p-4 sm:p-5 rounded-2xl ${cardStyleClass} space-y-3.5`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-500 flex items-center justify-center">
+                          <Zap className="w-4 h-4" />
                         </div>
                         <div>
-                          <h4 className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
-                            沉浸式文章閱讀器
-                          </h4>
-                          <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            點擊即查即錄生詞、AI 句型解析、雙語對照朗讀
-                          </p>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                            <span>單字即時速測</span>
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">
+                              快問快答
+                            </span>
+                          </h3>
                         </div>
                       </div>
-                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-all shrink-0" />
+
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 dark:bg-orange-950/80 text-orange-600 dark:text-orange-300">
+                          <Flame className="w-3.5 h-3.5 fill-current" />
+                          <span>連對 {speedQuizScore}</span>
+                        </span>
+                        <button
+                          onClick={initSpeedQuiz}
+                          disabled={isEditMode}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+                          title="換一題"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Multi-Scenario AI Assistant Banner */}
-                    <div
-                      onClick={() => !isEditMode && setTab('ai')}
-                      className={`p-3.5 rounded-xl cursor-pointer group flex items-center justify-between transition hover:shadow ${cardStyleClass}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-pink-500 text-white flex items-center justify-center group-hover:scale-105 transition-transform shrink-0 shadow-sm shadow-purple-500/20">
-                          <Sparkles className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <h4 className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                              AI 智能多場景語伴
-                            </h4>
-                            <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300">
-                              4大場景
+                    {speedQuizTargetWord ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between bg-slate-50/80 dark:bg-slate-900/40 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-base sm:text-lg text-slate-900 dark:text-white capitalize">
+                              {speedQuizTargetWord.term}
+                            </span>
+                            <span className="text-xs font-semibold text-slate-400">
+                              {speedQuizTargetWord.pos}
                             </span>
                           </div>
-                          <p className="hidden sm:block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            全能問答、生詞擴充、寫作文法診斷與實戰模擬
-                          </p>
+                          <button
+                            onClick={() => tts.speak(speedQuizTargetWord.term)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+                            title="發音"
+                          >
+                            <Volume2 className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {speedQuizOptions.map((opt, optIdx) => {
+                            let btnStyle = 'bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400 dark:hover:border-indigo-500';
+                            if (speedQuizAnswered) {
+                              if (opt.isCorrect) {
+                                btnStyle = 'bg-emerald-500 text-white border-emerald-500 font-bold shadow-sm shadow-emerald-500/20';
+                              } else if (speedQuizSelectedIdx === optIdx) {
+                                btnStyle = 'bg-rose-500 text-white border-rose-500 font-bold';
+                              } else {
+                                btnStyle = 'opacity-40 bg-slate-100 dark:bg-slate-800 text-slate-400 border-transparent';
+                              }
+                            }
+
+                            return (
+                              <button
+                                key={optIdx}
+                                disabled={isEditMode || speedQuizAnswered}
+                                onClick={() => handleSelectSpeedQuizOption(optIdx)}
+                                className={`p-2.5 rounded-xl border text-xs text-left transition font-medium flex items-center justify-between gap-2 ${btnStyle}`}
+                              >
+                                <span className="line-clamp-2">{opt.text}</span>
+                                {speedQuizAnswered && opt.isCorrect && (
+                                  <Check className="w-3.5 h-3.5 shrink-0" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {speedQuizAnswered && (
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                              {speedQuizOptions[speedQuizSelectedIdx ?? 0]?.isCorrect
+                                ? '🎉 太棒了，回答正確！'
+                                : `💡 正確釋義為：${getWordDisplayDef(speedQuizTargetWord, settings.lang)}`}
+                            </span>
+                            <button
+                              onClick={initSpeedQuiz}
+                              className={`px-3 py-1 rounded-lg text-xs font-bold ${currentTheme.btnClass} transition shrink-0`}
+                            >
+                              下一題 →
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="py-6 text-center text-xs text-slate-400">
+                        單字庫暫無可用題目，請先收錄單字即可解鎖速測！
+                      </div>
+                    )}
+                  </div>
+                );
+
+              /* WIDGET: 7-Day Streak Calendar */
+              case 'streakCalendar':
+                return renderWidgetWrapper(
+                  widget,
+                  index,
+                  <div className={`p-4 sm:p-5 rounded-2xl ${cardStyleClass} space-y-3.5`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-orange-50 dark:bg-orange-950/60 text-orange-500 flex items-center justify-center">
+                          <Calendar className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            7 天打卡週曆
+                          </h3>
+                          <span className="text-[10px] text-slate-400">
+                            連續打卡 {streakDays} 天 · 持之以恆
+                          </span>
                         </div>
                       </div>
-                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-all shrink-0" />
+
+                      <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1">
+                        <Flame className="w-3.5 h-3.5 fill-current" />
+                        <span>{streakDays} 天紀錄</span>
+                      </span>
+                    </div>
+
+                    {/* 7 Days Grid */}
+                    <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                      {weekCalendarDays.map((d) => (
+                        <div
+                          key={d.dateStr}
+                          className={`flex flex-col items-center justify-center p-2 rounded-xl border text-center transition ${
+                            d.isToday
+                              ? 'border-indigo-400 dark:border-indigo-500 bg-indigo-50/40 dark:bg-indigo-950/40 ring-2 ring-indigo-400/20'
+                              : d.isCompleted
+                              ? 'border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/30 dark:bg-emerald-950/20'
+                              : 'border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30 text-slate-400'
+                          }`}
+                        >
+                          <span className="text-[10px] font-medium text-slate-400 block mb-0.5">
+                            {d.dayLabel}
+                          </span>
+                          <span
+                            className={`text-xs font-bold mb-1.5 ${
+                              d.isToday ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-slate-200'
+                            }`}
+                          >
+                            {d.dateNum}
+                          </span>
+                          <div className="w-5 h-5 rounded-full flex items-center justify-center">
+                            {d.isCompleted ? (
+                              <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-xs">
+                                <Check className="w-3 h-3 stroke-[3]" />
+                              </div>
+                            ) : d.isToday ? (
+                              <div className="w-4 h-4 rounded-full border-2 border-dashed border-indigo-400 animate-pulse" />
+                            ) : (
+                              <div className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+                            )}
+                          </div>
+                          <span className="text-[9px] font-mono mt-1 text-slate-400">
+                            {d.count > 0 ? `${d.count}詞` : '-'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-100 dark:border-slate-700/60">
+                      <span>過去一週打卡率: {weekCalendarDays.filter((d) => d.isCompleted).length} / 7 天</span>
+                      <button
+                        onClick={() => !isEditMode && setTab('list')}
+                        className={`font-semibold ${currentTheme.textAccent} hover:underline`}
+                      >
+                        單字庫學習進度 →
+                      </button>
+                    </div>
+                  </div>
+                );
+
+              /* WIDGET: Stumble Words (Level 0/1 Weak Spot Spotlight) */
+              case 'stumbleWords':
+                return renderWidgetWrapper(
+                  widget,
+                  index,
+                  <div className={`p-4 sm:p-5 rounded-2xl ${cardStyleClass} space-y-3.5`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-500 flex items-center justify-center">
+                          <AlertCircle className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            生疏弱點攻堅
+                          </h3>
+                          <span className="text-[10px] text-slate-400">
+                            優先複習熟悉度較低的生詞 (Lvl 0~1)
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => !isEditMode && setTab('review')}
+                        className="text-xs font-bold text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1"
+                      >
+                        <span>專項複習</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {stumbleWordsList.length > 0 ? (
+                      <div className="space-y-2">
+                        {stumbleWordsList.map((w) => (
+                          <div
+                            key={w.id}
+                            onClick={() => !isEditMode && onSelectWord(w)}
+                            className="p-3 rounded-xl bg-slate-50/60 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800/80 hover:border-rose-400 dark:hover:border-rose-500/80 transition cursor-pointer group flex items-center justify-between"
+                          >
+                            <div className="min-w-0 pr-3">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-sm text-slate-900 dark:text-white group-hover:text-rose-600 dark:group-hover:text-rose-400 transition-colors capitalize">
+                                  {w.term}
+                                </span>
+                                <span className="text-[10px] font-semibold text-slate-400">
+                                  {w.pos}
+                                </span>
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400">
+                                  Lvl {w.level || 0}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                                {getWordDisplayDef(w, settings.lang)}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  tts.speak(w.term);
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+                                title="發音"
+                              >
+                                <Volume2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-6 text-center text-xs text-slate-400 flex flex-col items-center gap-1.5">
+                        <CheckCircle2 className="w-6 h-6 text-emerald-500 mb-0.5" />
+                        <span className="font-bold text-slate-700 dark:text-slate-300">目前沒有生疏弱點！</span>
+                        <span>所有單字皆已熟悉或已熟練記憶，繼續保持。</span>
+                      </div>
+                    )}
+                  </div>
+                );
+
+              /* WIDGET: Pomodoro Focus Timer */
+              case 'pomodoroTimer': {
+                const pomoMinutes = Math.floor(pomoSecondsLeft / 60);
+                const pomoSecs = pomoSecondsLeft % 60;
+                const formattedTime = `${String(pomoMinutes).padStart(2, '0')}:${String(pomoSecs).padStart(2, '0')}`;
+                const totalTargetSecs = pomoPresetMinutes * 60;
+                const progressPercent = Math.round(((totalTargetSecs - pomoSecondsLeft) / totalTargetSecs) * 100);
+
+                return renderWidgetWrapper(
+                  widget,
+                  index,
+                  <div className={`p-4 sm:p-5 rounded-2xl ${cardStyleClass} space-y-4`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 flex items-center justify-center">
+                          <Timer className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            專注學習番茄鐘
+                          </h3>
+                          <span className="text-[10px] text-slate-400">
+                            今日已完成 {pomoSessionsCompleted} 輪專注
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Presets Switcher */}
+                      <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg text-[10px] font-bold">
+                        {[15, 25, 45].map((m) => (
+                          <button
+                            key={m}
+                            disabled={isEditMode || pomoIsActive}
+                            onClick={() => handleSwitchPomoPreset(m)}
+                            className={`px-2 py-0.5 rounded-md transition ${
+                              pomoPresetMinutes === m
+                                ? 'bg-white dark:bg-slate-700 text-teal-600 dark:text-teal-400 shadow-xs'
+                                : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                            }`}
+                          >
+                            {m}m
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Clock & Controls */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-50/60 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-100 dark:border-slate-800">
+                      <div>
+                        <div className="text-3xl sm:text-4xl font-mono font-black tracking-wider text-slate-900 dark:text-white tabular-nums">
+                          {formattedTime}
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-medium">
+                          {pomoIsActive
+                            ? '專注背單字中，心無旁騖...'
+                            : pomoSecondsLeft === totalTargetSecs
+                            ? '隨時準備開啟專注心流'
+                            : '已暫停計時'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleTogglePomo}
+                          disabled={isEditMode}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm active:scale-95 transition ${
+                            pomoIsActive
+                              ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                              : 'bg-teal-600 hover:bg-teal-700 text-white'
+                          }`}
+                        >
+                          {pomoIsActive ? (
+                            <>
+                              <Pause className="w-3.5 h-3.5 fill-current" />
+                              <span>暫停</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>開始專注</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={handleResetPomo}
+                          disabled={isEditMode}
+                          className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                          title="重置"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mini Progress */}
+                    <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        style={{ width: `${progressPercent}%` }}
+                        className="h-full bg-teal-500 transition-all duration-300 rounded-full"
+                      />
+                    </div>
+                  </div>
+                );
+              }
+
+              /* WIDGET: Root of the Day (Etymology) */
+              case 'rootOfTheDay':
+                return renderWidgetWrapper(
+                  widget,
+                  index,
+                  <div className={`p-4 sm:p-5 rounded-2xl ${cardStyleClass} space-y-3.5`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-500 flex items-center justify-center">
+                          <Compass className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                            <span>每日詞根解密</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300">
+                              詞源串記
+                            </span>
+                          </h3>
+                          <span className="text-[10px] text-slate-400">
+                            掌握核心詞根，舉一反三快速倍增字彙量
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-xs font-mono font-extrabold text-sky-600 dark:text-sky-400">
+                          {rootData.origin}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Root Highlight Banner */}
+                    <div className="p-3 rounded-xl bg-gradient-to-r from-sky-500/10 via-indigo-500/5 to-purple-500/10 border border-sky-200/60 dark:border-sky-800/50 flex items-center justify-between">
+                      <div>
+                        <span className="text-lg font-black text-sky-700 dark:text-sky-300 font-mono">
+                          {rootData.root}
+                        </span>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 font-medium mt-0.5">
+                          核心字義：{rootData.meaning}
+                        </p>
+                      </div>
+                      <span className="text-[11px] text-slate-400 italic">
+                        每日一根
+                      </span>
+                    </div>
+
+                    {/* Example Derived Words */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      {rootData.examples.map((exItem) => (
+                        <div
+                          key={exItem.word}
+                          className="p-3 rounded-xl bg-slate-50/70 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 hover:border-sky-400/80 transition group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-sm text-slate-900 dark:text-white capitalize group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors">
+                              {exItem.word}
+                            </span>
+                            <button
+                              onClick={() => tts.speak(exItem.word)}
+                              className="p-1 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition"
+                              title="發音"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <span className="text-[10px] font-mono text-sky-600 dark:text-sky-400 block mt-1">
+                            {exItem.breakdown}
+                          </span>
+                          <p className="text-xs text-slate-600 dark:text-slate-300 font-medium mt-1">
+                            {exItem.def}
+                          </p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );

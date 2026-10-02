@@ -24,7 +24,12 @@ import {
   Wand2,
   Eye,
   Layers,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Zap,
+  Calendar,
+  AlertCircle,
+  Timer,
+  Compass
 } from 'lucide-react';
 import {
   HomeConfig,
@@ -83,10 +88,20 @@ export const CustomizeHomeModal: React.FC<CustomizeHomeModalProps> = ({
         return <Dices className={className} />;
       case 'recentWords':
         return <BookMarked className={className} />;
-      case 'quoteOfTheDay':
-        return <Quote className={className} />;
+      case 'articleReading':
+        return <BookOpen className={className} />;
       case 'quickAdd':
         return <Plus className={className} />;
+      case 'speedQuiz':
+        return <Zap className={className} />;
+      case 'streakCalendar':
+        return <Calendar className={className} />;
+      case 'stumbleWords':
+        return <AlertCircle className={className} />;
+      case 'pomodoroTimer':
+        return <Timer className={className} />;
+      case 'rootOfTheDay':
+        return <Compass className={className} />;
       default:
         return <Layout className={className} />;
     }
