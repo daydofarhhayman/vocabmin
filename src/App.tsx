@@ -1,21 +1,23 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { Word, WordGroup, DailyStats, AppSettings, ViewTab, POS, Article } from './types';
 import { storage, DEFAULT_SETTINGS } from './services/storage';
 import { applySRSDecay } from './services/srs';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
 import { HomeView } from './components/HomeView';
-import { StudyHubView } from './components/StudyHubView';
-import { WordListView } from './components/WordListView';
-import { AIAssistantView } from './components/AIAssistantView';
 import { FloatingAIAssistant } from './components/FloatingAIAssistant';
-import { ArticleReaderView } from './components/ArticleReaderView';
-import { SettingsModal } from './components/SettingsModal';
-import { AddWordModal } from './components/AddWordModal';
-import { EditWordModal } from './components/EditWordModal';
-import { WordDetailModal } from './components/WordDetailModal';
 import { ConfirmModal } from './components/ConfirmModal';
-import { CambridgeModal } from './components/CambridgeModal';
+
+// Performance optimization: Lazy-load heavy views & modals
+const StudyHubView = lazy(() => import('./components/StudyHubView').then((m) => ({ default: m.StudyHubView })));
+const WordListView = lazy(() => import('./components/WordListView').then((m) => ({ default: m.WordListView })));
+const AIAssistantView = lazy(() => import('./components/AIAssistantView').then((m) => ({ default: m.AIAssistantView })));
+const ArticleReaderView = lazy(() => import('./components/ArticleReaderView').then((m) => ({ default: m.ArticleReaderView })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
+const AddWordModal = lazy(() => import('./components/AddWordModal').then((m) => ({ default: m.AddWordModal })));
+const EditWordModal = lazy(() => import('./components/EditWordModal').then((m) => ({ default: m.EditWordModal })));
+const WordDetailModal = lazy(() => import('./components/WordDetailModal').then((m) => ({ default: m.WordDetailModal })));
+const CambridgeModal = lazy(() => import('./components/CambridgeModal').then((m) => ({ default: m.CambridgeModal })));
 import { normalizePos } from './utils/pos';
 import { User } from 'firebase/auth';
 import { HomeConfig, loadHomeConfig, saveHomeConfig, DEFAULT_HOME_CONFIG } from './utils/homeConfig';
@@ -688,6 +690,16 @@ export default function App() {
             : 'p-2.5 sm:p-6 pb-24 lg:pb-6'
         }`}
       >
+        <Suspense
+          fallback={
+            <div className="flex flex-col items-center justify-center min-h-[50vh] py-16 gap-3">
+              <div className="w-9 h-9 border-3 border-indigo-500/30 border-t-indigo-600 rounded-full animate-spin" />
+              <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 animate-pulse">
+                載入中...
+              </span>
+            </div>
+          }
+        >
         {currentTab === 'home' && (
           <HomeView
             words={words}
@@ -804,6 +816,7 @@ export default function App() {
             onNavigateToTab={(tab) => setCurrentTab(tab)}
           />
         )}
+        </Suspense>
       </main>
 
       {/* Floating Contextual AI Assistant Orb & Drawer */}
@@ -848,56 +861,75 @@ export default function App() {
         dueCount={dueWordsCount}
       />
 
-      {/* Global Modals */}
-      <AddWordModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onAddWords={handleAddWords}
-        lang={settings.lang}
-      />
+      {/* Global Modals (Lazy Loaded on Demand) */}
+      <Suspense fallback={null}>
+        {isAddModalOpen && (
+          <AddWordModal
+            isOpen={isAddModalOpen}
+            onClose={() => setIsAddModalOpen(false)}
+            onAddWords={handleAddWords}
+            lang={settings.lang}
+          />
+        )}
 
-      <EditWordModal
-        isOpen={!!editModalWord}
-        onClose={() => setEditModalWord(null)}
-        word={editModalWord}
-        allWords={words}
-        onUpdateGroup={handleUpdateWordGroup}
-        lang={settings.lang}
-      />
+        {editModalWord && (
+          <EditWordModal
+            isOpen={!!editModalWord}
+            onClose={() => setEditModalWord(null)}
+            word={editModalWord}
+            allWords={words}
+            onUpdateGroup={handleUpdateWordGroup}
+            lang={settings.lang}
+          />
+        )}
 
-      <WordDetailModal
-        group={detailWordGroup}
-        isOpen={!!detailWordGroup}
-        onClose={() => setDetailWordGroup(null)}
-        settings={settings}
-        onEditWord={(w) => {
-          setDetailWordGroup(null);
-          setEditModalWord(w);
-        }}
-        onDeleteGroup={handleDeleteWordGroup}
-        onOpenCambridge={(term) => setCambridgeWord(term)}
-      />
+        {detailWordGroup && (
+          <WordDetailModal
+            group={detailWordGroup}
+            isOpen={!!detailWordGroup}
+            onClose={() => setDetailWordGroup(null)}
+            settings={settings}
+            onEditWord={(w) => {
+              setDetailWordGroup(null);
+              setEditModalWord(w);
+            }}
+            onDeleteGroup={handleDeleteWordGroup}
+            onOpenCambridge={(term) => setCambridgeWord(term)}
+          />
+        )}
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-        onOpenAI={() => {
-          setIsSettingsOpen(false);
-          setCurrentTab('ai');
-        }}
-        user={user}
-        onLogin={handleGoogleLogin}
-        onLogout={handleGoogleLogout}
-        onSyncCloud={handleManualSync}
-        onOpenCustomizeHome={() => {
-          setIsSettingsOpen(false);
-          setCurrentTab('home');
-          setIsHomeEditMode(true);
-          showToast('🎨 已進入主畫面桌面編輯模式，想要什麼直接拖曳排版！');
-        }}
-      />
+        {isSettingsOpen && (
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onOpenAI={() => {
+              setIsSettingsOpen(false);
+              setCurrentTab('ai');
+            }}
+            user={user}
+            onLogin={handleGoogleLogin}
+            onLogout={handleGoogleLogout}
+            onSyncCloud={handleManualSync}
+            onOpenCustomizeHome={() => {
+              setIsSettingsOpen(false);
+              setCurrentTab('home');
+              setIsHomeEditMode(true);
+              showToast('🎨 已進入主畫面桌面編輯模式，想要什麼直接拖曳排版！');
+            }}
+          />
+        )}
+
+        {cambridgeWord && (
+          <CambridgeModal
+            word={cambridgeWord || ''}
+            isOpen={!!cambridgeWord}
+            onClose={() => setCambridgeWord(null)}
+            lang={settings.cambridgeLang ?? 'en'}
+          />
+        )}
+      </Suspense>
 
       <ConfirmModal
         isOpen={confirmConfig.isOpen}
@@ -907,13 +939,6 @@ export default function App() {
         confirmText={confirmConfig.confirmText}
         onConfirm={confirmConfig.onConfirm}
         onCancel={() => setConfirmConfig((c) => ({ ...c, isOpen: false }))}
-      />
-
-      <CambridgeModal
-        word={cambridgeWord || ''}
-        isOpen={!!cambridgeWord}
-        onClose={() => setCambridgeWord(null)}
-        lang={settings.cambridgeLang ?? 'en'}
       />
 
       {/* Toast Notification */}

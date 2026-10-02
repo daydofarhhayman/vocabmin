@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.0',
+    date: '2026-10-02',
+    type: 'improve',
+    changes: [
+      '🚀 全站架構深層體檢與效能躍升：重構程式包體積架構，導入動態非同步模組分流（React.lazy 與 Vite manualChunks 分塊），將首頁啟動下載體積大幅縮減逾 80%（核心啟動 JS 僅約 217KB），頁面初次渲染速度提升數倍。',
+      '🧹 徹底剔除歷史冗餘與死代碼：全面排查並清理 4 款已棄置無引用的舊元件（QuizView、ReviewView、ImportArticleModal、CustomizeHomeModal）以及伺服器端 300+ 行陳舊假資料生成函式，專案瘦身逾 100KB。',
+      '⚡ 閱讀器 UI 現代化無阻體驗：根除原生阻塞式 alert() 彈跳視窗，升級為高質感毛玻璃動態浮動通知（Toast），在 AI 關鍵詞提煉、即時雙語翻譯及隨堂測驗生成時提供流暢、具體的狀態反饋。',
+      '🤖 AI 端點與金鑰安全全鏈路校準：驗證全站 AI 查詢、文章匯入、伴讀導師與單字標準化等端點均無縫繼承個人 Google Gemini API Key 與雙語詞典自動降級備援機制。',
+      '🎯 元件生命週期優化：所有全域彈窗改採依需條件掛載與 Suspense 延遲載入，減少背景記憶體與 DOM 節點開銷，長時間背單字體驗更加輕盈順暢。'
+    ]
+  },
+  {
     version: '1.3.10',
     date: '2026-10-02',
     type: 'fix',

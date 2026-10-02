@@ -218,6 +218,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const [activeSpeechParagraph, setActiveSpeechParagraph] = useState<number | null>(null);
   const [activeSpeechSentenceId, setActiveSpeechSentenceId] = useState<string | null>(null);
 
+  // In-app Notification Toast State
+  const [readerToast, setReaderToast] = useState<string | null>(null);
+  const showReaderToast = (msg: string) => {
+    setReaderToast(msg);
+    setTimeout(() => setReaderToast((curr) => (curr === msg ? null : curr)), 3000);
+  };
+
   // Fast Word Map for Instant Lookup & Matching
   const wordLookupMap = useMemo(() => {
     const map = new Map<string, Word>();
@@ -913,9 +920,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           ...currentArticle,
           keyVocabulary: list
         });
+        showReaderToast(`✨ 成功提煉 ${list.length} 個核心學術單字！`);
+      } else {
+        showReaderToast('提煉關鍵單字失敗，請稍候重試。');
       }
     } catch (err) {
       console.error('Extract keywords error:', err);
+      showReaderToast('網路或伺服器連線異常，請稍後重試。');
     } finally {
       setIsExtractingVocab(false);
     }
@@ -945,10 +956,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             translationZh: data.translationZh
           });
           updateSettings({ showBilingual: true });
+          showReaderToast('🌐 雙語全文翻譯已生成並切換為對照模式！');
         }
+      } else {
+        showReaderToast('翻譯文章失敗，請檢查 API Key 或稍後重試。');
       }
     } catch (e) {
       console.error('Translation error:', e);
+      showReaderToast('翻譯服務連線異常，請稍後重試。');
     } finally {
       setIsTranslatingArticle(false);
     }
@@ -981,10 +996,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           setIsQuizOpen(true);
           setIsQuizSubmitted(false);
           setQuizAnswers({});
+          showReaderToast('📝 閱讀理解測驗已生成！');
         }
+      } else {
+        showReaderToast('生成測驗失敗，請稍後重試。');
       }
     } catch (e) {
       console.error('Generate quiz error:', e);
+      showReaderToast('測驗生成連線異常，請稍後重試。');
     } finally {
       setIsGeneratingQuiz(false);
     }
@@ -1059,12 +1078,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         setActiveArticleId(newArt.id);
         setIsGenerateModalOpen(false);
         setGenTopic('');
+        showReaderToast(`📖 成功生成文章《${newArt.title}》！`);
       } else {
-        alert('生成文章失敗，請稍候重試。');
+        showReaderToast('生成文章失敗，請稍候重試。');
       }
     } catch (err) {
       console.error('Generate article failed:', err);
-      alert('網路或伺服器連線異常，請稍後重試。');
+      showReaderToast('網路或伺服器連線異常，請稍後重試。');
     } finally {
       setIsGeneratingArticle(false);
     }
@@ -1073,7 +1093,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   // Custom Import Article
   const handleSaveImportArticle = () => {
     if (!importTitle.trim() || !importContent.trim()) {
-      alert('請填寫文章標題與內容');
+      showReaderToast('請填寫文章標題與內容');
       return;
     }
 
@@ -3937,6 +3957,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Reader In-app Toast */}
+      {readerToast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 px-5 py-2.5 rounded-full shadow-2xl text-xs sm:text-sm font-bold flex items-center gap-2 animate-enter pointer-events-none backdrop-blur-md">
+          <span>{readerToast}</span>
         </div>
       )}
     </div>
