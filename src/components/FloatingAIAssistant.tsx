@@ -26,7 +26,8 @@ import {
   Flame,
   ArrowRight,
   Square,
-  Dices
+  Dices,
+  AlertCircle
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
 import { AIArticleCard } from './AIArticleCard';
@@ -60,6 +61,14 @@ interface FloatingAIAssistantProps {
   }) => void;
 }
 
+export interface AIErrorInfo {
+  userMessage: string;
+  reason?: string;
+  details?: string;
+  suggestion?: string;
+  statusCode?: number;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -69,6 +78,7 @@ interface ChatMessage {
   words?: Partial<Word>[];
   article?: Partial<Article>;
   action?: any;
+  errorInfo?: AIErrorInfo;
 }
 
 interface ScenarioConfig {
@@ -651,7 +661,15 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error || `連線回應異常 (${res.status})`);
+        const errObj: any = new Error(errJson?.error || `連線回應異常 (${res.status})`);
+        errObj.errorInfo = {
+          userMessage: errJson?.error || `連線回應異常 (${res.status})`,
+          reason: errJson?.reason,
+          details: errJson?.details,
+          suggestion: errJson?.suggestion,
+          statusCode: res.status
+        };
+        throw errObj;
       }
 
       const data = await res.json();
@@ -696,12 +714,20 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         return;
       }
       console.error('Floating AI error:', err);
+      const errorInfo: AIErrorInfo = err?.errorInfo || {
+        userMessage: err?.message || 'AI 助手暫時無法連線，請確認網路連線或稍後重試。',
+        details: err?.stack || String(err),
+        suggestion: '請確認伺服器連線正常，或於「設定」中重新檢查 API Key。',
+        statusCode: 500
+      };
+
       setMessages((prev) => [
         ...prev,
         {
           id: `bot-err-${Date.now()}`,
           role: 'assistant',
-          content: `⚠️ ${err?.message || 'AI 助手暫時無法連線，請確認網路連線或稍後重試。'}`,
+          content: `⚠️ ${errorInfo.userMessage}`,
+          errorInfo,
           timestamp: Date.now(),
           scenarioTab: currentTab
         }
@@ -940,16 +966,84 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                           )}
 
                           <div className={`max-w-[85%] space-y-2 ${isUser ? 'items-end' : 'items-start'}`}>
-                            {/* Message Text Bubble */}
-                            <div
-                              className={`p-3 rounded-2xl text-xs leading-relaxed shadow-xs ${
-                                isUser
-                                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none'
-                                  : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700/80 rounded-tl-none whitespace-pre-wrap'
-                              }`}
-                            >
-                              {msg.content}
-                            </div>
+                            {/* Detailed Error Card or Standard Message Text Bubble */}
+                            {!isUser && msg.errorInfo ? (
+                              <div className="p-3.5 rounded-2xl bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-slate-800 dark:text-slate-100 space-y-2.5 shadow-xs rounded-tl-none">
+                                <div className="flex items-start gap-2.5">
+                                  <div className="w-6 h-6 rounded-lg bg-rose-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <h4 className="font-bold text-xs text-rose-700 dark:text-rose-400">
+                                        {msg.errorInfo.userMessage}
+                                      </h4>
+                                      {msg.errorInfo.statusCode && (
+                                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-rose-200/80 dark:bg-rose-900/80 text-rose-800 dark:text-rose-300">
+                                          HTTP {msg.errorInfo.statusCode}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {msg.errorInfo.suggestion && (
+                                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                                        💡 {msg.errorInfo.suggestion}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-2 pt-1 border-t border-rose-200/60 dark:border-rose-900/40">
+                                  {(msg.errorInfo.reason === 'API_KEY_INVALID' || msg.errorInfo.reason === 'NO_API_KEY') && (
+                                    <button
+                                      onClick={() => {
+                                        setIsOpen(false);
+                                        onNavigateToTab('settings');
+                                      }}
+                                      className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-[11px] font-bold flex items-center gap-1 transition"
+                                    >
+                                      <SettingsIcon className="w-3 h-3" />
+                                      <span>前往設定 API Key</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => {
+                                      const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+                                      if (lastUserMsg) {
+                                        handleSendMessage(lastUserMsg.content);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100/50 text-[11px] font-semibold flex items-center gap-1 transition"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>重新嘗試</span>
+                                  </button>
+                                </div>
+
+                                {/* Collapsible Technical Error Details */}
+                                {msg.errorInfo.details && (
+                                  <details className="text-[10px] text-slate-500 dark:text-slate-400 group">
+                                    <summary className="cursor-pointer select-none text-rose-600 dark:text-rose-400 hover:underline font-mono">
+                                      ▶ 展開技術錯誤細節 (Technical Details)
+                                    </summary>
+                                    <div className="mt-1.5 p-2 rounded-lg bg-slate-900 text-slate-200 font-mono text-[10px] break-all max-h-32 overflow-y-auto whitespace-pre-wrap leading-tight">
+                                      {msg.errorInfo.details}
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
+                            ) : (
+                              /* Standard Message Text Bubble */
+                              <div
+                                className={`p-3 rounded-2xl text-xs leading-relaxed shadow-xs ${
+                                  isUser
+                                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none'
+                                    : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700/80 rounded-tl-none whitespace-pre-wrap'
+                                }`}
+                              >
+                                {msg.content}
+                              </div>
+                            )}
 
                             {/* Rich Article Card (If AI Generated / Imported an Article) */}
                             {!isUser && msg.article && (

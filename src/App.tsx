@@ -801,6 +801,7 @@ export default function App() {
             onOpenArticleInReader={handleOpenArticleInReader}
             onClearAllArticles={handleClearAllArticles}
             onDeleteArticle={handleDeleteArticle}
+            onNavigateToTab={(tab) => setCurrentTab(tab)}
           />
         )}
       </main>

@@ -28,16 +28,155 @@ const getAIClient = (customKey?: string) => {
   });
 };
 
-// Helper: Try models with retry and graceful fallback
+// Comprehensive Gemini API Error Parser
+export interface ParsedAIError {
+  userMessage: string;
+  statusCode: number;
+  reason: string;
+  details: string;
+  suggestion: string;
+}
+
+export function parseGeminiApiError(error: any): ParsedAIError {
+  const rawMsg = error?.message || String(error || '');
+  let parsedJson: any = null;
+  try {
+    parsedJson = JSON.parse(rawMsg);
+  } catch {
+    const jsonMatch = rawMsg.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        parsedJson = JSON.parse(jsonMatch[0]);
+      } catch {}
+    }
+  }
+
+  const inner = parsedJson?.error || parsedJson || {};
+  const statusNumber = inner?.code || error?.status || error?.statusCode || 500;
+  const statusStr = String(inner?.status || '');
+  const innerMsg = String(inner?.message || rawMsg);
+  const detailsArray = Array.isArray(inner?.details) ? inner.details : [];
+  const reasonCode = detailsArray[0]?.reason || statusStr || '';
+
+  // 1. API Key Invalid
+  if (
+    reasonCode === 'API_KEY_INVALID' ||
+    innerMsg.includes('API key not valid') ||
+    innerMsg.includes('API_KEY_INVALID') ||
+    (statusNumber === 400 && innerMsg.toLowerCase().includes('api key'))
+  ) {
+    return {
+      statusCode: 400,
+      reason: 'API_KEY_INVALID',
+      userMessage: 'Google Gemini API 金鑰無效或不正確',
+      details: innerMsg,
+      suggestion: '請前往右上角「設定 > 雲端同步與帳號」檢查並重新輸入有效的 Google Gemini API Key。'
+    };
+  }
+
+  // 2. Permission Denied / Billing
+  if (
+    statusNumber === 403 ||
+    statusStr === 'PERMISSION_DENIED' ||
+    innerMsg.includes('PERMISSION_DENIED')
+  ) {
+    return {
+      statusCode: 403,
+      reason: 'PERMISSION_DENIED',
+      userMessage: 'Gemini API 存取權限不足或所在地區受限',
+      details: innerMsg,
+      suggestion: '請確認您的 Google AI Studio 帳號已啟用 Generative Language API，且未受到地區或組織存取限制。'
+    };
+  }
+
+  // 3. Quota Exceeded / Rate Limit
+  if (
+    statusNumber === 429 ||
+    statusStr === 'RESOURCE_EXHAUSTED' ||
+    innerMsg.includes('429') ||
+    innerMsg.includes('RESOURCE_EXHAUSTED') ||
+    innerMsg.includes('Quota exceeded') ||
+    innerMsg.toLowerCase().includes('quota')
+  ) {
+    return {
+      statusCode: 429,
+      reason: 'RESOURCE_EXHAUSTED',
+      userMessage: 'Google AI 請求配額已達頻率上限 (Rate Limit)',
+      details: innerMsg,
+      suggestion: 'Google 免費版 API 每分鐘有 15 次請求上限。請稍候 10~20 秒後再次嘗試，或於「設定」中更換為個人的付費/專屬 API Key。'
+    };
+  }
+
+  // 4. Model Not Found
+  if (
+    statusNumber === 404 ||
+    statusStr === 'NOT_FOUND' ||
+    innerMsg.includes('not found') ||
+    innerMsg.includes('NOT_FOUND')
+  ) {
+    return {
+      statusCode: 404,
+      reason: 'MODEL_NOT_FOUND',
+      userMessage: '指定的 Gemini AI 模型不存在或已停止維護',
+      details: innerMsg,
+      suggestion: '系統正在自動調度其他官方穩定模型 (如 gemini-2.0-flash)，請重試一次。'
+    };
+  }
+
+  // 5. Server Unavailable / High Demand
+  if (
+    statusNumber === 503 ||
+    statusStr === 'UNAVAILABLE' ||
+    innerMsg.includes('UNAVAILABLE') ||
+    innerMsg.includes('high demand')
+  ) {
+    return {
+      statusCode: 503,
+      reason: 'UNAVAILABLE',
+      userMessage: 'Google 官方 AI 伺服器節點短暫高負載',
+      details: innerMsg,
+      suggestion: 'Google 伺服器忙碌中，請間隔 5~10 秒後點擊重試。'
+    };
+  }
+
+  // 6. Network Timeout / Connection Error
+  if (
+    innerMsg.includes('fetch failed') ||
+    innerMsg.includes('ENOTFOUND') ||
+    innerMsg.includes('ETIMEDOUT') ||
+    innerMsg.includes('ECONNREFUSED')
+  ) {
+    return {
+      statusCode: 504,
+      reason: 'NETWORK_ERROR',
+      userMessage: '無法連線至 Google Gemini 官方伺服器',
+      details: innerMsg,
+      suggestion: '請檢查伺服器主機的網際網路連線或 Proxy/VPN 設定是否正常。'
+    };
+  }
+
+  // 7. General Fallback with real error details
+  return {
+    statusCode: typeof statusNumber === 'number' && statusNumber >= 400 && statusNumber < 600 ? statusNumber : 500,
+    reason: reasonCode || 'UNKNOWN_ERROR',
+    userMessage: 'AI 助手在處理您的請求時發生錯誤',
+    details: innerMsg,
+    suggestion: '請稍候重試。若問題持續發生，請於「設定」中檢查您的 API Key 設定。'
+  };
+}
+
+// Helper: Try official models with retry and graceful fallback
 async function generateWithModelFallback(
   ai: GoogleGenAI,
   config: any,
   contents: any,
-  preferredModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+  preferredModels = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro']
 ) {
   let lastError: any = null;
   for (const model of preferredModels) {
+    let isFatalKeyError = false;
     let isQuotaExhausted = false;
+
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await ai.models.generateContent({
@@ -49,6 +188,11 @@ async function generateWithModelFallback(
       } catch (err: any) {
         lastError = err;
         const errMsg = err?.message || String(err);
+        // If API key is invalid or permission denied, no need to loop other models
+        if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('PERMISSION_DENIED')) {
+          isFatalKeyError = true;
+          break;
+        }
         const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded');
         if (is429) {
           isQuotaExhausted = true;
@@ -57,9 +201,12 @@ async function generateWithModelFallback(
         await new Promise((res) => setTimeout(res, 500));
       }
     }
+    if (isFatalKeyError) {
+      throw lastError;
+    }
     if (isQuotaExhausted) continue;
   }
-  throw lastError || new Error('All models unavailable');
+  throw lastError || new Error('所有可用 Gemini 模型皆無回應，請稍後重試。');
 }
 
 // Helper: Reliable bilingual word details lookup (Google Translate + Datamuse linguistic dictionary)
@@ -669,7 +816,11 @@ app.post('/api/ai/chat', async (req, res) => {
 
     if (!ai) {
       return res.status(503).json({
-        reply: '目前系統尚未偵測到 GEMINI_API_KEY 設定。請確認環境變數已注入，以便啟用即時 AI 智能對話與單字操作！',
+        error: '尚未配置 Google Gemini API Key',
+        reason: 'NO_API_KEY',
+        details: '伺服器未檢測到 GEMINI_API_KEY，且請求中未附帶使用者個人的 API Key。',
+        suggestion: '請前往右上角「設定 > 雲端同步與帳號」輸入個人的 Google Gemini API Key，即可啟用即時 AI 智能對話與單字操作！',
+        reply: '目前系統尚未偵測到 GEMINI_API_KEY 設定。請前往「設定」輸入您的金鑰，即可開啟 AI 智能語伴與所有學習功能！',
         words: []
       });
     }
@@ -1145,6 +1296,12 @@ You must strictly output JSON matching this schema:
       !promptClean.includes('如何') &&
       !promptClean.includes('怎麼');
 
+    const isExplicitBatchEnrich =
+      (promptClean.includes('補') || promptClean.includes('完善') || promptClean.includes('補充') || promptClean.includes('填上') || promptClean.includes('加上')) &&
+      (promptClean.includes('解釋') || promptClean.includes('釋義') || promptClean.includes('例句') || promptClean.includes('翻譯') || promptClean.includes('單字')) &&
+      !promptClean.includes('如何') &&
+      !promptClean.includes('怎麼');
+
     if (isExplicitClearWords) {
       const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
       parsedData.action = {
@@ -1171,6 +1328,46 @@ You must strictly output JSON matching this schema:
         summary: '將所有單字熟練度重置為完全不熟練 (Level 0)',
         resetMastery: { targetLevel: 0, count: totalCount }
       };
+    } else if (isExplicitBatchEnrich && (!parsedData.action || parsedData.action.type === 'batch_standardize')) {
+      const wordsToEnrich = Array.isArray(existingWordsSummary) ? existingWordsSummary : [];
+      const updatedWords: any[] = [];
+      for (const w of wordsToEnrich) {
+        let def = (w.def || '').trim();
+        let defEn = (w.defEn || '').trim();
+        let ex = (w.ex || '').trim();
+        let pos = w.pos || 'n.';
+
+        // Enrich missing definitions or examples via reliable bilingual dictionary
+        if (!def || def.toLowerCase() === w.term.toLowerCase() || !defEn || !ex) {
+          try {
+            const details = await fetchBilingualWordDetails(w.term);
+            if (!def || def.toLowerCase() === w.term.toLowerCase()) def = details.def || def;
+            if (!defEn) defEn = details.defEn || defEn;
+            if (!ex) ex = details.ex || `Review how "${w.term}" is used in context.`;
+            if (pos === 'other' && details.pos) pos = details.pos;
+          } catch {}
+        }
+        updatedWords.push({
+          ...w,
+          pos,
+          def: def || `【${w.term}】`,
+          defEn: defEn || `English definition for ${w.term}`,
+          ex: ex || `Review how "${w.term}" is used in context.`
+        });
+      }
+
+      parsedData.action = {
+        type: 'batch_standardize',
+        summary: `為單字庫中現有的 ${updatedWords.length} 個單字補齊繁體中文釋義、英英定義與例句`,
+        words: updatedWords,
+        batchStandardize: {
+          originalCount: wordsToEnrich.length,
+          updatedWords
+        }
+      };
+      if (!parsedData.reply || parsedData.reply.length < 15) {
+        parsedData.reply = `已為您為字庫中的 ${updatedWords.length} 個單字補全繁體中文解釋、英英釋義與例句，請點擊下方「確認執行」卡片按鈕即可同步更新至單字庫！`;
+      }
     }
 
     // Normalize returned action properties if present
@@ -1301,20 +1498,13 @@ Return ONLY valid JSON with these exact fields:
     return res.json(parsedData);
   } catch (error: any) {
     console.error('Error generating vocabulary from Gemini:', error);
-    const errMsg = error?.message || String(error);
-    const isQuota = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded');
-    const isUnavailable = errMsg.includes('503') || errMsg.includes('UNAVAILABLE') || errMsg.includes('high demand');
+    const parsedErr = parseGeminiApiError(error);
 
-    const statusCode = isQuota ? 429 : isUnavailable ? 503 : 500;
-    const userMessage = isQuota
-      ? '目前 Google AI 免費額度請求已達頻率上限，請稍候 5~10 秒後再次嘗試。'
-      : isUnavailable
-      ? 'Google 官方模型節點短暫高負載，請間隔數秒後再次發送。'
-      : 'AI 助手在處理您的請求時發生錯誤，請稍後重試。';
-
-    return res.status(statusCode).json({
-      error: userMessage,
-      details: errMsg
+    return res.status(parsedErr.statusCode).json({
+      error: parsedErr.userMessage,
+      reason: parsedErr.reason,
+      details: parsedErr.details,
+      suggestion: parsedErr.suggestion
     });
   }
 });
@@ -1500,9 +1690,12 @@ CRITICAL REQUIREMENTS:
     return res.json({ article: completeArticle });
   } catch (err: any) {
     console.error('Import article error:', err);
-    return res.status(500).json({
-      error: '文章解析與匯入失敗，請確認網址或文本內容後再次嘗試。',
-      details: err?.message || String(err)
+    const parsedErr = parseGeminiApiError(err);
+    return res.status(parsedErr.statusCode).json({
+      error: parsedErr.userMessage,
+      reason: parsedErr.reason,
+      details: parsedErr.details,
+      suggestion: parsedErr.suggestion
     });
   }
 });
@@ -1875,8 +2068,13 @@ CRITICAL TEACHING GUIDELINES:
     });
   } catch (err: any) {
     console.error('Article chat error:', err);
-    return res.status(500).json({
-      reply: 'AI 伴讀導師暫時忙碌中，請稍候再試。',
+    const parsedErr = parseGeminiApiError(err);
+    return res.status(parsedErr.statusCode).json({
+      error: parsedErr.userMessage,
+      reason: parsedErr.reason,
+      details: parsedErr.details,
+      suggestion: parsedErr.suggestion,
+      reply: `⚠️ ${parsedErr.userMessage}：${parsedErr.details || parsedErr.suggestion}`,
       suggestedWords: []
     });
   }
@@ -2014,7 +2212,13 @@ Requirements:
     });
   } catch (err: any) {
     console.error('Article generation error:', err);
-    return res.status(500).json({ error: err?.message || 'Article generation failed' });
+    const parsedErr = parseGeminiApiError(err);
+    return res.status(parsedErr.statusCode).json({
+      error: parsedErr.userMessage,
+      reason: parsedErr.reason,
+      details: parsedErr.details,
+      suggestion: parsedErr.suggestion
+    });
   }
 });
 

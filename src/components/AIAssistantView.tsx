@@ -22,12 +22,21 @@ import {
   HelpCircle,
   X,
   Square,
-  Dices
+  Dices,
+  AlertCircle
 } from 'lucide-react';
 import { Word, AppSettings, Article, POS } from '../types';
 import { AIArticleCard } from './AIArticleCard';
 
 export type AIScenario = 'all' | 'library' | 'writing' | 'practice';
+
+export interface AIErrorInfo {
+  userMessage: string;
+  reason?: string;
+  details?: string;
+  suggestion?: string;
+  statusCode?: number;
+}
 
 interface Message {
   id: string;
@@ -42,6 +51,7 @@ interface Message {
     summary?: string;
     [key: string]: any;
   };
+  errorInfo?: AIErrorInfo;
 }
 
 interface AIAssistantViewProps {
@@ -62,6 +72,7 @@ interface AIAssistantViewProps {
   onOpenArticleInReader?: (article: Article) => void;
   onClearAllArticles?: () => void;
   onDeleteArticle?: (titleOrId: string) => void;
+  onNavigateToTab?: (tab: any) => void;
 }
 
 const SCENARIOS = [
@@ -152,7 +163,8 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   onSaveArticle,
   onOpenArticleInReader,
   onClearAllArticles,
-  onDeleteArticle
+  onDeleteArticle,
+  onNavigateToTab
 }) => {
   const AI_VIEW_STORAGE_KEY = 'vocabmin_ai_assistant_view_history';
   const [activeScenario, setActiveScenario] = useState<AIScenario>('all');
@@ -310,7 +322,15 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => null);
-        throw new Error(errorData?.error || `伺服器回應錯誤 (${res.status})`);
+        const errObj: any = new Error(errorData?.error || `伺服器回應錯誤 (${res.status})`);
+        errObj.errorInfo = {
+          userMessage: errorData?.error || `伺服器回應錯誤 (${res.status})`,
+          reason: errorData?.reason,
+          details: errorData?.details,
+          suggestion: errorData?.suggestion,
+          statusCode: res.status
+        };
+        throw errObj;
       }
 
       const data = await res.json();
@@ -357,13 +377,21 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         return;
       }
       console.error('AI chat failed:', err);
+      const errorInfo: AIErrorInfo = err?.errorInfo || {
+        userMessage: err?.message || 'AI 助手暫時無法連線，請確認網路或稍後重試。',
+        details: err?.stack || String(err),
+        suggestion: '請確認伺服器連線正常，或於「設定」中重新檢查 API Key。',
+        statusCode: 500
+      };
+
       const errMsgId = `bot-err-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
         {
           id: errMsgId,
           role: 'assistant',
-          content: `⚠️ ${err?.message || 'AI 助手暫時無法連線，請確認網路或稍後重試。'}`,
+          content: `⚠️ ${errorInfo.userMessage}`,
+          errorInfo,
           timestamp: Date.now()
         }
       ]);
@@ -579,16 +607,80 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
                 )}
 
                 <div className={`max-w-[85%] sm:max-w-[75%] space-y-3 ${isUser ? 'items-end' : 'items-start'}`}>
-                  {/* Bubble Content */}
-                  <div
-                    className={`p-3.5 sm:p-4 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-sm ${
-                      isUser
-                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none'
-                        : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-tl-none whitespace-pre-wrap'
-                    }`}
-                  >
-                    {msg.content}
-                  </div>
+                  {/* Detailed Error Card or Bubble Content */}
+                  {!isUser && msg.errorInfo ? (
+                    <div className="p-4 rounded-2xl bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-slate-800 dark:text-slate-100 space-y-3 shadow-xs rounded-tl-none">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-rose-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                          <AlertCircle className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-sm text-rose-700 dark:text-rose-400">
+                              {msg.errorInfo.userMessage}
+                            </h4>
+                            {msg.errorInfo.statusCode && (
+                              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-200/80 dark:bg-rose-900/80 text-rose-800 dark:text-rose-300">
+                                HTTP {msg.errorInfo.statusCode}
+                              </span>
+                            )}
+                          </div>
+                          {msg.errorInfo.suggestion && (
+                            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                              💡 {msg.errorInfo.suggestion}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex items-center gap-2 pt-1 border-t border-rose-200/60 dark:border-rose-900/40">
+                        {(msg.errorInfo.reason === 'API_KEY_INVALID' || msg.errorInfo.reason === 'NO_API_KEY') && onNavigateToTab && (
+                          <button
+                            onClick={() => onNavigateToTab('settings')}
+                            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                          >
+                            <span>前往設定 API Key</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+                            if (lastUserMsg) {
+                              sendMessage(lastUserMsg.content);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100/50 text-xs font-semibold flex items-center gap-1.5 transition"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>重新嘗試</span>
+                        </button>
+                      </div>
+
+                      {/* Collapsible Technical Error Details */}
+                      {msg.errorInfo.details && (
+                        <details className="text-xs text-slate-500 dark:text-slate-400 group">
+                          <summary className="cursor-pointer select-none text-rose-600 dark:text-rose-400 hover:underline font-mono text-[11px]">
+                            ▶ 展開技術錯誤細節 (Technical Details)
+                          </summary>
+                          <div className="mt-1.5 p-2.5 rounded-xl bg-slate-900 text-slate-200 font-mono text-[11px] break-all max-h-36 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                            {msg.errorInfo.details}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  ) : (
+                    /* Bubble Content */
+                    <div
+                      className={`p-3.5 sm:p-4 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-sm ${
+                        isUser
+                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none'
+                          : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-tl-none whitespace-pre-wrap'
+                      }`}
+                    >
+                      {msg.content}
+                    </div>
+                  )}
 
                   {/* Rich Article Card (If AI Generated / Imported an Article) */}
                   {!isUser && msg.article && (
