@@ -17,7 +17,7 @@ import { WordDetailModal } from './WordDetailModal';
 interface WordListViewProps {
   words: Word[];
   settings: AppSettings;
-  onOpenAdd: () => void;
+  onOpenAdd: (initialTerm?: string) => void;
   onEditWord: (word: Word) => void;
   onDeleteGroup: (term: string) => void;
   onUpdateSettings: (settings: Partial<AppSettings>) => void;
@@ -267,7 +267,7 @@ export const WordListView: React.FC<WordListViewProps> = ({
 
           {/* Add Word Button */}
           <button
-            onClick={onOpenAdd}
+            onClick={() => onOpenAdd()}
             className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-500/10 transition active:scale-95"
           >
             <Plus className="w-4 h-4" />
@@ -290,7 +290,7 @@ export const WordListView: React.FC<WordListViewProps> = ({
               目前尚未加入任何單字。您可以隨時點擊手動新增，打造您的專屬個人單字庫。
             </p>
             <button
-              onClick={onOpenAdd}
+              onClick={() => onOpenAdd()}
               className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-bold transition shadow-sm"
             >
               + 新增第一筆單字
@@ -304,7 +304,16 @@ export const WordListView: React.FC<WordListViewProps> = ({
             <h4 className="text-base font-bold text-slate-600 dark:text-slate-300 mb-1">
               沒有找到符合的單字
             </h4>
-            <p className="text-xs text-slate-400">請嘗試更改搜尋關鍵字或調整篩選條件。</p>
+            <p className="text-xs text-slate-400 mb-4">請嘗試更改搜尋關鍵字或調整篩選條件。</p>
+            {searchTerm.trim() && (
+              <button
+                onClick={() => onOpenAdd(searchTerm.trim())}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-bold transition shadow-sm inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>立即查詢並收錄「{searchTerm.trim()}」至單字庫</span>
+              </button>
+            )}
           </div>
         ) : settings.listViewMode === 'grid' ? (
           /* GRID VIEW - Pure English Words Only, Clean & Uncluttered */

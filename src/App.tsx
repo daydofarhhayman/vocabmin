@@ -38,6 +38,7 @@ export default function App() {
   // Modals & UI Feedback State
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addModalInitialTerm, setAddModalInitialTerm] = useState<string>('');
   const [editModalWord, setEditModalWord] = useState<Word | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHomeEditMode, setIsHomeEditMode] = useState(false);
@@ -704,7 +705,10 @@ export default function App() {
           <HomeView
             words={words}
             setTab={setCurrentTab}
-            onOpenAdd={() => setIsAddModalOpen(true)}
+            onOpenAdd={(term?: string) => {
+              setAddModalInitialTerm(term || '');
+              setIsAddModalOpen(true);
+            }}
             onSelectWord={handleOpenWordDetail}
             settings={settings}
             dueWordsCount={dueWordsCount}
@@ -747,7 +751,10 @@ export default function App() {
           <WordListView
             words={words}
             settings={settings}
-            onOpenAdd={() => setIsAddModalOpen(true)}
+            onOpenAdd={(term?: string) => {
+              setAddModalInitialTerm(term || '');
+              setIsAddModalOpen(true);
+            }}
             onEditWord={(w) => setEditModalWord(w)}
             onDeleteGroup={handleDeleteWordGroup}
             onUpdateSettings={handleUpdateSettings}
@@ -866,9 +873,14 @@ export default function App() {
         {isAddModalOpen && (
           <AddWordModal
             isOpen={isAddModalOpen}
-            onClose={() => setIsAddModalOpen(false)}
+            onClose={() => {
+              setIsAddModalOpen(false);
+              setAddModalInitialTerm('');
+            }}
             onAddWords={handleAddWords}
             lang={settings.lang}
+            existingWords={words}
+            initialTerm={addModalInitialTerm}
           />
         )}
 
