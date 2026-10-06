@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.5.3',
+    date: '2026-10-06',
+    type: 'fix',
+    changes: [
+      '☁️ 文章閱讀庫全面升級 Firestore 雲端雙向同步：正式將「文章閱讀庫」納入 Firebase 雲端資料庫權威儲存，徹底解決登出再登入後已被刪除的文章重新復活的問題。',
+      '🗑️ 文章刪除與清空即時雲端持久化：執行清空文章閱讀庫（clearCloudArticles）或刪除指定文章（deleteCloudArticle）時，即刻同步清除 Firestore 雲端資料並寫入權威同步標記。',
+      '🔒 登出機制與帳號本機快取隔離優化：登出時安全清空當前操作畫面並轉入登入介面，同時避免誤清已註冊用戶的獨立本機索引，實現跨裝置與重登入後的 100% 準確同步。'
+    ]
+  },
+  {
     version: '1.5.2',
     date: '2026-10-06',
     type: 'fix',

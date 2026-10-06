@@ -108,31 +108,51 @@ export default function App() {
     }, 3000);
   }, []);
 
-  const handleOpenArticleInReader = useCallback((article: Article) => {
-    const updated = storage.saveArticle(article);
+  const handleArticlesChange = useCallback((updated: Article[]) => {
     setArticles(updated);
+    storage.saveLocalArticles(updated, user?.uid);
+    if (user) {
+      storage.saveCloudArticles(updated).catch(console.error);
+    }
+  }, [user]);
+
+  const handleOpenArticleInReader = useCallback((article: Article) => {
+    const updated = storage.saveArticle(article, user?.uid);
+    setArticles(updated);
+    if (user) {
+      storage.saveCloudArticles(updated).catch(console.error);
+    }
     setActiveReaderArticleId(article.id);
     setCurrentTab('reader');
     showToast(`📖 已在閱讀器開啟文章《${article.title}》`);
-  }, [showToast]);
+  }, [user, showToast]);
 
   const handleSaveArticle = useCallback((article: Article) => {
-    const updated = storage.saveArticle(article);
+    const updated = storage.saveArticle(article, user?.uid);
     setArticles(updated);
+    if (user) {
+      storage.saveCloudArticles(updated).catch(console.error);
+    }
     showToast(`📚 已成功收錄文章《${article.title}》至文章閱讀庫！`);
-  }, [showToast]);
+  }, [user, showToast]);
 
   const handleClearAllArticles = useCallback(() => {
-    storage.clearAllArticles();
+    storage.clearAllArticles(user?.uid);
     setArticles([]);
+    if (user) {
+      storage.clearCloudArticles().catch(console.error);
+    }
     showToast('已清空文章閱讀庫中的所有文章');
-  }, [showToast]);
+  }, [user, showToast]);
 
   const handleDeleteArticle = useCallback((id: string) => {
-    const updated = storage.deleteArticle(id);
+    const updated = storage.deleteArticle(id, user?.uid);
     setArticles(updated);
+    if (user) {
+      storage.deleteCloudArticle(id).catch(console.error);
+    }
     showToast('已從文章閱讀庫刪除指定文章');
-  }, [showToast]);
+  }, [user, showToast]);
 
   // 1. Initial Load: Listen to Firebase Auth state & load user-scoped data
   useEffect(() => {
@@ -166,6 +186,10 @@ export default function App() {
             setWords(cloudData.words);
             storage.saveLocalWords(cloudData.words, currentUser.uid);
 
+            if (cloudData.articles !== undefined) {
+              setArticles(cloudData.articles);
+              storage.saveLocalArticles(cloudData.articles, currentUser.uid);
+            }
             if (cloudData.stats) {
               setDailyStats(cloudData.stats);
               storage.saveLocalStats(cloudData.stats, currentUser.uid);
@@ -709,7 +733,7 @@ export default function App() {
 
   const handleManualSync = async () => {
     if (!user) return;
-    await storage.syncToCloud(words, dailyStats, settings);
+    await storage.syncToCloud(words, dailyStats, settings, articles);
     showToast('已同步最新進度至雲端！');
   };
 
@@ -862,7 +886,7 @@ export default function App() {
           <ArticleReaderView
             words={words}
             articles={articles}
-            onArticlesChange={setArticles}
+            onArticlesChange={handleArticlesChange}
             onAddWords={handleAddWords}
             onOpenCambridge={(term) => setCambridgeWord(term)}
             onBackToHome={() => setCurrentTab('home')}

@@ -317,6 +317,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const handleUpdateArticle = (updatedArticle: Article) => {
     const updatedList = storage.saveArticle(updatedArticle);
     setArticles(updatedList);
+    onArticlesChange?.(updatedList);
   };
 
   // Inspect Word Click with Instant Cache & Background AI Auto-Enrichment
@@ -1080,6 +1081,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         const newArt: Article = await res.json();
         const updatedList = storage.saveArticle(newArt);
         setArticles(updatedList);
+        onArticlesChange?.(updatedList);
         setActiveArticleId(newArt.id);
         setIsGenerateModalOpen(false);
         setGenTopic('');
@@ -1120,6 +1122,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
     const updated = storage.saveArticle(newArt);
     setArticles(updated);
+    onArticlesChange?.(updated);
     setActiveArticleId(newArt.id);
     setIsImportModalOpen(false);
     setImportTitle('');
@@ -3646,6 +3649,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           if (confirm(`確定要刪除「${art.title}」嗎？`)) {
                             const updated = storage.deleteArticle(art.id);
                             setArticles(updated);
+                            onArticlesChange?.(updated);
                           }
                         }}
                         className="p-1 rounded-lg text-slate-300 hover:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition"

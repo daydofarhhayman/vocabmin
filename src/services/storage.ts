@@ -156,6 +156,8 @@ export class StorageService {
   }
 
   public async signOut(): Promise<void> {
+    const wasAnonymous = this.currentUser?.isAnonymous;
+    const uid = this.currentUser?.uid;
     if (firebaseAuth) {
       try {
         await signOut(firebaseAuth);
@@ -163,7 +165,10 @@ export class StorageService {
         console.warn('SignOut warning:', e);
       }
     }
-    this.clearAllUserData();
+    // Only wipe local storage if it was a temporary anonymous guest session
+    if (wasAnonymous && uid) {
+      this.clearUserDataForUid(uid);
+    }
     this.currentUser = null;
   }
 
@@ -188,7 +193,25 @@ export class StorageService {
     return id ? `vocabmin_articles_${id}` : STORAGE_KEYS.ARTICLES;
   }
 
-  // Wipes all user data completely on logout
+  // Clear data for a specific user ID
+  public clearUserDataForUid(uid: string): void {
+    try {
+      const keysToRemove: string[] = [];
+      const prefix = 'vocabmin_';
+      const suffix = `_${uid}`;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(prefix) && k.endsWith(suffix)) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch (e) {
+      console.error('Failed to clear user data for UID from localStorage:', e);
+    }
+  }
+
+  // Wipes all user data completely on explicit manual cache purge request
   public clearAllUserData(): void {
     try {
       const keysToRemove: string[] = [];
@@ -284,8 +307,6 @@ export class StorageService {
           return parsed;
         }
       }
-      // Initialize with default curated articles on first load
-      localStorage.setItem(key, JSON.stringify(DEFAULT_ARTICLES));
       return DEFAULT_ARTICLES;
     } catch {
       return DEFAULT_ARTICLES;
@@ -411,7 +432,12 @@ export class StorageService {
   }
 
   // Cloud Synchronization Methods
-  public async syncFromCloud(): Promise<{ words: Word[]; stats?: DailyStats; settings?: AppSettings } | null> {
+  public async syncFromCloud(): Promise<{
+    words: Word[];
+    stats?: DailyStats;
+    settings?: AppSettings;
+    articles?: Article[];
+  } | null> {
     if (!this.currentUser || !firestoreDb) return null;
     const uid = this.currentUser.uid;
 
@@ -438,10 +464,42 @@ export class StorageService {
         cloudWords.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       }
 
+      // 4. Articles - strictly isolated by UID; authoritatively synced
+      let cloudArticles: Article[] | undefined;
+      const metaSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'meta'));
+      const metaData = metaSnap.data();
+      const hasArticlesSynced = metaData?.hasArticlesSynced === true;
+
+      const articlesSnap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));
+      if (hasArticlesSynced) {
+        // Authoritative from cloud! If empty, the user genuinely has 0 articles.
+        cloudArticles = [];
+        if (!articlesSnap.empty) {
+          articlesSnap.forEach((docSnap) => cloudArticles!.push(docSnap.data() as Article));
+        }
+      } else {
+        // First-time user in cloud: check local storage first before seeding defaults
+        const localKey = this.getArticlesKey(uid);
+        const localData = localStorage.getItem(localKey);
+        let initialArticles: Article[] = DEFAULT_ARTICLES;
+        if (localData !== null) {
+          try {
+            const parsed = JSON.parse(localData);
+            if (Array.isArray(parsed)) {
+              initialArticles = parsed;
+            }
+          } catch {}
+        }
+        cloudArticles = initialArticles;
+        // Seed to Firestore in background and mark hasArticlesSynced
+        this.saveCloudArticles(initialArticles).catch(console.error);
+      }
+
       return {
         words: cloudWords,
         stats: cloudStats,
-        settings: cloudSettings
+        settings: cloudSettings,
+        articles: cloudArticles
       };
     } catch (e) {
       console.error('Error syncing from cloud:', e);
@@ -450,7 +508,12 @@ export class StorageService {
   }
 
   // Full reconciliation: upserts active items AND removes deleted items from Firestore
-  public async syncToCloud(words: Word[], stats: DailyStats, settings: AppSettings): Promise<void> {
+  public async syncToCloud(
+    words: Word[],
+    stats: DailyStats,
+    settings: AppSettings,
+    articles?: Article[]
+  ): Promise<void> {
     if (!this.currentUser || !firestoreDb) return;
     const uid = this.currentUser.uid;
 
@@ -458,11 +521,15 @@ export class StorageService {
       // 1. Settings & Stats & Meta
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), settings);
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats);
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'meta'), {
-        hasSynced: true,
-        wordCount: words.length,
-        lastSyncedAt: Date.now()
-      });
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          hasSynced: true,
+          wordCount: words.length,
+          lastSyncedAt: Date.now()
+        },
+        { merge: true }
+      );
 
       // 2. Words reconciliation: delete obsolete docs, upsert active docs
       const existingWordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
@@ -492,8 +559,111 @@ export class StorageService {
         });
         await batch.commit();
       }
+
+      // 3. Articles reconciliation (if provided)
+      if (articles !== undefined) {
+        await this.saveCloudArticles(articles);
+      }
     } catch (e) {
       console.error('Failed to sync to cloud:', e);
+    }
+  }
+
+  // ==========================================
+  // Direct Cloud Database Mutations for Articles
+  // ==========================================
+  public async clearCloudArticles(): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+
+    try {
+      const snap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));
+      const docs = snap.docs;
+      for (let i = 0; i < docs.length; i += 400) {
+        const batch = writeBatch(firestoreDb);
+        const chunk = docs.slice(i, i + 400);
+        chunk.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          hasArticlesSynced: true,
+          articleCount: 0,
+          articlesLastClearedAt: Date.now()
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to clear cloud articles:', e);
+    }
+  }
+
+  public async deleteCloudArticle(articleId: string): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+
+    try {
+      await deleteDoc(doc(firestoreDb, 'users', uid, 'articles', articleId));
+      const snap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          hasArticlesSynced: true,
+          articleCount: snap.size,
+          lastArticleUpdated: Date.now()
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to delete cloud article:', e);
+    }
+  }
+
+  public async saveCloudArticles(articles: Article[]): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+
+    try {
+      const existingArticlesSnap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));
+      const activeArticleIds = new Set(articles.map((a) => a.id));
+
+      const obsoleteRefs: any[] = [];
+      existingArticlesSnap.forEach((docSnap) => {
+        if (!activeArticleIds.has(docSnap.id)) {
+          obsoleteRefs.push(docSnap.ref);
+        }
+      });
+
+      for (let i = 0; i < obsoleteRefs.length; i += 400) {
+        const batch = writeBatch(firestoreDb);
+        const chunk = obsoleteRefs.slice(i, i + 400);
+        chunk.forEach((ref) => batch.delete(ref));
+        await batch.commit();
+      }
+
+      for (let i = 0; i < articles.length; i += 400) {
+        const batch = writeBatch(firestoreDb);
+        const chunk = articles.slice(i, i + 400);
+        chunk.forEach((a) => {
+          // Remove undefined fields to prevent Firestore serialization errors
+          const cleanArt = JSON.parse(JSON.stringify(a));
+          batch.set(doc(firestoreDb, 'users', uid, 'articles', a.id), cleanArt);
+        });
+        await batch.commit();
+      }
+
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          hasArticlesSynced: true,
+          articleCount: articles.length,
+          lastArticleUpdated: Date.now()
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to save cloud articles:', e);
     }
   }
 
