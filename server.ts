@@ -19,7 +19,12 @@ const getAIClient = (customKey?: string) => {
   const apiKey = customKey || process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   return new GoogleGenAI({
-    apiKey
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
   });
 };
 
@@ -171,10 +176,10 @@ async function generateWithModelFallback(
   config: any,
   contents: any,
   preferredModels = [
-    'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
     'gemini-2.0-flash-lite',
+    'gemini-2.5-flash-lite',
     'gemini-2.5-pro'
   ]
 ) {
