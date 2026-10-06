@@ -119,7 +119,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       reason: 'MODEL_NOT_FOUND',
       userMessage: '指定的 Gemini AI 模型不存在或已停止維護',
       details: innerMsg,
-      suggestion: '系統正在自動調度其他官方穩定模型 (如 gemini-2.0-flash)，請重試一次。'
+      suggestion: '系統正在自動調度其他官方穩定模型 (如 gemini-2.5-flash)，請重試一次。'
     };
   }
 
@@ -170,7 +170,7 @@ async function generateWithModelFallback(
   ai: GoogleGenAI,
   config: any,
   contents: any,
-  preferredModels = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro']
+  preferredModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
 ) {
   let lastError: any = null;
   for (const model of preferredModels) {
@@ -191,6 +191,10 @@ async function generateWithModelFallback(
         // If API key is invalid or permission denied, no need to loop other models
         if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('PERMISSION_DENIED')) {
           isFatalKeyError = true;
+          break;
+        }
+        // If model is discontinued or not found, break immediately to try next fallback model
+        if (errMsg.includes('not found') || errMsg.includes('NOT_FOUND') || errMsg.includes('404')) {
           break;
         }
         const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded');

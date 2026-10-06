@@ -13,6 +13,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.2',
+    date: '2026-10-06',
+    type: 'fix',
+    changes: [
+      '🤖 升級 Google Gemini 官方新世代模型調度架構：全面棄用已於官方下線之舊款模型，後端自動調度鏈更新為 gemini-2.5-flash、gemini-2.5-flash-lite 與 gemini-2.5-pro 穩定版本，徹底解決「模型不存在或已停止維護 (HTTP 404)」之連線中斷問題。',
+      '⚡ 模型錯誤快速熔斷降級機制：遇模型端點下線或未支援時立即跳轉備用模型，杜絕無效重試造成的請求延遲，大幅提升 AI 學習管家對話與即時輔助的穩定度。'
+    ]
+  },
+  {
     version: '1.4.1',
     date: '2026-10-02',
     type: 'feat',
