@@ -19,12 +19,7 @@ const getAIClient = (customKey?: string) => {
   const apiKey = customKey || process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
+    apiKey
   });
 };
 
@@ -39,6 +34,7 @@ export interface ParsedAIError {
 
 export function parseGeminiApiError(error: any): ParsedAIError {
   const rawMsg = error?.message || String(error || '');
+  const fallbackDetails = (error as any)?.fallbackDetails;
   let parsedJson: any = null;
   try {
     parsedJson = JSON.parse(rawMsg);
@@ -58,6 +54,10 @@ export function parseGeminiApiError(error: any): ParsedAIError {
   const detailsArray = Array.isArray(inner?.details) ? inner.details : [];
   const reasonCode = detailsArray[0]?.reason || statusStr || '';
 
+  const fullDetails = fallbackDetails
+    ? `${innerMsg}\n\n【模型調度診斷記錄】:\n${fallbackDetails}`
+    : innerMsg;
+
   // 1. API Key Invalid
   if (
     reasonCode === 'API_KEY_INVALID' ||
@@ -69,7 +69,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       statusCode: 400,
       reason: 'API_KEY_INVALID',
       userMessage: 'Google Gemini API 金鑰無效或不正確',
-      details: innerMsg,
+      details: fullDetails,
       suggestion: '請前往右上角「設定 > 雲端同步與帳號」檢查並重新輸入有效的 Google Gemini API Key。'
     };
   }
@@ -84,7 +84,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       statusCode: 403,
       reason: 'PERMISSION_DENIED',
       userMessage: 'Gemini API 存取權限不足或所在地區受限',
-      details: innerMsg,
+      details: fullDetails,
       suggestion: '請確認您的 Google AI Studio 帳號已啟用 Generative Language API，且未受到地區或組織存取限制。'
     };
   }
@@ -102,7 +102,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       statusCode: 429,
       reason: 'RESOURCE_EXHAUSTED',
       userMessage: 'Google AI 請求配額已達頻率上限 (Rate Limit)',
-      details: innerMsg,
+      details: fullDetails,
       suggestion: 'Google 免費版 API 每分鐘有 15 次請求上限。請稍候 10~20 秒後再次嘗試，或於「設定」中更換為個人的付費/專屬 API Key。'
     };
   }
@@ -118,8 +118,8 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       statusCode: 404,
       reason: 'MODEL_NOT_FOUND',
       userMessage: '指定的 Gemini AI 模型不存在或已停止維護',
-      details: innerMsg,
-      suggestion: '系統正在自動調度其他官方穩定模型 (如 gemini-2.5-flash)，請重試一次。'
+      details: fullDetails,
+      suggestion: '系統已自動嘗試 gemini-2.0-flash / gemini-2.5-flash 等官方穩定模型均未回應。請稍後重試，或於「設定」中檢查您的 API Key 權限。'
     };
   }
 
@@ -134,7 +134,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       statusCode: 503,
       reason: 'UNAVAILABLE',
       userMessage: 'Google 官方 AI 伺服器節點短暫高負載',
-      details: innerMsg,
+      details: fullDetails,
       suggestion: 'Google 伺服器忙碌中，請間隔 5~10 秒後點擊重試。'
     };
   }
@@ -150,7 +150,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       statusCode: 504,
       reason: 'NETWORK_ERROR',
       userMessage: '無法連線至 Google Gemini 官方伺服器',
-      details: innerMsg,
+      details: fullDetails,
       suggestion: '請檢查伺服器主機的網際網路連線或 Proxy/VPN 設定是否正常。'
     };
   }
@@ -160,7 +160,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
     statusCode: typeof statusNumber === 'number' && statusNumber >= 400 && statusNumber < 600 ? statusNumber : 500,
     reason: reasonCode || 'UNKNOWN_ERROR',
     userMessage: 'AI 助手在處理您的請求時發生錯誤',
-    details: innerMsg,
+    details: fullDetails,
     suggestion: '請稍候重試。若問題持續發生，請於「設定」中檢查您的 API Key 設定。'
   };
 }
@@ -170,9 +170,18 @@ async function generateWithModelFallback(
   ai: GoogleGenAI,
   config: any,
   contents: any,
-  preferredModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro']
+  preferredModels = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash-lite',
+    'gemini-2.5-pro'
+  ]
 ) {
   let lastError: any = null;
+  let quotaExhaustedError: any = null;
+  const attemptedLog: string[] = [];
+
   for (const model of preferredModels) {
     let isFatalKeyError = false;
     let isQuotaExhausted = false;
@@ -184,33 +193,67 @@ async function generateWithModelFallback(
           contents,
           config
         });
-        if (response) return response;
+        if (response) {
+          console.log(`[Gemini Fallback] Successfully generated content using model: ${model}`);
+          return response;
+        }
       } catch (err: any) {
         lastError = err;
         const errMsg = err?.message || String(err);
+        attemptedLog.push(`[${model}] Attempt ${attempt + 1}: ${errMsg}`);
+        console.warn(`[Gemini Fallback] Model ${model} (attempt ${attempt + 1}) failed:`, errMsg);
+
         // If API key is invalid or permission denied, no need to loop other models
         if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('PERMISSION_DENIED')) {
           isFatalKeyError = true;
           break;
         }
+
         // If model is discontinued or not found, break immediately to try next fallback model
         if (errMsg.includes('not found') || errMsg.includes('NOT_FOUND') || errMsg.includes('404')) {
           break;
         }
-        const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded');
+
+        const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded') || errMsg.toLowerCase().includes('quota');
         if (is429) {
+          quotaExhaustedError = err;
           isQuotaExhausted = true;
           break;
         }
+
+        // If schema invalid (400), try fallback config without responseSchema on attempt 1
+        if (attempt === 0 && (errMsg.includes('INVALID_ARGUMENT') || errMsg.includes('schema') || errMsg.includes('propertyOrdering')) && config?.responseSchema) {
+          try {
+            console.warn(`[Gemini Fallback] Retrying ${model} without responseSchema...`);
+            const fallbackConfig = { ...config };
+            delete fallbackConfig.responseSchema;
+            const fallbackRes = await ai.models.generateContent({
+              model,
+              contents,
+              config: fallbackConfig
+            });
+            if (fallbackRes) return fallbackRes;
+          } catch (schemaErr: any) {
+            // continue normal flow
+          }
+        }
+
         await new Promise((res) => setTimeout(res, 500));
       }
     }
+
     if (isFatalKeyError) {
       throw lastError;
     }
     if (isQuotaExhausted) continue;
   }
-  throw lastError || new Error('所有可用 Gemini 模型皆無回應，請稍後重試。');
+
+  // Prioritize Quota Exhausted error if any model hit 429 so quota limit is not masked by 404
+  const errorToThrow = quotaExhaustedError || lastError || new Error('所有可用 Gemini 模型皆無回應，請稍後重試。');
+  if (attemptedLog.length > 0) {
+    (errorToThrow as any).fallbackDetails = attemptedLog.join('\n');
+  }
+  throw errorToThrow;
 }
 
 // Helper: Reliable bilingual word details lookup (Google Translate + Datamuse linguistic dictionary)

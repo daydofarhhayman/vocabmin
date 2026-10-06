@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.3',
+    date: '2026-10-06',
+    type: 'fix',
+    changes: [
+      '🛡️ AI 雙梯隊模型智慧容錯與真實錯誤透傳：全面相容 gemini-2.0-flash、gemini-2.5-flash 及輕量版雙梯隊調度；徹底修復因末端模型 404 掩蓋前端真實 429 頻率配額限制的誤報問題。',
+      '🔍 技術錯誤診斷記錄透明化：展開技術錯誤細節即可一覽各模型端點具體嘗試日誌；移除 AI Studio 特殊 User-Agent 避免請求被 Google 網關異常阻擋。',
+      '⚡ 結構化 Schema 智慧降級：當特定模型在嚴格 JSON Schema 下校驗失敗時，自動無縫切換純 JSON 容錯模式，確保生成穩定不中斷。'
+    ]
+  },
+  {
     version: '1.4.2',
     date: '2026-10-06',
     type: 'fix',
