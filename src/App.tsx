@@ -21,6 +21,7 @@ const CambridgeModal = lazy(() => import('./components/CambridgeModal').then((m)
 import { normalizePos } from './utils/pos';
 import { User } from 'firebase/auth';
 import { HomeConfig, loadHomeConfig, saveHomeConfig, DEFAULT_HOME_CONFIG } from './utils/homeConfig';
+import type { ActiveStudyQuestion } from './components/StudyHubView';
 
 export default function App() {
   // Core Data State
@@ -28,6 +29,7 @@ export default function App() {
   const [articles, setArticles] = useState<Article[]>(() => storage.getLocalArticles());
   const [dailyStats, setDailyStats] = useState<DailyStats>({});
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [activeStudyQuestion, setActiveStudyQuestion] = useState<ActiveStudyQuestion | null>(null);
   const [user, setUser] = useState<User | null>(null);
 
   // Navigation State
@@ -743,6 +745,7 @@ export default function App() {
             onBatchUpdateReview={handleBatchUpdateReview}
             onFinishReviewSession={(count) => recordActivity('reviewed', count)}
             onRecordQuizActivity={(score) => recordActivity('quizzes', 1)}
+            onActiveStudyQuestionChange={setActiveStudyQuestion}
             onBack={() => setCurrentTab('home')}
           />
         )}
@@ -834,6 +837,8 @@ export default function App() {
         dueWordsCount={dueWordsCount}
         dailyStats={dailyStats}
         activeReaderArticleId={activeReaderArticleId}
+        activeStudyQuestion={activeStudyQuestion}
+        activeInspectedWord={editModalWord?.term || detailWordGroup?.term || null}
         onAddWords={handleAddWords}
         onOpenCambridge={(term) => setCambridgeWord(term)}
         onNavigateToTab={(tab) => setCurrentTab(tab)}

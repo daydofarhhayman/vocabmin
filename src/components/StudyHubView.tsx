@@ -26,6 +26,21 @@ import { calculateNextReview } from '../services/srs';
 import { getWordDisplayDef, getWordSecondaryDef } from '../utils/wordLang';
 import confetti from 'canvas-confetti';
 
+export interface ActiveStudyQuestion {
+  mode: 'choice' | 'cloze';
+  currentIndex: number;
+  totalQuestions: number;
+  term: string;
+  pos: string;
+  def: string;
+  defEn?: string;
+  sentence?: string;
+  options?: string[];
+  isAnswered: boolean;
+  userAnswer?: string | null;
+  isCorrect?: boolean;
+}
+
 interface StudyHubViewProps {
   words: Word[];
   settings: AppSettings;
@@ -34,6 +49,7 @@ interface StudyHubViewProps {
   onBatchUpdateReview?: (updates: { id: string; data: Partial<Word> }[]) => void;
   onFinishReviewSession: (count: number) => void;
   onRecordQuizActivity: (score: number) => void;
+  onActiveStudyQuestionChange?: (question: ActiveStudyQuestion | null) => void;
   onBack: () => void;
 }
 
@@ -70,6 +86,7 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   onBatchUpdateReview,
   onFinishReviewSession,
   onRecordQuizActivity,
+  onActiveStudyQuestionChange,
   onBack
 }) => {
   const t = TRANSLATIONS[settings.lang];
@@ -278,6 +295,47 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   }, [isSessionActive, reviewMode, currentIndex, isAnswered]);
 
   const currentQ = questions[currentIndex];
+
+  // Inform parent / Floating AI Assistant about the active question on screen
+  useEffect(() => {
+    if (isSessionActive && currentQ && !isSessionFinished) {
+      onActiveStudyQuestionChange?.({
+        mode: reviewMode,
+        currentIndex: currentIndex + 1,
+        totalQuestions: questions.length,
+        term: currentQ.word.term,
+        pos: currentQ.word.pos,
+        def: currentQ.word.def,
+        defEn: currentQ.word.defEn,
+        sentence: currentQ.fullSentence || currentQ.word.ex,
+        options: currentQ.options,
+        isAnswered,
+        userAnswer: reviewMode === 'choice' ? (selectedOption !== null ? currentQ.options[selectedOption] : null) : typedInput,
+        isCorrect: lastFeedback?.isCorrect
+      });
+    } else {
+      onActiveStudyQuestionChange?.(null);
+    }
+  }, [
+    isSessionActive,
+    isSessionFinished,
+    currentQ,
+    currentIndex,
+    questions.length,
+    reviewMode,
+    isAnswered,
+    selectedOption,
+    typedInput,
+    lastFeedback,
+    onActiveStudyQuestionChange
+  ]);
+
+  // Clean up on component unmount
+  useEffect(() => {
+    return () => {
+      onActiveStudyQuestionChange?.(null);
+    };
+  }, [onActiveStudyQuestionChange]);
 
   // Core Evaluation & Adaptive Mastery Calculation based on Response Time
   const evaluateAnswer = useCallback(

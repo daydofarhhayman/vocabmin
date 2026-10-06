@@ -580,8 +580,8 @@ You must strictly output JSON matching this schema:
 - "article" (object, optional): Structured reading article. ONLY include this when the user explicitly requests to create, generate, or import a brand new article.
 - "action" (object, optional): Explicit database action proposal. ONLY include this when the user explicitly commands a library modification.
 
-### 🛑 CRITICAL ANTI-HALLUCINATION RULES FOR READING (文章閱讀防幻覺核心準則):
-1. 當使用者正在閱讀文章（上下文包含【使用者目前正開啟並停留在以下文章的閱讀畫面】）時：
+### 🛑 CRITICAL ANTI-HALLUCINATION RULES (防幻覺核心準則):
+1. 當使用者正在閱讀文章（情境包含【使用者目前正開啟並停留在以下文章的閱讀畫面】）時：
    - 使用者的目光「正注視著這篇文章」！
    - 當使用者提出以下需求時：
      * 「請幫我挑出此文章的難字」、「挑出生詞」、「文章中的生詞」
@@ -598,7 +598,17 @@ You must strictly output JSON matching this schema:
        - 在 "words" 陣列中精確輸出這 4~8 個單字（每個單字包含 term, pos, def, defEn，以及取自文章原句或原語境的 ex 例句）。
        - 嚴格禁止輸出 "article" 欄位（保持 undefined）！
 
-2. 當使用者在【書架總覽】（尚未開啟單篇文章）時：
+2. 當使用者正在進行【單字卡片複習 / 隨堂測驗】（情境包含【使用者當前正在作答/複習的題目資訊】）時：
+   - 使用者正注視著目前的題目與單字！
+   - 若使用者詢問「這題怎麼解」、「為什麼選這個」、「這個單字怎麼記」、「選項有什麼差別」、「例句文法」、「造句」：
+     * 🚨 必須 100% 針對當前題目的目標單字與例句進行精闢解析！
+     * 🚨 絕對禁止詢問「請問你在背哪一個單字？」或「您目前在看哪道題目？」，因為題目單字、釋義與選項就在上方情境中！
+
+3. 當使用者正在【單字詳情/編輯彈窗】（情境包含【使用者當前正開啟彈窗檢視/編輯的單字】）時：
+   - 使用者正注視著該單字！
+   - 必須直接針對該單字深入解答語意、語感、搭配詞與造句。
+
+4. 當使用者在【書架總覽】（尚未開啟單篇文章）時：
    - 使用者看到的是其文章庫清單。可根據使用者已有文章庫題材進行討論，或提供閱讀規劃。
    - 只有當使用者明確表示「請幫我寫/生成/創建一篇全新文章」（例如：「幫我寫一篇關於海洋保護的B2英文短文」）時，才在 "article" 物件生成文章。
 
@@ -665,7 +675,7 @@ You must strictly output JSON matching this schema:
     // Construct conversation contents
     const rawContents: any[] = [];
 
-    // Contextual Grounding
+    // Contextual Grounding (injected into systemInstruction to isolate environment from user turns)
     const contextParts: string[] = [];
 
     // 1. Live Screen State Awareness
@@ -688,6 +698,24 @@ You must strictly output JSON matching this schema:
       if (screenContext.dailyStreak !== undefined) {
         screenLines.push(`【連續打卡天數】: ${screenContext.dailyStreak} 天，【今日已學】: ${screenContext.learnedToday || 0} 個單字`);
       }
+      if (screenContext.activeStudyQuestion) {
+        const q = screenContext.activeStudyQuestion;
+        const qLines: string[] = [
+          `\n【🎯 使用者當前正在作答/複習的題目資訊（請直接根據此題提供解說、記憶技巧、造句或選項辨析）】:`,
+          `- 練習模式: ${q.mode === 'choice' ? '四選一選擇題' : '拼寫填空題'}`,
+          `- 當前進度: 第 ${q.currentIndex} 題（共 ${q.totalQuestions} 題）`,
+          `- 目標單字: 「${q.term}」 (${q.pos || 'n.'})`,
+          `- 繁體中文釋義: ${q.def}`,
+          q.defEn ? `- 英英釋義: ${q.defEn}` : '',
+          q.sentence ? `- 題目句幹/例句: "${q.sentence}"` : '',
+          q.options && q.options.length > 0 ? `- 選項清單: [${q.options.join(', ')}]` : '',
+          `- 作答狀態: ${q.isAnswered ? `已作答（使用者選擇: "${q.userAnswer || '無'}"，結果: ${q.isCorrect ? '✅ 答對' : '❌ 答錯'}）` : '⏳ 思考中 / 尚未送出答案'}`
+        ].filter(Boolean);
+        screenLines.push(qLines.join('\n'));
+      }
+      if (screenContext.activeInspectedWord) {
+        screenLines.push(`【🔍 使用者當前正開啟彈窗檢視/編輯的單字】: 「${screenContext.activeInspectedWord}」`);
+      }
       contextParts.push(screenLines.join('\n'));
     } else if (scenario) {
       contextParts.push(`【使用者當前所在場景】: ${scenario}${scenarioDesc ? ` (${scenarioDesc})` : ''}`);
@@ -703,8 +731,8 @@ You must strictly output JSON matching this schema:
         `主題分類: ${currentArticle.category || 'General'}`,
         currentArticle.wordCount ? `文章長度: 約 ${currentArticle.wordCount} 字` : '',
         currentArticle.summary ? `核心摘要: ${currentArticle.summary}` : '',
-        `\n【文章完整正文內容 (Full Article Text)】:\n${currentArticle.content || '（無內文）'}`,
-        currentArticle.translationZh ? `\n【文章中文對照翻譯】:\n${currentArticle.translationZh}` : '',
+        `\n【文章完整正文內容 (Full Article Text)】:\n${(currentArticle.content || '（無內文）').slice(0, 40000)}`,
+        currentArticle.translationZh ? `\n【文章中文對照翻譯】:\n${currentArticle.translationZh.slice(0, 20000)}` : '',
         currentArticle.savedWordTerms && currentArticle.savedWordTerms.length > 0
           ? `\n【使用者已在本文中標記/收錄的生詞】: ${currentArticle.savedWordTerms.join(', ')}`
           : '',
@@ -715,20 +743,41 @@ You must strictly output JSON matching this schema:
       contextParts.push(artDetails.join('\n'));
     }
 
-    if (existingWordsSummary && Array.isArray(existingWordsSummary) && existingWordsSummary.length > 0) {
+    // 3. Selective summary injection to prevent distraction & cross-article hallucination
+    const promptCleanForCtx = rawUserPrompt.toLowerCase();
+    const isAskingAboutShelf =
+      promptCleanForCtx.includes('書架') ||
+      promptCleanForCtx.includes('文章庫') ||
+      promptCleanForCtx.includes('閱讀庫') ||
+      promptCleanForCtx.includes('推薦文章') ||
+      promptCleanForCtx.includes('推薦一篇');
+
+    if ((!currentArticle || isAskingAboutShelf) && existingArticlesSummary && Array.isArray(existingArticlesSummary) && existingArticlesSummary.length > 0) {
+      contextParts.push(
+        `【使用者的文章閱讀庫現有收錄資料（共 ${existingArticlesSummary.length} 篇，僅供參考）】: \n${JSON.stringify(
+          existingArticlesSummary.slice(0, 10)
+        )}`
+      );
+    }
+
+    const isAskingAboutWordBank =
+      promptCleanForCtx.includes('單字庫') ||
+      promptCleanForCtx.includes('我的單字') ||
+      promptCleanForCtx.includes('字庫') ||
+      promptCleanForCtx.includes('去重') ||
+      promptCleanForCtx.includes('清空') ||
+      promptCleanForCtx.includes('體檢') ||
+      promptCleanForCtx.includes('熟練度') ||
+      (screenContext && screenContext.currentTab === 'list');
+
+    if (isAskingAboutWordBank && existingWordsSummary && Array.isArray(existingWordsSummary) && existingWordsSummary.length > 0) {
       contextParts.push(
         `【使用者的單字庫現有資料（共 ${existingWordsSummary.length} 個，僅供查詢/參考，非修改請求請勿擅自操作）】: \n${JSON.stringify(
           existingWordsSummary.slice(0, 30)
         )}`
       );
     }
-    if (existingArticlesSummary && Array.isArray(existingArticlesSummary) && existingArticlesSummary.length > 0) {
-      contextParts.push(
-        `【使用者的文章閱讀庫現有收錄資料（共 ${existingArticlesSummary.length} 篇，僅供參考）】: \n${JSON.stringify(
-          existingArticlesSummary.slice(0, 20)
-        )}`
-      );
-    }
+
     if (rawInputWords && rawInputWords.length > 0) {
       contextParts.push(`【使用者需要自動補全與標準化的原始單字列表】: ${rawInputWords.join(', ')}`);
     }
@@ -748,12 +797,10 @@ You must strictly output JSON matching this schema:
       });
     }
 
-    const promptContext = contextParts.length > 0 ? `${contextParts.join('\n\n')}\n\n` : '';
-    const finalTurnPrompt = `${promptContext}使用者最新訊息：${rawUserPrompt || '請協助我'}`;
-
+    // Pure user turn: NEVER prepend context JSON blobs directly into the user turn!
     rawContents.push({
       role: 'user',
-      parts: [{ text: finalTurnPrompt }]
+      parts: [{ text: rawUserPrompt || '請協助我' }]
     });
 
     // Ensure valid Gemini multiturn alternating format (user -> model -> user)
@@ -771,12 +818,17 @@ You must strictly output JSON matching this schema:
     if (contents.length === 0) {
       contents.push({
         role: 'user',
-        parts: [{ text: finalTurnPrompt }]
+        parts: [{ text: rawUserPrompt || '請協助我' }]
       });
     }
 
+    // Integrate live environmental context into system instructions
+    const fullSystemInstruction = contextParts.length > 0
+      ? `${systemInstruction}\n\n### 🖥️ LIVE USER SCREEN & ENVIRONMENT GROUNDING (使用者當前真實畫面與操作情境，請嚴格基於此情境提供專屬協助):\n${contextParts.join('\n\n')}`
+      : systemInstruction;
+
     const config: any = {
-      systemInstruction,
+      systemInstruction: fullSystemInstruction,
       temperature: 0.4,
       responseMimeType: 'application/json',
       responseSchema: {
@@ -1085,8 +1137,11 @@ You must strictly output JSON matching this schema:
       !promptClean.includes('怎麼');
 
     const isExplicitBatchEnrich =
+      !currentArticle &&
+      !promptClean.includes('文章') &&
+      (promptClean.includes('全庫') || promptClean.includes('所有單字') || promptClean.includes('單字庫')) &&
       (promptClean.includes('補') || promptClean.includes('完善') || promptClean.includes('補充') || promptClean.includes('填上') || promptClean.includes('加上')) &&
-      (promptClean.includes('解釋') || promptClean.includes('釋義') || promptClean.includes('例句') || promptClean.includes('翻譯') || promptClean.includes('單字')) &&
+      (promptClean.includes('解釋') || promptClean.includes('釋義') || promptClean.includes('例句') || promptClean.includes('翻譯')) &&
       !promptClean.includes('如何') &&
       !promptClean.includes('怎麼');
 
@@ -1785,9 +1840,9 @@ The learner is currently reading this English article in the reader app:
 【文章級別】: ${articleLevel} (${articleCategory})
 【文章全文內容】:
 """
-${articleContent.slice(0, 4500)}
+${articleContent.slice(0, 40000)}
 """
-${articleTranslation ? `【繁體中文翻譯對照】:\n"""\n${articleTranslation.slice(0, 3000)}\n"""` : ''}
+${articleTranslation ? `【繁體中文翻譯對照】:\n"""\n${articleTranslation.slice(0, 20000)}\n"""` : ''}
 ${selectedContext ? `【讀者當前在文章中反白選取的焦點文字】:\n"${selectedContext}"` : ''}
 
 CRITICAL TEACHING GUIDELINES:
@@ -2122,7 +2177,7 @@ For each word, provide:
 
 Text:
 """
-${text.slice(0, 3000)}
+${text.slice(0, 25000)}
 """`;
 
     const config = {
@@ -2218,7 +2273,7 @@ Translate paragraph by paragraph, preserving paragraph breaks (\n\n).
 
 English text:
 """
-${content.slice(0, 4000)}
+${content.slice(0, 30000)}
 """
 
 Return JSON with:
@@ -2283,7 +2338,7 @@ Create 2 or 3 multiple-choice reading comprehension and vocabulary questions bas
 Title: "${title || 'English Reading'}"
 Content:
 """
-${content.slice(0, 3000)}
+${content.slice(0, 20000)}
 """
 
 For each question provide:

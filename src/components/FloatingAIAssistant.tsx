@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
 import { AIArticleCard } from './AIArticleCard';
+import type { ActiveStudyQuestion } from './StudyHubView';
 
 interface FloatingAIAssistantProps {
   currentTab: ViewTab;
@@ -39,6 +40,8 @@ interface FloatingAIAssistantProps {
   dueWordsCount: number;
   dailyStats?: DailyStats;
   activeReaderArticleId?: string | null;
+  activeStudyQuestion?: ActiveStudyQuestion | null;
+  activeInspectedWord?: string | null;
   onAddWords: (newWords: Partial<Word>[]) => void;
   onOpenCambridge: (term: string) => void;
   onNavigateToTab: (tab: ViewTab) => void;
@@ -75,6 +78,7 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   scenarioTab: ViewTab;
+  articleId?: string;
   words?: Partial<Word>[];
   article?: Partial<Article>;
   action?: any;
@@ -163,12 +167,12 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
     badgeText: 'text-amber-700 dark:text-amber-300',
     orbColor: 'from-amber-500 to-orange-600',
     chips: [
-      '請幫我加入一篇關於科技與AI創新的B2雙語文章，並進行長難句文法解析',
-      '為我推薦並收錄一篇雅思/托福閱讀長文到文章庫',
+      '請幫我挑出文章中的核心難字與重點生詞',
+      '請總結本文的核心論點並分析作者的語氣與立場',
       '幫我深度拆解文章中最複雜的長難句結構（主幹與修飾語）',
       '請提取文章中 5 個最值得背誦的高級寫作搭配詞',
-      '請總結本文的核心論點並分析作者的語氣與立場',
-      '幫我把文章第二段的生動修辭手法解析給我聽'
+      '請針對文章內容為我出 2 道閱讀理解測驗題',
+      '為我推薦並生成一篇適合我程度的 B2 雙語閱讀文章'
     ]
   },
   list: {
@@ -235,6 +239,8 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   dueWordsCount,
   dailyStats,
   activeReaderArticleId,
+  activeStudyQuestion,
+  activeInspectedWord,
   onAddWords,
   onOpenCambridge,
   onNavigateToTab,
@@ -359,8 +365,39 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         ]
       };
     }
+    if ((currentTab === 'review' || currentTab === 'quiz') && activeStudyQuestion) {
+      const q = activeStudyQuestion;
+      const isChoice = q.mode === 'choice';
+      return {
+        ...base,
+        title: `${currentTab === 'review' ? '複習導師' : '解題導師'}・第 ${q.currentIndex}/${q.totalQuestions} 題「${q.term}」`,
+        shortLabel: currentTab === 'review' ? '複習導師' : '解題導師',
+        desc: `目標單字：${q.term} (${q.pos || 'n.'})・${q.def}・${isChoice ? '四選一題型' : '例句填空題'}`,
+        chips: [
+          `💡 請以字根字首（Etymology）拆解「${q.term}」，並分享好記的聯想記憶口訣`,
+          `❓ 深入剖析這道題目題幹的語法結構與破題邏輯`,
+          `⚠️ 為什麼其他干擾選項不適合？請提供辨析理由`,
+          `🗣️ 請用「${q.term}」造 2 個在商務職場或學術寫作中最道地的範例`,
+          `🔄「${q.term}」有哪些常見的同義詞與易混淆詞？語感差別為何？`
+        ]
+      };
+    }
+    if (currentTab === 'list' && activeInspectedWord) {
+      return {
+        ...base,
+        title: `單字詳情顧問・「${activeInspectedWord}」`,
+        shortLabel: '單字顧問',
+        desc: `正在檢視/編輯「${activeInspectedWord}」・詞性釋義、深度語感與造句活用`,
+        chips: [
+          `請深入解析「${activeInspectedWord}」的精準語感與常見搭配詞`,
+          `為「${activeInspectedWord}」提供 2 個適合用於雅思/托福寫作的高階範例`,
+          `「${activeInspectedWord}」有哪些常見的同義詞與易混淆詞？語感差別為何？`,
+          `為「${activeInspectedWord}」設計一段好記的聯想記憶法`
+        ]
+      };
+    }
     return base;
-  }, [currentTab, currentArticle, articles.length, dailyStats, dueWordsCount]);
+  }, [currentTab, currentArticle, articles.length, dailyStats, dueWordsCount, activeStudyQuestion, activeInspectedWord]);
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -635,7 +672,8 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
       role: 'user',
       content: text,
       timestamp: Date.now(),
-      scenarioTab: currentTab
+      scenarioTab: currentTab,
+      articleId: currentArticle?.id
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -653,7 +691,9 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         dailyStreak: dailyStats?.streak || 0,
         learnedToday: dailyStats?.learnedToday || 0,
         isReadingArticle: !!currentArticle,
-        activeArticleTitle: currentArticle?.title || null
+        activeArticleTitle: currentArticle?.title || null,
+        activeStudyQuestion: (currentTab === 'review' || currentTab === 'quiz') ? activeStudyQuestion : null,
+        activeInspectedWord: activeInspectedWord || null
       };
 
       // Full current article details to eliminate hallucination completely
@@ -701,10 +741,20 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         summary: a.summary
       }));
 
-      const historyToSend = messages.slice(-6).map((m) => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        content: m.content
-      }));
+      // Isolate history to current tab & current article to prevent context bleeding
+      const historyToSend = messages
+        .filter((m) => {
+          if (m.scenarioTab !== currentTab) return false;
+          if (currentTab === 'reader' && currentArticle) {
+            return m.articleId === currentArticle.id || !m.articleId;
+          }
+          return true;
+        })
+        .slice(-6)
+        .map((m) => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          content: m.content
+        }));
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
