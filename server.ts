@@ -658,13 +658,18 @@ You must strictly output JSON matching this schema:
 
 5. DATABASE OPERATIONS & MANAGEMENT ("action" object):
    - ONLY trigger when the user EXPLICITLY COMMANDS an operational database modification:
-     * "清空所有單字" / "清空單字庫" -> action: { type: 'clear_all_words', summary: '清空單字庫中的所有單字' }
-     * "清空所有文章" / "清空文章閱讀庫" -> action: { type: 'clear_all_articles', summary: '清空文章閱讀庫中的所有文章' }
+     * "清空所有單字" / "刪除所有單字" / "清空單字庫" -> action: { type: 'clear_all_words', summary: '清空單字庫中的所有單字' }
+     * "清空所有文章" / "刪除所有文章" / "清空文章閱讀庫" -> action: { type: 'clear_all_articles', summary: '清空文章閱讀庫中的所有文章' }
      * "刪除單字 [term]" -> action: { type: 'delete_word', summary: '從單字庫刪除「...」', deleteWord: { term: '...' } }
      * "刪除文章 [title]" -> action: { type: 'delete_article', summary: '從文章閱讀庫刪除指定文章', deleteArticle: { title: '...' } }
      * "合併重複單字" / "去重" -> action: { type: 'deduplicate_words', summary: '合併單字庫中重複的單字' }
      * "重置所有單字熟練度" -> action: { type: 'reset_mastery', summary: '重置所有單字熟練度為 Level 0' }
      * "全庫單字標準化" / "補齊英文釋義" -> action: { type: 'batch_standardize', summary: '為現有單字補齊英文釋義並標準化' }
+   - ⚠️ CRITICAL ZERO-HALLUCINATION PROTOCOL (絕對禁止假執行幻覺):
+     * You do NOT have direct execution access to alter, delete, or clear the database in the background.
+     * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
+     * When proposing an action, you MUST emit the "action" object, and your "reply" MUST politely state that you have generated a confirmation card and guide the user to click the button to confirm and execute it, e.g.:
+       "已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除。"
    - CRITICAL SAFETY: If the user is merely asking a question ABOUT these operations (e.g. "如何清空單字？", "什麼是去重？"), explain in "reply" and DO NOT generate an "action"!
    - NEVER confuse "單字" (words) with "文章" (articles)!
 
@@ -1108,62 +1113,99 @@ You must strictly output JSON matching this schema:
       parsedData.article = undefined;
     }
 
-    // Fallback intent checks ONLY for very clear, unambiguous library management commands
-    const promptClean = rawUserPrompt.toLowerCase();
-    const isExplicitClearWords =
-      promptClean === '清空所有單字' ||
-      promptClean === '清空單字庫' ||
-      promptClean === '請幫我清空所有單字' ||
-      promptClean === '刪除所有單字' ||
-      (promptClean.includes('清空') && promptClean.includes('單字') && !promptClean.includes('文章') && !promptClean.includes('如何') && !promptClean.includes('怎麼'));
+    // Fallback intent checks & anti-hallucination interceptor for library management commands
+    const promptClean = rawUserPrompt.trim().toLowerCase();
+    const isQuestionOrHowTo = /(?:如何|怎麼|怎樣|教我|什麼是|能不能|可以嗎|如果|為甚麼|為什麼)/.test(promptClean);
 
+    // Intent: Clear all articles
+    // e.g. "請幫我刪除所有文章", "清空所有文章", "刪除全部文章", "把所有文章清掉", "清空文章庫", "書架文章全部清除", "移除所有文章"
     const isExplicitClearArticles =
-      promptClean === '清空所有文章' ||
-      promptClean === '清空文章庫' ||
-      promptClean === '清空閱讀庫' ||
-      promptClean === '請幫我清空所有文章' ||
-      promptClean === '刪除所有文章' ||
-      (promptClean.includes('清空') && promptClean.includes('文章') && !promptClean.includes('單字') && !promptClean.includes('如何') && !promptClean.includes('怎麼'));
+      !isQuestionOrHowTo &&
+      (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(promptClean) ||
+       /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
+       /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(promptClean));
+
+    // Intent: Clear all words
+    // e.g. "清空所有單字", "請幫我刪除全部單字", "清空單字庫", "把全庫單字清除", "刪除所有生詞"
+    const isExplicitClearWords =
+      !isExplicitClearArticles &&
+      !isQuestionOrHowTo &&
+      (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(promptClean) ||
+       /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
+       /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(promptClean));
+
+    // Intent: Delete specific article
+    // e.g. "刪除文章 The Psychology of Flow", "幫我刪除文章《...》", "移除文章 ..."
+    const deleteArticleMatch = !isQuestionOrHowTo && !isExplicitClearArticles &&
+      promptClean.match(/(?:刪除|移除|刪掉)\s*(?:文章|短文)?\s*[《「"']?([^》」"'\n\r]{2,80})[》」"']?/i);
+
+    // Intent: Delete specific word
+    // e.g. "刪除單字 serendipity", "刪除單字 apple", "移除生詞 ..."
+    const deleteWordMatch = !isQuestionOrHowTo && !isExplicitClearWords && !isExplicitClearArticles &&
+      promptClean.match(/(?:刪除|移除|刪掉)\s*(?:單字|單詞|生詞)?\s*[《「"']?([a-zA-Z\-\s]{2,40})[》」"']?/i);
 
     const isExplicitDeduplicate =
-      (promptClean.includes('合併重複') || promptClean.includes('單字去重')) &&
-      !promptClean.includes('如何') &&
-      !promptClean.includes('怎麼');
+      !isQuestionOrHowTo &&
+      (promptClean.includes('合併重複') || promptClean.includes('單字去重') || promptClean.includes('字庫去重') || promptClean.includes('移除重複單字'));
 
     const isExplicitResetMastery =
-      (promptClean.includes('重置') || promptClean.includes('歸零')) &&
-      promptClean.includes('熟練度') &&
-      !promptClean.includes('如何') &&
-      !promptClean.includes('怎麼');
+      !isQuestionOrHowTo &&
+      (promptClean.includes('重置') || promptClean.includes('歸零') || promptClean.includes('重設')) &&
+      promptClean.includes('熟練度');
 
     const isExplicitBatchEnrich =
       !currentArticle &&
       !promptClean.includes('文章') &&
+      !isQuestionOrHowTo &&
       (promptClean.includes('全庫') || promptClean.includes('所有單字') || promptClean.includes('單字庫')) &&
       (promptClean.includes('補') || promptClean.includes('完善') || promptClean.includes('補充') || promptClean.includes('填上') || promptClean.includes('加上')) &&
-      (promptClean.includes('解釋') || promptClean.includes('釋義') || promptClean.includes('例句') || promptClean.includes('翻譯')) &&
-      !promptClean.includes('如何') &&
-      !promptClean.includes('怎麼');
+      (promptClean.includes('解釋') || promptClean.includes('釋義') || promptClean.includes('例句') || promptClean.includes('翻譯'));
 
-    if (isExplicitClearWords) {
-      const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
-      parsedData.action = {
-        type: 'clear_all_words',
-        summary: `清空單字庫中的所有單字（共 ${totalCount} 個）`,
-        clearAllWords: { count: totalCount }
-      };
-    } else if (isExplicitClearArticles) {
+    // Check if Gemini reply hallucinated an action completion claim in prose
+    const replyText = parsedData.reply || '';
+    const claimsArticleCleared = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:文章|短文|閱讀庫|書架)/i.test(replyText);
+    const claimsWordsCleared = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(replyText);
+
+    if (isExplicitClearArticles || claimsArticleCleared) {
       const artCount = Array.isArray(existingArticlesSummary) ? existingArticlesSummary.length : 0;
       parsedData.action = {
         type: 'clear_all_articles',
         summary: `清空文章閱讀庫中的所有文章（共 ${artCount} 篇）`,
         clearAllArticles: { count: artCount }
       };
+      parsedData.reply = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${artCount} 篇文章）。`;
+    } else if (isExplicitClearWords || claimsWordsCleared) {
+      const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
+      parsedData.action = {
+        type: 'clear_all_words',
+        summary: `清空單字庫中的所有單字（共 ${totalCount} 個）`,
+        clearAllWords: { count: totalCount }
+      };
+      parsedData.reply = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${totalCount} 個單字）。`;
+    } else if (deleteArticleMatch && (!parsedData.action || parsedData.action.type !== 'delete_article')) {
+      const targetTitle = deleteArticleMatch[1].trim();
+      parsedData.action = {
+        type: 'delete_article',
+        summary: `從文章閱讀庫刪除指定文章《${targetTitle}》`,
+        deleteArticle: { title: targetTitle }
+      };
+      parsedData.reply = `已為您建立刪除文章《${targetTitle}》的確認卡片，請點擊下方卡片按鈕確認刪除。`;
+    } else if (deleteWordMatch && (!parsedData.action || parsedData.action.type !== 'delete_word')) {
+      const targetTerm = deleteWordMatch[1].trim().toLowerCase();
+      parsedData.action = {
+        type: 'delete_word',
+        summary: `從單字庫刪除單字「${targetTerm}」`,
+        deleteWord: { term: targetTerm }
+      };
+      parsedData.reply = `已為您建立刪除單字「${targetTerm}」的確認卡片，請點擊下方卡片按鈕確認刪除。`;
     } else if (isExplicitDeduplicate) {
       parsedData.action = {
         type: 'deduplicate_words',
         summary: '合併單字庫中重複的項目並去重'
       };
+      if (parsedData.reply && /(?:已為您|已成功|已經|已幫您).*(?:合併|去重)/i.test(parsedData.reply)) {
+        parsedData.reply = '已為您建立「合併重複單字」的操作確認卡片，請點擊下方卡片按鈕確認執行。';
+      }
     } else if (isExplicitResetMastery) {
       const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
       parsedData.action = {
@@ -1171,6 +1213,9 @@ You must strictly output JSON matching this schema:
         summary: '將所有單字熟練度重置為完全不熟練 (Level 0)',
         resetMastery: { targetLevel: 0, count: totalCount }
       };
+      if (parsedData.reply && /(?:已為您|已成功|已經|已幫您).*(?:重置|歸零)/i.test(parsedData.reply)) {
+        parsedData.reply = '已為您建立「重置單字熟練度」的操作確認卡片，請點擊下方卡片按鈕確認執行。';
+      }
     } else if (isExplicitBatchEnrich && (!parsedData.action || parsedData.action.type === 'batch_standardize')) {
       const wordsToEnrich = Array.isArray(existingWordsSummary) ? existingWordsSummary : [];
       const updatedWords: any[] = [];
@@ -1249,6 +1294,31 @@ You must strictly output JSON matching this schema:
             updatedWords
           }
         };
+      }
+    }
+
+    // Ensure that if any database action is present, reply NEVER falsely claims the action has already been performed
+    if (parsedData.action) {
+      if (parsedData.action.type === 'clear_all_articles') {
+        const artCount = parsedData.action.clearAllArticles?.count ?? (Array.isArray(existingArticlesSummary) ? existingArticlesSummary.length : 0);
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${artCount} 篇文章）。`;
+        }
+      } else if (parsedData.action.type === 'clear_all_words') {
+        const totalCount = parsedData.action.clearAllWords?.count ?? (Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0);
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${totalCount} 個單字）。`;
+        }
+      } else if (parsedData.action.type === 'delete_article') {
+        const title = parsedData.action.deleteArticle?.title || '';
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立刪除文章《${title}》的確認卡片，請點擊下方卡片按鈕確認刪除。`;
+        }
+      } else if (parsedData.action.type === 'delete_word') {
+        const term = parsedData.action.deleteWord?.term || '';
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立刪除單字「${term}」的確認卡片，請點擊下方卡片按鈕確認刪除。`;
+        }
       }
     }
 

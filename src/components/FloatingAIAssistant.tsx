@@ -794,16 +794,62 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
       }
 
       const data = await res.json();
-      const articleData = data.article || data.action?.saveArticle;
+      let botAction = data.action;
+      let botContent = data.reply || '已為您完成分析。';
+
+      // CLIENT-SIDE HALLUCINATION INTERCEPTION & SAFETY SHIELD:
+      const trimmedLower = (text || '').trim().toLowerCase();
+      const isQuestionOrHowTo = /(?:如何|怎麼|怎樣|教我|什麼是|能不能|可以嗎|如果|為甚麼|為什麼)/.test(trimmedLower);
+
+      // Check for clear all articles intent or claim
+      const claimsClearArticles = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:文章|短文|閱讀庫|書架)/i.test(botContent);
+      const isUserAskingClearArticles =
+        !isQuestionOrHowTo &&
+        (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(trimmedLower) ||
+         /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
+         /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(trimmedLower));
+
+      if (botAction?.type === 'clear_all_articles' || (!botAction && (claimsClearArticles || isUserAskingClearArticles))) {
+        botAction = {
+          type: 'clear_all_articles',
+          summary: `清空文章閱讀庫中的所有文章（共 ${articles.length} 篇）`,
+          clearAllArticles: { count: articles.length }
+        };
+        if (claimsClearArticles || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
+          botContent = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${articles.length} 篇文章）。`;
+        }
+      }
+
+      // Check for clear all words intent or claim
+      const claimsClearWords = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(botContent);
+      const isUserAskingClearWords =
+        !isUserAskingClearArticles &&
+        !isQuestionOrHowTo &&
+        (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(trimmedLower) ||
+         /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
+         /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(trimmedLower));
+
+      if (botAction?.type === 'clear_all_words' || (!botAction && (claimsClearWords || isUserAskingClearWords))) {
+        botAction = {
+          type: 'clear_all_words',
+          summary: `清空單字庫中的所有單字（共 ${words.length} 個）`,
+          clearAllWords: { count: words.length }
+        };
+        if (claimsClearWords || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
+          botContent = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${words.length} 個單字）。`;
+        }
+      }
+
+      const articleData = data.article || botAction?.saveArticle;
       const botMsg: ChatMessage = {
         id: `bot-${Date.now()}`,
         role: 'assistant',
-        content: data.reply || '已為您完成分析。',
+        content: botContent,
         timestamp: Date.now(),
         scenarioTab: currentTab,
         words: Array.isArray(data.words) && data.words.length > 0 ? data.words : undefined,
         article: articleData,
-        action: data.action
+        action: botAction
       };
 
       setMessages((prev) => [...prev, botMsg]);

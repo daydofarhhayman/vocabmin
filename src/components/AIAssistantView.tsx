@@ -74,6 +74,13 @@ interface AIAssistantViewProps {
   onClearAllArticles?: () => void;
   onDeleteArticle?: (titleOrId: string) => void;
   onNavigateToTab?: (tab: any) => void;
+  onRequestConfirm?: (config: {
+    title: string;
+    message: string;
+    type?: 'danger' | 'warning' | 'info';
+    confirmText?: string;
+    onConfirm: () => void;
+  }) => void;
 }
 
 const SCENARIOS = [
@@ -165,7 +172,8 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   onOpenArticleInReader,
   onClearAllArticles,
   onDeleteArticle,
-  onNavigateToTab
+  onNavigateToTab,
+  onRequestConfirm
 }) => {
   const AI_VIEW_STORAGE_KEY = 'vocabmin_ai_assistant_view_history';
   const [activeScenario, setActiveScenario] = useState<AIScenario>('all');
@@ -336,16 +344,62 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
 
       const data = await res.json();
       const botMsgId = `bot-${Date.now()}`;
-      const articleData = data.article || data.action?.saveArticle;
+      let botAction = data.action;
+      let botContent = data.reply || '處理完成。';
+
+      // CLIENT-SIDE HALLUCINATION INTERCEPTION & SAFETY SHIELD:
+      const trimmedLower = (text || '').trim().toLowerCase();
+      const isQuestionOrHowTo = /(?:如何|怎麼|怎樣|教我|什麼是|能不能|可以嗎|如果|為甚麼|為什麼)/.test(trimmedLower);
+
+      // Check for clear all articles intent or claim
+      const claimsClearArticles = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:文章|短文|閱讀庫|書架)/i.test(botContent);
+      const isUserAskingClearArticles =
+        !isQuestionOrHowTo &&
+        (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(trimmedLower) ||
+         /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
+         /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(trimmedLower));
+
+      if (botAction?.type === 'clear_all_articles' || (!botAction && (claimsClearArticles || isUserAskingClearArticles))) {
+        botAction = {
+          type: 'clear_all_articles',
+          summary: `清空文章閱讀庫中的所有文章（共 ${existingArticles.length} 篇）`,
+          clearAllArticles: { count: existingArticles.length }
+        };
+        if (claimsClearArticles || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
+          botContent = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${existingArticles.length} 篇文章）。`;
+        }
+      }
+
+      // Check for clear all words intent or claim
+      const claimsClearWords = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(botContent);
+      const isUserAskingClearWords =
+        !isUserAskingClearArticles &&
+        !isQuestionOrHowTo &&
+        (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(trimmedLower) ||
+         /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
+         /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(trimmedLower));
+
+      if (botAction?.type === 'clear_all_words' || (!botAction && (claimsClearWords || isUserAskingClearWords))) {
+        botAction = {
+          type: 'clear_all_words',
+          summary: `清空單字庫中的所有單字（共 ${existingWords.length} 個）`,
+          clearAllWords: { count: existingWords.length }
+        };
+        if (claimsClearWords || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
+          botContent = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${existingWords.length} 個單字）。`;
+        }
+      }
+
+      const articleData = data.article || botAction?.saveArticle;
 
       const botMsg: Message = {
         id: botMsgId,
         role: 'assistant',
-        content: data.reply || '處理完成。',
+        content: botContent,
         timestamp: Date.now(),
         words: Array.isArray(data.words) && data.words.length > 0 ? data.words : undefined,
         article: articleData,
-        action: data.action
+        action: botAction
       };
 
       setMessages((prev) => [...prev, botMsg]);
@@ -423,20 +477,162 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
     if (!action || executedActions[actionId]) return;
 
     if (action.type === 'clear_all_words') {
-      onClearAllWords();
+      const wordCount = existingWords.length;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🚨 清空單字庫確認',
+          message: `確定要清空單字庫中的所有 ${wordCount} 個單字嗎？\n此操作將永久清除所有單字卡片與複習記錄，無法復原。`,
+          type: 'danger',
+          confirmText: '確定全部清空',
+          onConfirm: () => {
+            onClearAllWords();
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功為您清空單字庫中的所有單字！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onClearAllWords();
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'clear_all_articles') {
-      onClearAllArticles?.();
+      const artCount = existingArticles.length;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🚨 清空文章閱讀庫確認',
+          message: `確定要清空文章閱讀庫中的所有 ${artCount} 篇文章嗎？\n此操作將永久清除所有閱讀文章與筆記，無法復原。`,
+          type: 'danger',
+          confirmText: '確定全部清空',
+          onConfirm: () => {
+            onClearAllArticles?.();
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功為您清空文章閱讀庫中的所有文章！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onClearAllArticles?.();
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'delete_word' && action.deleteWord?.term) {
-      onDeleteWordGroup(action.deleteWord.term);
+      const term = action.deleteWord.term;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🗑️ 刪除單字確認',
+          message: `確定要從單字庫中刪除「${term}」及其所有釋義嗎？`,
+          type: 'danger',
+          confirmText: '確定刪除',
+          onConfirm: () => {
+            onDeleteWordGroup(term);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已從單字庫中刪除單字「${term}」！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onDeleteWordGroup(term);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'delete_article') {
       const target = action.deleteArticle?.title || action.deleteArticle?.id;
-      if (target) onDeleteArticle?.(target);
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🗑️ 刪除文章確認',
+          message: `確定要從閱讀庫中刪除《${target || '這篇文章'}》嗎？`,
+          type: 'danger',
+          confirmText: '確定刪除',
+          onConfirm: () => {
+            if (target) onDeleteArticle?.(target);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功刪除文章《${target}》！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        if (target) onDeleteArticle?.(target);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'deduplicate_words') {
-      onDeduplicateWords();
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✨ 合併重複單字確認',
+          message: `確定要掃描單字庫並合併所有重複詞條嗎？`,
+          type: 'info',
+          confirmText: '確認合併',
+          onConfirm: () => {
+            onDeduplicateWords();
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 單字庫重複項目已成功合併整理！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onDeduplicateWords();
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'reset_mastery') {
-      onResetAllMastery();
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🔄 重置熟練度確認',
+          message: `確定要將所有單字的熟練度全部歸零、重新進入艾賓浩斯記憶複習週期嗎？`,
+          type: 'warning',
+          confirmText: '確定重置',
+          onConfirm: () => {
+            onResetAllMastery();
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將所有單字的熟練度重置為完全不熟練！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onResetAllMastery();
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'batch_standardize' && (Array.isArray(action.words) || Array.isArray(action.batchStandardize?.updatedWords))) {
       onBatchStandardizeWords(action.words || action.batchStandardize?.updatedWords);
+      setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
     } else if (action.type === 'save_article' && action.saveArticle) {
       const art: Article = {
         id: action.saveArticle.id || `art-${Date.now()}`,
@@ -451,9 +647,8 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         savedWordTerms: []
       };
       onSaveArticle?.(art);
+      setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
     }
-
-    setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
   };
 
   return (

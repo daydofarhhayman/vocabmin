@@ -917,6 +917,19 @@ export default function App() {
             onClearAllArticles={handleClearAllArticles}
             onDeleteArticle={handleDeleteArticle}
             onNavigateToTab={(tab) => setCurrentTab(tab)}
+            onRequestConfirm={(config) => {
+              setConfirmConfig({
+                isOpen: true,
+                title: config.title,
+                message: config.message,
+                type: config.type || 'warning',
+                confirmText: config.confirmText || '確定',
+                onConfirm: () => {
+                  setConfirmConfig((c) => ({ ...c, isOpen: false }));
+                  config.onConfirm();
+                }
+              });
+            }}
           />
         )}
         </Suspense>
