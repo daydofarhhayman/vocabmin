@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.5.0',
+    date: '2026-10-06',
+    type: 'feat',
+    changes: [
+      '🚀 重磅推出 VocabMin Companion 專屬 Chrome 擴充功能（Manifest V3）：專為英文閱讀與本機/線上 PDF 文件打造。',
+      '📄 PDF 與網頁隨選即查：選取文字即浮現智慧查詞標籤，或透過滑鼠右鍵選單「🔍 用 VocabMin 查詢單字」、「🧠 AI 語法結構解析」快速深入查閱。',
+      '🔊 原生真人語音發音與音標：支援單鍵 Web Speech API 朗讀美式發音與 IPA 音標標註。',
+      '⭐ 隨選一鍵收錄單字庫：閱讀時隨手收藏生字與例句上下文，並可一鍵無縫同步匯入 VocabMin 主應用程式。',
+      '🛡️ 現代化 Shadow DOM 隔離設計：彈出視窗與閱讀版面完全隔離，支援拖曳移動，閱讀體驗絲滑零干擾。'
+    ]
+  },
+  {
     version: '1.4.7',
     date: '2026-10-06',
     type: 'feat',

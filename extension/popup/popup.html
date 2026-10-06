@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VocabMin Companion</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="logo-group">
+        <div class="logo-icon">V</div>
+        <div class="logo-text">
+          <h1>VocabMin Companion</h1>
+          <span class="sub-text">智慧閱讀隨選助手</span>
+        </div>
+      </div>
+      <span class="version-tag">v1.0.0</span>
+    </header>
+
+    <!-- Nav Tabs -->
+    <nav class="popup-nav">
+      <button class="nav-btn active" data-tab="words">
+        <span>📑 最近生字</span>
+        <span class="count-badge" id="word-count-badge">0</span>
+      </button>
+      <button class="nav-btn" data-tab="lookup">
+        <span>🔍 隨手查詞</span>
+      </button>
+      <button class="nav-btn" data-tab="settings">
+        <span>⚙️ 設定</span>
+      </button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="popup-body">
+      <!-- Tab 1: Saved Words -->
+      <section class="tab-pane active" id="pane-words">
+        <div class="pane-toolbar">
+          <div class="search-input-wrapper">
+            <input type="text" id="words-filter-input" placeholder="搜尋收錄的單字...">
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn-sm btn-primary" id="btn-sync-vocabmin" title="同步至 VocabMin 網頁版">
+              🔄 同步到網頁
+            </button>
+            <button class="btn-sm btn-secondary" id="btn-export-words" title="複製 JSON 格式">
+              📋 匯出
+            </button>
+            <button class="btn-sm btn-danger" id="btn-clear-words" title="清空全部">
+              🗑️
+            </button>
+          </div>
+        </div>
+
+        <div class="words-list" id="words-list-container">
+          <!-- Dynamically populated -->
+        </div>
+
+        <div class="empty-state" id="words-empty-state" style="display: none;">
+          <div class="empty-icon">📖</div>
+          <h3>尚未收錄生字</h3>
+          <p>在瀏覽器中閱讀 PDF 或網頁時，選取英文單字並點擊「收錄至 VocabMin」，單字將即時保存在這裡！</p>
+        </div>
+      </section>
+
+      <!-- Tab 2: Quick Lookup -->
+      <section class="tab-pane" id="pane-lookup">
+        <div class="lookup-form">
+          <input type="text" id="quick-lookup-input" placeholder="輸入要查詢的單字或句子..." autofocus>
+          <button class="btn-primary" id="btn-quick-lookup">查詢</button>
+        </div>
+
+        <div class="lookup-result-wrapper" id="lookup-result-container">
+          <div class="lookup-tip">
+            💡 支援輸入單一單字、片語、或完整英文長難句，即時調用 VocabMin AI 進行精準釋義與語法剖析。
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: Settings -->
+      <section class="tab-pane" id="pane-settings">
+        <div class="settings-group">
+          <label class="setting-label" for="setting-api-url">VocabMin 伺服器網址</label>
+          <input type="url" id="setting-api-url" class="setting-input" placeholder="https://vocabmin.ai.studio">
+          <span class="setting-hint">預設為雲端版，若本地開發可設為 <code>http://localhost:3000</code></span>
+        </div>
+
+        <div class="settings-group">
+          <label class="setting-label" for="setting-api-key">Google Gemini API Key (可選填)</label>
+          <input type="password" id="setting-api-key" class="setting-input" placeholder="AIzaSy...">
+          <span class="setting-hint">若伺服器未預設 Key，可在此填寫您的自訂 Gemini API Key</span>
+        </div>
+
+        <div class="settings-group toggle-group">
+          <div class="toggle-text">
+            <span class="setting-label">劃詞時顯示浮動按鈕</span>
+            <span class="setting-hint">選取英文文字時自動在上方顯示「查單字」標籤</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-enable-bubble" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="settings-actions">
+          <button class="btn-primary" id="btn-save-settings">儲存設定</button>
+          <button class="btn-secondary" id="btn-test-connection">測試伺服器連線</button>
+        </div>
+
+        <div class="settings-feedback" id="settings-feedback"></div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="popup-footer">
+      <button class="footer-app-btn" id="btn-open-vocabmin-app">
+        🚀 前往 VocabMin 學習中心（單字複習 / AI 閱讀器）
+      </button>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

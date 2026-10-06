@@ -305,6 +305,23 @@ export default function App() {
     [dailyStats, settings, user, recordActivity, showToast]
   );
 
+  // Listen for words synced from VocabMin Companion Chrome Extension
+  useEffect(() => {
+    const handleExtensionMessage = (event: MessageEvent) => {
+      if (event.data?.source === 'VOCABMIN_EXTENSION') {
+        if (event.data.action === 'VOCABMIN_NEW_WORD_ADDED' && event.data.payload) {
+          handleAddWords([event.data.payload]);
+          showToast(`已從擴充功能收錄單字：${event.data.payload.term}`);
+        } else if (event.data.action === 'VOCABMIN_SYNC_WORDS_BULK' && Array.isArray(event.data.payload)) {
+          handleAddWords(event.data.payload);
+          showToast(`已成功同步 ${event.data.payload.length} 個擴充功能收錄的單字！`);
+        }
+      }
+    };
+    window.addEventListener('message', handleExtensionMessage);
+    return () => window.removeEventListener('message', handleExtensionMessage);
+  }, [handleAddWords, showToast]);
+
   // Single word review update
   const handleUpdateWordReview = useCallback(
     (wordId: string, updates: Partial<Word>) => {

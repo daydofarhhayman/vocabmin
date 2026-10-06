@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "VocabMin Companion - 智慧英文閱讀與單字隨選助手",
+  "short_name": "VocabMin",
+  "version": "1.0.0",
+  "description": "專為英文閱讀與 PDF 設計的智慧隨選助手：即時單字釋義、發音、長難句 AI 語法結構解析，一鍵同步收錄至 VocabMin 單字庫。",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "VocabMin Companion"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "contextMenus",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
