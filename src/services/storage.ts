@@ -14,6 +14,8 @@ import {
 import {
   getAuth,
   signInWithPopup,
+  signInAnonymously,
+  linkWithPopup,
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
@@ -89,7 +91,8 @@ try {
 
 export class StorageService {
   private currentUser: User | null = null;
-  private authListener: ((user: User | null) => void) | null = null;
+  private authListeners: ((user: User | null, isReady: boolean) => void)[] = [];
+  private isAuthInitialized = false;
 
   constructor() {
     this.initAuth();
@@ -99,18 +102,22 @@ export class StorageService {
     if (firebaseAuth) {
       onAuthStateChanged(firebaseAuth, (user) => {
         this.currentUser = user;
-        if (this.authListener) {
-          this.authListener(user);
-        }
+        this.isAuthInitialized = true;
+        this.authListeners.forEach((l) => l(user, true));
       });
+    } else {
+      this.isAuthInitialized = true;
+      this.authListeners.forEach((l) => l(null, true));
     }
   }
 
-  public onAuthChanged(listener: (user: User | null) => void): () => void {
-    this.authListener = listener;
-    listener(this.currentUser);
+  public onAuthChanged(listener: (user: User | null, isReady: boolean) => void): () => void {
+    this.authListeners.push(listener);
+    if (this.isAuthInitialized) {
+      listener(this.currentUser, true);
+    }
     return () => {
-      this.authListener = null;
+      this.authListeners = this.authListeners.filter((l) => l !== listener);
     };
   }
 
@@ -127,17 +134,81 @@ export class StorageService {
     return result.user;
   }
 
+  public async signInAnonymously(): Promise<User> {
+    if (!firebaseAuth) {
+      throw new Error('Firebase Auth 尚未初始化');
+    }
+    const result = await signInAnonymously(firebaseAuth);
+    this.currentUser = result.user;
+    return result.user;
+  }
+
+  public async linkWithGoogle(): Promise<User> {
+    if (!firebaseAuth || !googleProvider) {
+      throw new Error('Firebase Auth 尚未初始化');
+    }
+    if (!this.currentUser) {
+      throw new Error('尚未登入任何帳號');
+    }
+    const result = await linkWithPopup(this.currentUser, googleProvider);
+    this.currentUser = result.user;
+    return result.user;
+  }
+
   public async signOut(): Promise<void> {
     if (firebaseAuth) {
-      await signOut(firebaseAuth);
-      this.currentUser = null;
+      try {
+        await signOut(firebaseAuth);
+      } catch (e) {
+        console.warn('SignOut warning:', e);
+      }
+    }
+    this.clearAllUserData();
+    this.currentUser = null;
+  }
+
+  // Scoped key generators to prevent cross-user data pollution
+  private getWordsKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid;
+    return id ? `vocabmin_words_${id}` : STORAGE_KEYS.WORDS;
+  }
+
+  private getStatsKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid;
+    return id ? `vocabmin_stats_${id}` : STORAGE_KEYS.STATS;
+  }
+
+  private getSettingsKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid;
+    return id ? `vocabmin_settings_${id}` : STORAGE_KEYS.SETTINGS;
+  }
+
+  private getArticlesKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid;
+    return id ? `vocabmin_articles_${id}` : STORAGE_KEYS.ARTICLES;
+  }
+
+  // Wipes all user data completely on logout
+  public clearAllUserData(): void {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('vocabmin_')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch (e) {
+      console.error('Failed to clear user data from localStorage:', e);
     }
   }
 
-  // Local Storage Methods
-  public getLocalWords(): Word[] {
+  // Local Storage Methods (Isolated by UID)
+  public getLocalWords(uid?: string): Word[] {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.WORDS);
+      const key = this.getWordsKey(uid);
+      const data = localStorage.getItem(key);
       if (data !== null) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) return parsed;
@@ -148,40 +219,44 @@ export class StorageService {
     }
   }
 
-  public saveLocalWords(words: Word[]): void {
+  public saveLocalWords(words: Word[], uid?: string): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.WORDS, JSON.stringify(words));
+      const key = this.getWordsKey(uid);
+      localStorage.setItem(key, JSON.stringify(words));
     } catch (e) {
       console.error('Failed to save words locally:', e);
     }
   }
 
-  public getLocalStats(): DailyStats {
+  public getLocalStats(uid?: string): DailyStats {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.STATS);
+      const key = this.getStatsKey(uid);
+      const data = localStorage.getItem(key);
       if (data) return JSON.parse(data);
       const today = new Date().toISOString().split('T')[0];
       const initial: DailyStats = {
         [today]: { added: 0, reviewed: 0, quizzes: 0 }
       };
-      localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(initial));
+      localStorage.setItem(key, JSON.stringify(initial));
       return initial;
     } catch {
       return {};
     }
   }
 
-  public saveLocalStats(stats: DailyStats): void {
+  public saveLocalStats(stats: DailyStats, uid?: string): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(stats));
+      const key = this.getStatsKey(uid);
+      localStorage.setItem(key, JSON.stringify(stats));
     } catch (e) {
       console.error('Failed to save stats locally:', e);
     }
   }
 
-  public getLocalSettings(): AppSettings {
+  public getLocalSettings(uid?: string): AppSettings {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      const key = this.getSettingsKey(uid);
+      const data = localStorage.getItem(key);
       if (data) {
         return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
       }
@@ -189,18 +264,20 @@ export class StorageService {
     return { ...DEFAULT_SETTINGS };
   }
 
-  public saveLocalSettings(settings: AppSettings): void {
+  public saveLocalSettings(settings: AppSettings, uid?: string): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+      const key = this.getSettingsKey(uid);
+      localStorage.setItem(key, JSON.stringify(settings));
     } catch (e) {
       console.error('Failed to save settings locally:', e);
     }
   }
 
   // Articles & Reader Storage Methods
-  public getLocalArticles(): Article[] {
+  public getLocalArticles(uid?: string): Article[] {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.ARTICLES);
+      const key = this.getArticlesKey(uid);
+      const data = localStorage.getItem(key);
       if (data !== null) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
@@ -208,31 +285,33 @@ export class StorageService {
         }
       }
       // Initialize with default curated articles on first load
-      localStorage.setItem(STORAGE_KEYS.ARTICLES, JSON.stringify(DEFAULT_ARTICLES));
+      localStorage.setItem(key, JSON.stringify(DEFAULT_ARTICLES));
       return DEFAULT_ARTICLES;
     } catch {
-      return [];
+      return DEFAULT_ARTICLES;
     }
   }
 
-  public clearAllArticles(): void {
+  public clearAllArticles(uid?: string): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.ARTICLES, JSON.stringify([]));
+      const key = this.getArticlesKey(uid);
+      localStorage.setItem(key, JSON.stringify([]));
     } catch (e) {
       console.error('Failed to clear articles locally:', e);
     }
   }
 
-  public saveLocalArticles(articles: Article[]): void {
+  public saveLocalArticles(articles: Article[], uid?: string): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.ARTICLES, JSON.stringify(articles));
+      const key = this.getArticlesKey(uid);
+      localStorage.setItem(key, JSON.stringify(articles));
     } catch (e) {
       console.error('Failed to save articles locally:', e);
     }
   }
 
-  public saveArticle(article: Article): Article[] {
-    const list = this.getLocalArticles();
+  public saveArticle(article: Article, uid?: string): Article[] {
+    const list = this.getLocalArticles(uid);
     const idx = list.findIndex((a) => a.id === article.id);
     let updated: Article[];
     if (idx >= 0) {
@@ -241,14 +320,14 @@ export class StorageService {
     } else {
       updated = [article, ...list];
     }
-    this.saveLocalArticles(updated);
+    this.saveLocalArticles(updated, uid);
     return updated;
   }
 
-  public deleteArticle(id: string): Article[] {
-    const list = this.getLocalArticles();
+  public deleteArticle(id: string, uid?: string): Article[] {
+    const list = this.getLocalArticles(uid);
     const updated = list.filter((a) => a.id !== id);
-    this.saveLocalArticles(updated);
+    this.saveLocalArticles(updated, uid);
     return updated;
   }
 
@@ -332,15 +411,11 @@ export class StorageService {
   }
 
   // Cloud Synchronization Methods
-  public async syncFromCloud(): Promise<{ words?: Word[]; stats?: DailyStats; settings?: AppSettings } | null> {
+  public async syncFromCloud(): Promise<{ words: Word[]; stats?: DailyStats; settings?: AppSettings } | null> {
     if (!this.currentUser || !firestoreDb) return null;
     const uid = this.currentUser.uid;
 
     try {
-      // 0. Check meta to determine if user has synced before
-      const metaSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'meta'));
-      const hasSyncedBefore = metaSnap.exists();
-
       // 1. Settings
       let cloudSettings: AppSettings | undefined;
       const settingsSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'));
@@ -355,16 +430,12 @@ export class StorageService {
         cloudStats = statsSnap.data() as DailyStats;
       }
 
-      // 3. Words
-      let cloudWords: Word[] | undefined;
+      // 3. Words - strictly isolated by UID; defaults to empty array for new/clean users
+      const cloudWords: Word[] = [];
       const wordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
       if (!wordsSnap.empty) {
-        cloudWords = [];
-        wordsSnap.forEach((docSnap) => cloudWords!.push(docSnap.data() as Word));
+        wordsSnap.forEach((docSnap) => cloudWords.push(docSnap.data() as Word));
         cloudWords.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-      } else if (hasSyncedBefore) {
-        // User has a cloud database profile and intentionally has 0 words in the library!
-        cloudWords = [];
       }
 
       return {

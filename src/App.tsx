@@ -18,6 +18,8 @@ const AddWordModal = lazy(() => import('./components/AddWordModal').then((m) => 
 const EditWordModal = lazy(() => import('./components/EditWordModal').then((m) => ({ default: m.EditWordModal })));
 const WordDetailModal = lazy(() => import('./components/WordDetailModal').then((m) => ({ default: m.WordDetailModal })));
 const CambridgeModal = lazy(() => import('./components/CambridgeModal').then((m) => ({ default: m.CambridgeModal })));
+import { BookOpen } from 'lucide-react';
+import { LoginView } from './components/LoginView';
 import { normalizePos } from './utils/pos';
 import { User } from 'firebase/auth';
 import { HomeConfig, loadHomeConfig, saveHomeConfig, DEFAULT_HOME_CONFIG } from './utils/homeConfig';
@@ -26,11 +28,16 @@ import type { ActiveStudyQuestion } from './components/StudyHubView';
 export default function App() {
   // Core Data State
   const [words, setWords] = useState<Word[]>([]);
-  const [articles, setArticles] = useState<Article[]>(() => storage.getLocalArticles());
+  const [articles, setArticles] = useState<Article[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStats>({});
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [activeStudyQuestion, setActiveStudyQuestion] = useState<ActiveStudyQuestion | null>(null);
+
+  // Authentication State
   const [user, setUser] = useState<User | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   // Navigation State
   const [currentTab, setCurrentTab] = useState<ViewTab>('home');
@@ -127,43 +134,55 @@ export default function App() {
     showToast('已從文章閱讀庫刪除指定文章');
   }, [showToast]);
 
-  // 1. Initial Load: Load local data instantly
+  // 1. Initial Load: Listen to Firebase Auth state & load user-scoped data
   useEffect(() => {
-    const loadedSettings = storage.getLocalSettings();
-    const loadedWords = storage.getLocalWords();
-    const loadedStats = storage.getLocalStats();
-
-    setSettings(loadedSettings);
-    setDailyStats(loadedStats);
-
-    // Apply gentle SRS decay automatically (built-in system calculation)
-    const { updated, count } = applySRSDecay(loadedWords);
-    setWords(updated);
-    if (count > 0) {
-      storage.saveLocalWords(updated);
-    }
-
-    // Listen to Firebase Auth state
-    const unsubscribe = storage.onAuthChanged(async (currentUser) => {
+    const unsubscribe = storage.onAuthChanged(async (currentUser, isReady) => {
+      setIsAuthChecking(false);
       setUser(currentUser);
+
       if (currentUser) {
-        showToast(`歡迎回來，${currentUser.displayName || currentUser.email}`);
-        // Fetch from cloud
-        const cloudData = await storage.syncFromCloud();
-        if (cloudData) {
-          if (cloudData.words !== undefined) {
+        const welcomeName = currentUser.isAnonymous
+          ? '訪客朋友'
+          : (currentUser.displayName || currentUser.email?.split('@')[0] || '使用者');
+        showToast(`歡迎回來，${welcomeName}`);
+
+        // 1. Load user-scoped local cache for instant UI rendering
+        const localWords = storage.getLocalWords(currentUser.uid);
+        const localStats = storage.getLocalStats(currentUser.uid);
+        const localSettings = storage.getLocalSettings(currentUser.uid);
+        const localArticles = storage.getLocalArticles(currentUser.uid);
+
+        setSettings(localSettings);
+        setDailyStats(localStats);
+        setArticles(localArticles);
+
+        const { updated } = applySRSDecay(localWords);
+        setWords(updated);
+
+        // 2. Reconcile with cloud database (Firestore is authoritative)
+        try {
+          const cloudData = await storage.syncFromCloud();
+          if (cloudData) {
             setWords(cloudData.words);
-            storage.saveLocalWords(cloudData.words);
+            storage.saveLocalWords(cloudData.words, currentUser.uid);
+
+            if (cloudData.stats) {
+              setDailyStats(cloudData.stats);
+              storage.saveLocalStats(cloudData.stats, currentUser.uid);
+            }
+            if (cloudData.settings) {
+              setSettings(cloudData.settings);
+              storage.saveLocalSettings(cloudData.settings, currentUser.uid);
+            }
           }
-          if (cloudData.stats) {
-            setDailyStats(cloudData.stats);
-            storage.saveLocalStats(cloudData.stats);
-          }
-          if (cloudData.settings) {
-            setSettings(cloudData.settings);
-            storage.saveLocalSettings(cloudData.settings);
-          }
+        } catch (syncErr) {
+          console.warn('Initial cloud sync error:', syncErr);
         }
+      } else {
+        // Logged out: Clear all in-memory state completely
+        setWords([]);
+        setDailyStats({});
+        setArticles([]);
       }
     });
 
@@ -608,8 +627,10 @@ export default function App() {
     });
   };
 
-  // Google Login / Logout
+  // Authentication Handlers
   const handleGoogleLogin = async () => {
+    setIsLoggingIn(true);
+    setLoginError(null);
     try {
       await storage.signInWithGoogle();
       showToast('Google 帳號登入成功！');
@@ -619,48 +640,71 @@ export default function App() {
       const domain = window.location.hostname;
 
       if (code === 'auth/unauthorized-domain' || (e?.message && e.message.includes('unauthorized-domain'))) {
-        setConfirmConfig({
-          isOpen: true,
-          title: '需要至 Firebase 授權網域',
-          message: `登入失敗原因：當前執行網域尚未加入 Firebase 授權名單。\n\n【當前網域】：\n${domain}\n\n【解決步驟】：\n1. 開啟 Firebase Console (console.firebase.google.com)\n2. 選擇專案「vocabmin-app」\n3. 前往 Authentication > Settings > Authorized domains (已授權的網域)\n4. 點擊「新增網域」並貼上：${domain}\n5. 儲存後即可立即正常登入！`,
-          type: 'warning',
-          confirmText: '複製網域名稱',
-          onConfirm: () => {
-            navigator.clipboard?.writeText(domain);
-            showToast(`已複製網域：${domain}`);
-            setConfirmConfig((c) => ({ ...c, isOpen: false }));
-          }
-        });
+        setLoginError(`網域未授權：當前網域「${domain}」尚未加入 Firebase 授權名單。\n請至 Firebase 控制台 (Authentication > Settings > Authorized domains) 新增此網域。`);
       } else if (code === 'auth/popup-blocked') {
-        showToast('瀏覽器封鎖了登入彈跳視窗，請允許開啟彈窗後重試');
+        setLoginError('瀏覽器封鎖了登入彈跳視窗，請允許開啟彈跳視窗後重試。');
       } else if (code === 'auth/operation-not-allowed') {
-        setConfirmConfig({
-          isOpen: true,
-          title: 'Google 登入尚未啟用',
-          message: 'Firebase 控制台尚未啟用 Google 登入提供者。\n\n請前往 Firebase 控制台 > Authentication > Sign-in method，將「Google」切換為啟用。',
-          type: 'warning',
-          confirmText: '我知道了',
-          onConfirm: () => setConfirmConfig((c) => ({ ...c, isOpen: false }))
-        });
+        setLoginError('Firebase 控制台尚未啟用 Google 登入提供者。\n請至 Firebase 控制台 > Authentication > Sign-in method 啟用「Google」。');
       } else if (code === 'auth/popup-closed-by-user') {
-        showToast('已取消 Google 登入');
+        // User closed the popup, cancel without heavy error
       } else {
-        setConfirmConfig({
-          isOpen: true,
-          title: 'Google 登入未完成',
-          message: `錯誤代碼：${code || '未知'}\n詳細資訊：${e?.message || '登入時發生錯誤'}\n\n若此網域尚未授權，請在 Firebase 控制台的 Authorized domains 中新增「${domain}」。`,
-          type: 'warning',
-          confirmText: '我知道了',
-          onConfirm: () => setConfirmConfig((c) => ({ ...c, isOpen: false }))
-        });
+        setLoginError(`登入失敗：${e?.message || '發生未知錯誤，請稍後重試'}`);
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleAnonymousLogin = async () => {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    try {
+      await storage.signInAnonymously();
+      showToast('已進入訪客體驗模式！');
+    } catch (e: any) {
+      console.error('Anonymous login error details:', e);
+      const code = e?.code || '';
+      if (code === 'auth/admin-restricted-operation' || code === 'auth/operation-not-allowed') {
+        setLoginError('Firebase 控制台尚未啟用「匿名登入 (Anonymous)」提供者。\n\n請前往 Firebase 控制台 (console.firebase.google.com) > Authentication > Sign-in method，將「匿名 (Anonymous)」切換為啟用即可！');
+      } else {
+        setLoginError(`訪客登入失敗：${e?.message || '請確認網路連線後重試'}`);
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLinkGoogle = async () => {
+    try {
+      await storage.linkWithGoogle();
+      showToast('已成功將匿名帳號綁定至 Google！');
+    } catch (e: any) {
+      console.error('Link Google error details:', e);
+      if (e?.code === 'auth/credential-already-in-use') {
+        showToast('此 Google 帳號已被其他帳號使用，無法重複連結');
+      } else {
+        showToast(`帳號綁定失敗：${e?.message || '請稍後重試'}`);
       }
     }
   };
 
-  const handleGoogleLogout = async () => {
-    await storage.signOut();
-    setUser(null);
-    showToast('已安全登出');
+  const handleLogout = async () => {
+    try {
+      await storage.signOut();
+      setUser(null);
+      setWords([]);
+      setDailyStats({});
+      setArticles([]);
+      setCurrentTab('home');
+      setIsSettingsOpen(false);
+      setCambridgeWord(null);
+      setEditModalWord(null);
+      setDetailWordGroup(null);
+      showToast('已安全登出並清空本機暫存資料');
+    } catch (e: any) {
+      console.error('Logout error:', e);
+      showToast('登出時發生異常');
+    }
   };
 
   const handleManualSync = async () => {
@@ -668,6 +712,38 @@ export default function App() {
     await storage.syncToCloud(words, dailyStats, settings);
     showToast('已同步最新進度至雲端！');
   };
+
+  // 1. Splash Screen: When verifying authentication on startup
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100">
+        <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-xl shadow-indigo-500/25 mb-4 animate-bounce">
+          <BookOpen className="w-6 h-6" />
+        </div>
+        <div className="text-base font-bold text-slate-700 dark:text-slate-200">
+          VocabMin
+        </div>
+        <div className="text-xs text-slate-400 mt-1 animate-pulse">
+          正在同步認證狀態...
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Login Screen: When user is not authenticated
+  if (!user) {
+    return (
+      <LoginView
+        onGoogleLogin={handleGoogleLogin}
+        onAnonymousLogin={handleAnonymousLogin}
+        isLoggingIn={isLoggingIn}
+        loginError={loginError}
+        onClearError={() => setLoginError(null)}
+        isDarkMode={settings.darkMode}
+        onToggleDarkMode={() => handleUpdateSettings({ darkMode: !settings.darkMode })}
+      />
+    );
+  }
 
   const currentAccent = (settings.accentColor as string) || 'indigo';
   const ambientGlowMap: Record<string, [string, string]> = {
@@ -698,7 +774,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         user={user}
         onLogin={handleGoogleLogin}
-        onLogout={handleGoogleLogout}
+        onLogout={handleLogout}
         dueCount={dueWordsCount}
       />
 
@@ -944,7 +1020,8 @@ export default function App() {
             }}
             user={user}
             onLogin={handleGoogleLogin}
-            onLogout={handleGoogleLogout}
+            onLogout={handleLogout}
+            onLinkGoogle={handleLinkGoogle}
             onSyncCloud={handleManualSync}
             onOpenCustomizeHome={() => {
               setIsSettingsOpen(false);

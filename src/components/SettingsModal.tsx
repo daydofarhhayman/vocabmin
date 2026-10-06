@@ -30,6 +30,7 @@ interface SettingsModalProps {
   onLogin: () => void;
   onLogout: () => void;
   onSyncCloud: () => void;
+  onLinkGoogle?: () => void;
   onOpenAI?: () => void;
   onOpenCustomizeHome?: () => void;
 }
@@ -43,6 +44,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onLogin,
   onLogout,
   onSyncCloud,
+  onLinkGoogle,
   onOpenCustomizeHome
 }) => {
   const t = TRANSLATIONS[settings.lang];
@@ -77,29 +79,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </h4>
 
             {user ? (
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-bold text-slate-800 dark:text-white block">
-                    {user.displayName || user.email}
-                  </span>
-                  <span className="text-xs text-slate-400">雲端即時同步已啟用</span>
+              user.isAnonymous ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-bold text-slate-800 dark:text-white block flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse"></span>
+                        <span>訪客體驗帳號 (匿名登入)</span>
+                      </span>
+                      <span className="text-xs text-slate-400">目前以匿名訪客身分體驗，進度暫存於此裝置</span>
+                    </div>
+                    <button
+                      onClick={onLogout}
+                      className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition flex items-center gap-1"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>登出</span>
+                    </button>
+                  </div>
+                  {onLinkGoogle && (
+                    <div className="p-3 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 rounded-xl flex items-center justify-between">
+                      <div className="text-xs text-purple-700 dark:text-purple-300">
+                        想要跨裝置保留單字庫？立即綁定 Google 帳號！
+                      </div>
+                      <button
+                        onClick={onLinkGoogle}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 flex-shrink-0"
+                      >
+                        <LogIn className="w-3.5 h-3.5" />
+                        <span>綁定 Google</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={onSyncCloud}
-                    className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition"
-                  >
-                    立即同步
-                  </button>
-                  <button
-                    onClick={onLogout}
-                    className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition flex items-center gap-1"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>登出</span>
-                  </button>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm font-bold text-slate-800 dark:text-white block">
+                      {user.displayName || user.email}
+                    </span>
+                    <span className="text-xs text-slate-400">雲端即時同步已啟用</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={onSyncCloud}
+                      className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition"
+                    >
+                      立即同步
+                    </button>
+                    <button
+                      onClick={onLogout}
+                      className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition flex items-center gap-1"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>登出</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )
             ) : (
               <div className="flex items-center justify-between">
                 <div>

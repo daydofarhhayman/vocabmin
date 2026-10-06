@@ -13,6 +13,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.5.1',
+    date: '2026-10-06',
+    type: 'fix',
+    changes: [
+      '🚪 全新獨立登入介面（LoginView）與認證守衛：登出後不再滯留主畫面，必須登入後方可進入學習中心。',
+      '✨ 支援 Firebase 匿名快速登入（訪客試用模式）：無需輸入信箱密碼，一秒即可進入體驗完整功能，並支援日後無縫綁定升級 Google 帳號。',
+      '🧹 徹底解決本地與雲端資料污染問題：全面改採 UID 隔離儲存（User-Scoped LocalStorage），新帳號不再誤繼承前人舊資料。',
+      '🔒 安全登出全面清空機制：點擊登出時，即刻清除本機所有單字暫存、複習統計與快取，並立即導向登入介面，實現 100% 乾淨隱私保護。'
+    ]
+  },
+  {
     version: '1.5.0',
     date: '2026-10-06',
     type: 'feat',
