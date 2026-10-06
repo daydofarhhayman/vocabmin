@@ -771,7 +771,7 @@ export default function App() {
             onOpenCambridge={(term) => setCambridgeWord(term)}
             onBackToHome={() => setCurrentTab('home')}
             initialArticleId={activeReaderArticleId}
-            onClearInitialArticleId={() => setActiveReaderArticleId(null)}
+            onActiveArticleChange={setActiveReaderArticleId}
             appSettings={settings}
           />
         )}

@@ -307,16 +307,60 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     });
   };
 
-  // Active scenario config based on the user's current functional tab
-  const scenario = useMemo(() => {
-    return SCENARIO_CONFIGS[currentTab] || SCENARIO_CONFIGS.home;
-  }, [currentTab]);
-
   // Current reading article if in reader mode
   const currentArticle = useMemo(() => {
     if (currentTab !== 'reader' || !activeReaderArticleId) return null;
     return articles.find((a) => a.id === activeReaderArticleId) || null;
   }, [currentTab, activeReaderArticleId, articles]);
+
+  // Active scenario config dynamically tailored to user's live screen state
+  const scenario = useMemo(() => {
+    const base = SCENARIO_CONFIGS[currentTab] || SCENARIO_CONFIGS.home;
+    if (currentTab === 'reader') {
+      if (currentArticle) {
+        return {
+          ...base,
+          title: `文章伴讀・《${currentArticle.title}》`,
+          shortLabel: '文章伴讀',
+          desc: `CEFR ${currentArticle.level || 'B1'} 等級 (${currentArticle.wordCount || 0} 字)・全篇解析、生詞提煉、長難句拆解`,
+          chips: [
+            `請幫我挑出《${currentArticle.title}》這篇文章中的核心難字與重點詞彙`,
+            `請為我總結《${currentArticle.title}》的核心寓意與段落重點`,
+            `幫我深度拆解文章中最具代表性的長難句文法結構`,
+            `作者在這篇文章中想要傳達什麼情感與核心立場？`,
+            `文章中有哪些適合用於英文寫作與口說的實用亮點搭配詞？`,
+            `請針對這篇文章的內容出 2 道閱讀理解測驗題考考我`
+          ]
+        };
+      } else {
+        return {
+          ...base,
+          title: '文章閱讀・書架總覽顧問',
+          shortLabel: '書架顧問',
+          desc: `目前書架共有 ${articles.length} 篇文章・讀物推薦、難度評估與新主題文章生成`,
+          chips: [
+            `根據我的程度，推薦我現在先讀書架上的哪一篇文章？`,
+            `請幫我生成一篇關於AI與科技創新的 B2 雙語短文收錄到書架`,
+            `書架現有文章的主題分佈與最佳進階閱讀順序是什麼？`,
+            `我想讀一篇短篇故事，幫我寫一篇適合休閒閱讀的文章`
+          ]
+        };
+      }
+    }
+    if (currentTab === 'home') {
+      return {
+        ...base,
+        desc: `連續打卡 ${dailyStats?.streak || 0} 天・待複習 ${dueWordsCount} 字・今日已學 ${dailyStats?.learnedToday || 0} 字`,
+        chips: [
+          '根據我今日的待複習狀況，為我規劃最高效的學習順序',
+          '分析我目前最常遺忘的生疏單字，並給予深度記憶建議',
+          '今天只有 10 分鐘，請為我推薦極速微學習菜單',
+          '教我如何利用間隔重複(SRS)最高效穩固長期記憶'
+        ]
+      };
+    }
+    return base;
+  }, [currentTab, currentArticle, articles.length, dailyStats, dueWordsCount]);
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -599,31 +643,62 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     setIsLoading(true);
 
     try {
-      // Dynamic live context based on current page
-      const contextLines = [
-        `【使用者當前所在功能分頁】: ${scenario.title} (${scenario.desc})`,
-        `【單字庫總量】: ${words.length} 個單字，【今日待複習】: ${dueWordsCount} 個單字。`
-      ];
+      // Screen context object so AI knows exact live user situation
+      const screenContext = {
+        currentTab,
+        scenarioTitle: scenario.title,
+        scenarioDesc: scenario.desc,
+        totalWordsCount: words.length,
+        dueWordsCount,
+        dailyStreak: dailyStats?.streak || 0,
+        learnedToday: dailyStats?.learnedToday || 0,
+        isReadingArticle: !!currentArticle,
+        activeArticleTitle: currentArticle?.title || null
+      };
 
-      if (currentArticle) {
-        contextLines.push(
-          `【當前正在閱讀的文章】: 《${currentArticle.title}》 (${currentArticle.level || 'B1'} 等級, ${currentArticle.category || 'General'})`,
-          `【文章摘錄】: "${currentArticle.content.slice(0, 300)}..."`
-        );
-      }
+      // Full current article details to eliminate hallucination completely
+      const currentArticlePayload = currentArticle
+        ? {
+            id: currentArticle.id,
+            title: currentArticle.title,
+            subtitle: currentArticle.subtitle,
+            level: currentArticle.level,
+            category: currentArticle.category,
+            wordCount: currentArticle.wordCount,
+            summary: currentArticle.summary,
+            content: currentArticle.content, // FULL ARTICLE CONTENT
+            translationZh: currentArticle.translationZh,
+            savedWordTerms: currentArticle.savedWordTerms,
+            keyVocabulary: currentArticle.keyVocabulary?.map((k) => ({
+              term: k.term,
+              pos: k.pos,
+              def: k.def,
+              level: k.level
+            })),
+            grammarPoints: currentArticle.grammarPoints?.map((g) => ({
+              sentence: g.sentence,
+              structure: g.structure,
+              explanation: g.explanation
+            }))
+          }
+        : undefined;
 
       // Sample of user words for vocabulary relevance
-      const existingWordsSummary = words.slice(0, 25).map((w) => ({
+      const existingWordsSummary = words.slice(0, 30).map((w) => ({
         term: w.term,
         pos: w.pos,
         def: w.def,
         level: w.level
       }));
 
-      const existingArticlesSummary = articles.slice(0, 5).map((a) => ({
+      // Existing articles summary across the library
+      const existingArticlesSummary = articles.slice(0, 20).map((a) => ({
         id: a.id,
         title: a.title,
-        level: a.level
+        level: a.level,
+        category: a.category,
+        wordCount: a.wordCount,
+        summary: a.summary
       }));
 
       const historyToSend = messages.slice(-6).map((m) => ({
@@ -645,13 +720,8 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           userPrompt: text,
           scenario: scenario.title,
           scenarioDesc: scenario.desc,
-          currentArticle: currentArticle
-            ? {
-                title: currentArticle.title,
-                level: currentArticle.level,
-                category: currentArticle.category
-              }
-            : undefined,
+          screenContext,
+          currentArticle: currentArticlePayload,
           messages: historyToSend,
           existingWordsSummary,
           existingArticlesSummary,

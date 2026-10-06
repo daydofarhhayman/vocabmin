@@ -532,7 +532,8 @@ app.post('/api/ai/chat', async (req, res) => {
       existingArticlesSummary,
       scenario,
       scenarioDesc,
-      currentArticle
+      currentArticle,
+      screenContext
     } = req.body;
 
     const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
@@ -570,14 +571,36 @@ app.post('/api/ai/chat', async (req, res) => {
     const systemInstruction = `You are VocabMin AI (智能單字管理與全能英語學習智囊), an empathetic, knowledgeable, and intuitive English learning coach, linguistic expert, and bilingual reading guide.
 
 ### CORE MISSION:
-Listen carefully to the user's message and understand their true intent in context. Give direct, insightful, natural, and helpful responses without robotic deflections or unsolicited content.
+Listen carefully to the user's message and understand their true intent in context. Give direct, insightful, natural, and helpful responses without robotic deflections, hallucinations, or unsolicited content.
 
 ### RESPONSE FORMAT:
 You must strictly output JSON matching this schema:
 - "reply" (string, required): Your conversational response to the user.
 - "words" (array, optional): New vocabulary words to import/learn. Empty array [] when not adding/recommending vocabulary.
-- "article" (object, optional): Structured reading article. ONLY include this when the user explicitly requests to read, generate, or import an article.
+- "article" (object, optional): Structured reading article. ONLY include this when the user explicitly requests to create, generate, or import a brand new article.
 - "action" (object, optional): Explicit database action proposal. ONLY include this when the user explicitly commands a library modification.
+
+### 🛑 CRITICAL ANTI-HALLUCINATION RULES FOR READING (文章閱讀防幻覺核心準則):
+1. 當使用者正在閱讀文章（上下文包含【使用者目前正開啟並停留在以下文章的閱讀畫面】）時：
+   - 使用者的目光「正注視著這篇文章」！
+   - 當使用者提出以下需求時：
+     * 「請幫我挑出此文章的難字」、「挑出生詞」、「文章中的生詞」
+     * 「這篇文章在講什麼」、「總結這篇」、「段落大意」
+     * 「分析這句話的文法」、「解釋這段的意思」
+     * 或是任何提及該文章標題的提問
+   - 你的鐵律回應要求：
+     * 🚨 絕對禁止說「您沒有提供文章」、「您沒有指定哪一篇」或「我的閱讀庫中還沒有這篇文章」！因為文章就在使用者眼前！
+     * 🚨 絕對禁止擅自編造或生成一篇全新、無關的假文章（嚴禁隨機輸出 Digital Nomads 或其他任何短文）！
+     * 🚨 必須 100% 嚴格基於所提供之《${currentArticle?.title || '當前文章'}》完整正文進行分析與回答！
+     * 當使用者要求「挑出難字/生詞」時：
+       - 從該文章的真實英文正文中精選 4~8 個值得學習的進階或核心單字。
+       - 在 "reply" 中給出清晰、親切的引導說明（結合文章上下文解說其含義）。
+       - 在 "words" 陣列中精確輸出這 4~8 個單字（每個單字包含 term, pos, def, defEn，以及取自文章原句或原語境的 ex 例句）。
+       - 嚴格禁止輸出 "article" 欄位（保持 undefined）！
+
+2. 當使用者在【書架總覽】（尚未開啟單篇文章）時：
+   - 使用者看到的是其文章庫清單。可根據使用者已有文章庫題材進行討論，或提供閱讀規劃。
+   - 只有當使用者明確表示「請幫我寫/生成/創建一篇全新文章」（例如：「幫我寫一篇關於海洋保護的B2英文短文」）時，才在 "article" 物件生成文章。
 
 ### SCENARIO RULES & GUIDANCE:
 
@@ -644,12 +667,54 @@ You must strictly output JSON matching this schema:
 
     // Contextual Grounding
     const contextParts: string[] = [];
-    if (scenario) {
+
+    // 1. Live Screen State Awareness
+    if (screenContext) {
+      const screenLines: string[] = [];
+      const tabNames: Record<string, string> = {
+        home: '首頁概覽儀表板（學習目標卡片、待複習單字提醒、掌握度分佈）',
+        review: '複習測驗（SRS 間隔重複單字卡片複習模式）',
+        quiz: '隨堂測驗（多模式克漏字/拼字/選擇題題型練習）',
+        reader: screenContext.isReadingArticle
+          ? `文章閱讀（正在沉浸式閱讀文章《${screenContext.activeArticleTitle || ''}》）`
+          : `文章閱讀（目前在書架總覽瀏覽文章列表，共 ${screenContext.totalArticlesCount || 0} 篇）`,
+        list: `單字庫（全庫單字管理，共 ${screenContext.totalWordsCount || 0} 個單字）`,
+        ai: 'AI 學習語伴（自由英文深度對話與即時語伴諮詢）'
+      };
+      screenLines.push(`【使用者當前操作畫面】: ${tabNames[screenContext.currentTab] || screenContext.currentTab}`);
+      if (screenContext.totalWordsCount !== undefined) {
+        screenLines.push(`【單字庫總量】: ${screenContext.totalWordsCount} 個單字，【今日待複習】: ${screenContext.dueWordsCount || 0} 個單字`);
+      }
+      if (screenContext.dailyStreak !== undefined) {
+        screenLines.push(`【連續打卡天數】: ${screenContext.dailyStreak} 天，【今日已學】: ${screenContext.learnedToday || 0} 個單字`);
+      }
+      contextParts.push(screenLines.join('\n'));
+    } else if (scenario) {
       contextParts.push(`【使用者當前所在場景】: ${scenario}${scenarioDesc ? ` (${scenarioDesc})` : ''}`);
     }
-    if (currentArticle) {
-      contextParts.push(`【使用者目前正在閱讀的文章】: 《${currentArticle.title}》 (${currentArticle.level || 'B1'} 等級)`);
+
+    // 2. Active Article Full Details Injection (CRITICAL FOR ANTI-HALLUCINATION)
+    if (currentArticle && currentArticle.title) {
+      const artDetails: string[] = [
+        `【⭐⭐⭐ 使用者目前正開啟並停留在以下文章的閱讀畫面（完整內文如下，請嚴格基於此文回答）⭐⭐⭐】`,
+        `文章標題: 《${currentArticle.title}》`,
+        currentArticle.subtitle ? `副標題: ${currentArticle.subtitle}` : '',
+        `難度等級: CEFR ${currentArticle.level || 'B1'}`,
+        `主題分類: ${currentArticle.category || 'General'}`,
+        currentArticle.wordCount ? `文章長度: 約 ${currentArticle.wordCount} 字` : '',
+        currentArticle.summary ? `核心摘要: ${currentArticle.summary}` : '',
+        `\n【文章完整正文內容 (Full Article Text)】:\n${currentArticle.content || '（無內文）'}`,
+        currentArticle.translationZh ? `\n【文章中文對照翻譯】:\n${currentArticle.translationZh}` : '',
+        currentArticle.savedWordTerms && currentArticle.savedWordTerms.length > 0
+          ? `\n【使用者已在本文中標記/收錄的生詞】: ${currentArticle.savedWordTerms.join(', ')}`
+          : '',
+        currentArticle.keyVocabulary && currentArticle.keyVocabulary.length > 0
+          ? `\n【本文已標註的核心詞彙】: ${currentArticle.keyVocabulary.map((k: any) => k.term).join(', ')}`
+          : ''
+      ].filter(Boolean);
+      contextParts.push(artDetails.join('\n'));
     }
+
     if (existingWordsSummary && Array.isArray(existingWordsSummary) && existingWordsSummary.length > 0) {
       contextParts.push(
         `【使用者的單字庫現有資料（共 ${existingWordsSummary.length} 個，僅供查詢/參考，非修改請求請勿擅自操作）】: \n${JSON.stringify(
@@ -660,7 +725,7 @@ You must strictly output JSON matching this schema:
     if (existingArticlesSummary && Array.isArray(existingArticlesSummary) && existingArticlesSummary.length > 0) {
       contextParts.push(
         `【使用者的文章閱讀庫現有收錄資料（共 ${existingArticlesSummary.length} 篇，僅供參考）】: \n${JSON.stringify(
-          existingArticlesSummary.slice(0, 10)
+          existingArticlesSummary.slice(0, 20)
         )}`
       );
     }
@@ -1133,17 +1198,41 @@ You must strictly output JSON matching this schema:
     }
 
     // ── Fallback: Article intent detected but AI forgot to fill article field ──
-    // When user clearly wants an article but AI only replied in text (article is undefined),
-    // auto-generate the article via the dedicated endpoint logic and attach it.
+    // ONLY trigger when user clearly wants a BRAND NEW article generated from scratch.
+    // NEVER trigger when user is reading an existing article or asking about words/analysis!
     if (!parsedData.article) {
       const promptLower = rawUserPrompt.toLowerCase();
-      const wantsArticle =
-        (promptLower.includes('文章') || promptLower.includes('article') || promptLower.includes('短文') || promptLower.includes('閱讀')) &&
-        (promptLower.includes('生成') || promptLower.includes('幫我') || promptLower.includes('寫') ||
-         promptLower.includes('加入') || promptLower.includes('新增') || promptLower.includes('create') ||
-         promptLower.includes('generate') || promptLower.includes('make'));
 
-      if (wantsArticle) {
+      const isAskingAboutWords =
+        promptLower.includes('難字') ||
+        promptLower.includes('生詞') ||
+        promptLower.includes('單字') ||
+        promptLower.includes('挑出') ||
+        promptLower.includes('詞彙') ||
+        promptLower.includes('字彙') ||
+        promptLower.includes('單詞') ||
+        promptLower.includes('vocab');
+
+      const isAskingAboutAnalysis =
+        promptLower.includes('分析') ||
+        promptLower.includes('總結') ||
+        promptLower.includes('摘要') ||
+        promptLower.includes('文法') ||
+        promptLower.includes('句型') ||
+        promptLower.includes('意思') ||
+        promptLower.includes('翻譯') ||
+        promptLower.includes('解釋');
+
+      const wantsNewArticle =
+        !currentArticle &&
+        !isAskingAboutWords &&
+        !isAskingAboutAnalysis &&
+        (promptLower.includes('文章') || promptLower.includes('article') || promptLower.includes('短文')) &&
+        (promptLower.includes('生成') || promptLower.includes('寫一篇') || promptLower.includes('創作') ||
+         promptLower.includes('產生一篇') || promptLower.includes('建立一篇') ||
+         promptLower.includes('generate a new') || promptLower.includes('write an article'));
+
+      if (wantsNewArticle) {
         try {
           const levelMatch = rawUserPrompt.match(/\b(A1|A2|B1|B2|C1|C2)\b/i);
           const requestedLevel = levelMatch ? levelMatch[1].toUpperCase() : 'B2';

@@ -68,6 +68,7 @@ interface ArticleReaderViewProps {
   onBackToHome?: () => void;
   initialArticleId?: string | null;
   onClearInitialArticleId?: () => void;
+  onActiveArticleChange?: (articleId: string | null) => void;
   articles?: Article[];
   onArticlesChange?: (updated: Article[]) => void;
   appSettings?: AppSettings;
@@ -95,6 +96,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   onBackToHome,
   initialArticleId,
   onClearInitialArticleId,
+  onActiveArticleChange,
   articles: externalArticles,
   onArticlesChange,
   appSettings
@@ -104,6 +106,11 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   // State: Articles List & Active Article
   const [articles, setArticles] = useState<Article[]>(() => externalArticles || storage.getLocalArticles());
   const [activeArticleId, setActiveArticleId] = useState<string | null>(initialArticleId || null);
+
+  // Sync active reading article with parent App so AI assistant knows exactly what is being read
+  useEffect(() => {
+    onActiveArticleChange?.(activeArticleId);
+  }, [activeArticleId, onActiveArticleChange]);
 
   useEffect(() => {
     if (externalArticles) {
@@ -116,11 +123,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       const list = externalArticles || storage.getLocalArticles();
       setArticles(list);
       setActiveArticleId(initialArticleId);
-      if (onClearInitialArticleId) {
-        onClearInitialArticleId();
-      }
     }
-  }, [initialArticleId, onClearInitialArticleId, externalArticles]);
+  }, [initialArticleId, externalArticles]);
 
   // State: Reader Settings
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>(() =>
