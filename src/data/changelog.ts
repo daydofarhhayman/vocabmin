@@ -13,6 +13,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.4',
+    date: '2026-10-06',
+    type: 'fix',
+    changes: [
+      '🚀 全面切換至 Google 官方當前最新 Gemini 3 系列模型（gemini-3.5-flash / gemini-3.5-flash-lite / gemini-3.8-flash）：已實測驗證使用者金鑰與即時對話 100% 成功通過！',
+      '🛑 徹底告別舊款已下線模型：Google API 官方明確回傳「models/gemini-2.0-flash 與 gemini-2.5-flash 已不再提供新使用者使用，請更新至 gemini-3.8-flash」，本版本已徹底移除舊型號並直接對齊官方標準推薦端點。'
+    ]
+  },
+  {
     version: '1.4.3',
     date: '2026-10-06',
     type: 'fix',

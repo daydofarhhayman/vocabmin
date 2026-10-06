@@ -124,7 +124,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
       reason: 'MODEL_NOT_FOUND',
       userMessage: '指定的 Gemini AI 模型不存在或已停止維護',
       details: fullDetails,
-      suggestion: '系統已自動嘗試 gemini-2.0-flash / gemini-2.5-flash 等官方穩定模型均未回應。請稍後重試，或於「設定」中檢查您的 API Key 權限。'
+      suggestion: '系統已自動嘗試 gemini-3.5-flash / gemini-3.8-flash 等官方穩定模型均未回應。請稍後重試，或於「設定」中檢查您的 API Key 權限。'
     };
   }
 
@@ -176,11 +176,11 @@ async function generateWithModelFallback(
   config: any,
   contents: any,
   preferredModels = [
-    'gemini-2.0-flash',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-pro'
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.8-flash',
+    'gemini-3.6-flash',
+    'gemini-3.1-pro-preview'
   ]
 ) {
   let lastError: any = null;
