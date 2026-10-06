@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
 import { AIArticleCard } from './AIArticleCard';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import type { ActiveStudyQuestion } from './StudyHubView';
 
 interface FloatingAIAssistantProps {
@@ -1153,15 +1154,19 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                                 )}
                               </div>
                             ) : (
-                              /* Standard Message Text Bubble */
+                              /* Standard Message Text Bubble with Markdown rendering */
                               <div
                                 className={`p-3 rounded-2xl text-xs leading-relaxed shadow-xs ${
                                   isUser
-                                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none'
-                                    : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700/80 rounded-tl-none whitespace-pre-wrap'
+                                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none whitespace-pre-wrap'
+                                    : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700/80 rounded-tl-none'
                                 }`}
                               >
-                                {msg.content}
+                                {isUser ? (
+                                  msg.content
+                                ) : (
+                                  <MarkdownRenderer content={msg.content} isUser={false} />
+                                )}
                               </div>
                             )}
 

@@ -60,6 +60,7 @@ import {
   X
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ArticleReaderViewProps {
   words: Word[];
@@ -2807,7 +2808,11 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           : 'bg-slate-100 dark:bg-slate-800/90 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-200/50 dark:border-slate-700/50'
                       }`}
                     >
-                      <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+                      {msg.role === 'user' ? (
+                        <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+                      ) : (
+                        <MarkdownRenderer content={msg.content} isUser={false} />
+                      )}
 
                       {/* Suggested Words Card inside AI response */}
                       {msg.suggestedWords && msg.suggestedWords.length > 0 && (

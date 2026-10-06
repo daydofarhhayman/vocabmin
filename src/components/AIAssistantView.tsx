@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Word, AppSettings, Article, POS } from '../types';
 import { AIArticleCard } from './AIArticleCard';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 export type AIScenario = 'all' | 'library' | 'writing' | 'practice';
 
@@ -670,15 +671,19 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
                       )}
                     </div>
                   ) : (
-                    /* Bubble Content */
+                    /* Bubble Content with Markdown rendering */
                     <div
                       className={`p-3.5 sm:p-4 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-sm ${
                         isUser
-                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none'
-                          : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-tl-none whitespace-pre-wrap'
+                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none whitespace-pre-wrap'
+                          : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-tl-none'
                       }`}
                     >
-                      {msg.content}
+                      {isUser ? (
+                        msg.content
+                      ) : (
+                        <MarkdownRenderer content={msg.content} isUser={false} />
+                      )}
                     </div>
                   )}
 

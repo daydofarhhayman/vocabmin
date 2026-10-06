@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.7',
+    date: '2026-10-06',
+    type: 'feat',
+    changes: [
+      '✨ AI 回覆訊息框全場景原生 Markdown 格式渲染：徹底解決過往 AI 回覆直接以純文字顯示導致的格式紊亂問題。',
+      '🎨 豐富排版與深色模式全適配：全面支援多級標題（H1-H3）、粗體重點、斜體、單字高亮行內代碼徽章（Code Spans）、語法高亮程式碼區塊（Code Blocks）、引用句（Blockquotes）、條列清單（有序/無序）以及 Markdown 表格。',
+      '💬 全站三大 AI 對話介面統一升級：懸浮 AI 伴讀語伴（Floating Orb）、獨立 AI 學習語伴頁（AIAssistantView）與文章沉浸式閱讀伴讀抽屜（Article Reader Chat）全面同步套用現代化 Markdown 美化排版。'
+    ]
+  },
+  {
     version: '1.4.6',
     date: '2026-10-06',
     type: 'fix',
