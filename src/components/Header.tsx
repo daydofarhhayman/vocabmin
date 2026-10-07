@@ -114,18 +114,6 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
-            onClick={() => setTab('ai')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              currentTab === 'ai'
-                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-purple-500 dark:text-purple-400" />
-            <span>{t.nav_ai}</span>
-          </button>
-
-          <button
             onClick={() => setTab('list')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
               currentTab === 'list'
@@ -135,6 +123,18 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <List className="w-3.5 h-3.5" />
             <span>{t.nav_list}</span>
+          </button>
+
+          <button
+            onClick={() => setTab('ai')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              currentTab === 'ai'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-purple-500 dark:text-purple-400" />
+            <span>{t.nav_ai}</span>
           </button>
         </nav>
 

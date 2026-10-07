@@ -1056,10 +1056,6 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
                         : `首頁儀表板`}
                     </span>
                   </div>
-
-                  <span className="text-[10px] font-mono text-slate-400 shrink-0 ml-2">
-                    即時零幻覺
-                  </span>
                 </div>
 
                 {/* Messages Body */}

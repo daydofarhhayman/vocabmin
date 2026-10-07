@@ -11,10 +11,10 @@ interface MobileNavProps {
 export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, setTab, dueCount }) => {
   const tabs = [
     { id: 'home' as ViewTab, label: '首頁', icon: Home },
-    { id: 'reader' as ViewTab, label: '文章閱讀', icon: BookOpen },
     { id: 'review' as ViewTab, label: '複習測驗', icon: GraduationCap, badge: dueCount },
-    { id: 'ai' as ViewTab, label: 'AI 助手', icon: Sparkles },
-    { id: 'list' as ViewTab, label: '單字庫', icon: List }
+    { id: 'reader' as ViewTab, label: '文章閱讀', icon: BookOpen },
+    { id: 'list' as ViewTab, label: '單字庫', icon: List },
+    { id: 'ai' as ViewTab, label: 'AI 助手', icon: Sparkles }
   ];
 
   return (

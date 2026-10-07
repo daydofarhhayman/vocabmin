@@ -13,6 +13,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.5.4',
+    date: '2026-10-07',
+    type: 'improve',
+    changes: [
+      '🧭 頂部導航欄順序最佳化：將分頁項目依據使用頻率調整為「首頁概覽 ➔ 複習測驗 ➔ 文章閱讀 ➔ 單字庫 ➔ AI 助手」，手機版底部選單同步對齊。',
+      '✨ AI 浮動視窗介面極簡化：移除對話頂部狀態列的「即時零幻覺」標籤，介面更加清爽乾淨。'
+    ]
+  },
+  {
     version: '1.5.3',
     date: '2026-10-06',
     type: 'fix',
