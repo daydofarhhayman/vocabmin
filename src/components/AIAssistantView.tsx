@@ -289,20 +289,39 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
     setIsLoading(true);
 
     try {
-      // Build lightweight summary of existing words and articles to anchor context without hallucinations
-      const existingWordsSummary = existingWords.slice(0, 30).map((w) => ({
+      // Build comprehensive database state awareness so AI can completely read user's data
+      const screenContext = {
+        currentTab: 'ai',
+        scenarioTitle: '全能英語智囊與字庫管家',
+        scenarioDesc: '具備全庫即時讀取、智能問答、字庫管理與文法寫作批改之全能 AI 助理',
+        totalWordsCount: existingWords.length,
+        totalArticlesCount: existingArticles.length,
+        dueWordsCount: existingWords.filter((w) => (w.nextReview || 0) <= Date.now()).length,
+        allWordTerms: existingWords.map((w) => w.term),
+        allArticleTitles: existingArticles.map((a) => a.title),
+        masteryStats: {
+          level0: existingWords.filter((w) => (w.level || 0) === 0).length,
+          level1: existingWords.filter((w) => w.level === 1).length,
+          level2: existingWords.filter((w) => w.level === 2).length,
+          level3: existingWords.filter((w) => (w.level || 0) >= 3).length
+        }
+      };
+
+      // Summary samples of existing words and articles
+      const existingWordsSummary = existingWords.slice(0, 50).map((w) => ({
         term: w.term,
         pos: w.pos,
         def: w.def,
         level: w.level
       }));
 
-      const existingArticlesSummary = existingArticles.slice(0, 10).map((a) => ({
+      const existingArticlesSummary = existingArticles.slice(0, 20).map((a) => ({
         id: a.id,
         title: a.title,
         level: a.level,
         category: a.category,
-        wordCount: a.wordCount
+        wordCount: a.wordCount,
+        summary: a.summary
       }));
 
       // Map chat messages for conversation history
@@ -323,6 +342,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           scenario: currentScenario.name,
           scenarioDesc: currentScenario.desc,
           messages: historyToSend,
+          screenContext,
           existingWordsSummary,
           existingArticlesSummary,
           apiKey: settings?.geminiApiKey
@@ -464,12 +484,30 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   };
 
   const handleAddAllWords = (wordsList: Partial<Word>[], batchKey: string) => {
-    onAddWords(wordsList);
-    const updated = { ...addedWordsMap };
-    wordsList.forEach((_, idx) => {
-      updated[`${batchKey}-${idx}`] = true;
-    });
-    setAddedWordsMap(updated);
+    if (!wordsList || wordsList.length === 0) return;
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: '📥 新增單字確認',
+        message: `確定要將以下 ${wordsList.length} 個單字新增至單字庫嗎？\n\n${wordsList.map((w) => `• ${w.term} (${w.pos || 'n.'})：${w.def || ''}`).slice(0, 6).join('\n')}${wordsList.length > 6 ? `\n...等共 ${wordsList.length} 個單字` : ''}`,
+        type: 'info',
+        confirmText: '確認新增',
+        onConfirm: () => {
+          onAddWords(wordsList);
+          const updated = { ...addedWordsMap };
+          wordsList.forEach((_, idx) => {
+            updated[`${batchKey}-${idx}`] = true;
+          });
+          setAddedWordsMap(updated);
+        }
+      });
+    } else {
+      onAddWords(wordsList);
+      const updated = { ...addedWordsMap };
+      wordsList.forEach((_, idx) => {
+        updated[`${batchKey}-${idx}`] = true;
+      });
+      setAddedWordsMap(updated);
+    }
   };
 
   // Handle explicit database action card execution
@@ -580,6 +618,62 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         if (target) onDeleteArticle?.(target);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
+    } else if (action.type === 'add_words' && Array.isArray(action.addWords || action.words)) {
+      const wordsToAdd = action.addWords || action.words || [];
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '📥 新增單字確認',
+          message: `確定要將以下 ${wordsToAdd.length} 個單字新增至單字庫嗎？\n\n${wordsToAdd.map((w: any) => `• ${w.term} (${w.pos || 'n.'})：${w.def || ''}`).slice(0, 6).join('\n')}${wordsToAdd.length > 6 ? `\n...等共 ${wordsToAdd.length} 個單字` : ''}`,
+          type: 'info',
+          confirmText: '確認新增',
+          onConfirm: () => {
+            onAddWords(wordsToAdd);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功為您將 ${wordsToAdd.length} 個新單字新增至單字庫！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onAddWords(wordsToAdd);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (action.type === 'update_word' && action.updateWord) {
+      const { term, newEntries } = action.updateWord;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✏️ 修改單字確認',
+          message: `確定要更新單字庫中「${term}」的條目資料嗎？`,
+          type: 'warning',
+          confirmText: '確認更新',
+          onConfirm: () => {
+            if (term && newEntries) {
+              onUpdateWordGroup?.(term, newEntries);
+            }
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功更新單字「${term}」的條目！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        if (term && newEntries) {
+          onUpdateWordGroup?.(term, newEntries);
+        }
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'deduplicate_words') {
       if (onRequestConfirm) {
         onRequestConfirm({
@@ -631,8 +725,31 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
     } else if (action.type === 'batch_standardize' && (Array.isArray(action.words) || Array.isArray(action.batchStandardize?.updatedWords))) {
-      onBatchStandardizeWords(action.words || action.batchStandardize?.updatedWords);
-      setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      const listToUpdate = action.words || action.batchStandardize?.updatedWords;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✨ 單字庫批量標準化確認',
+          message: `確定要為單字庫中的單字補齊英英釋義與標準化排版嗎？`,
+          type: 'info',
+          confirmText: '確認執行',
+          onConfirm: () => {
+            onBatchStandardizeWords(listToUpdate);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功完成單字庫標準化更新！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onBatchStandardizeWords(listToUpdate);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (action.type === 'save_article' && action.saveArticle) {
       const art: Article = {
         id: action.saveArticle.id || `art-${Date.now()}`,
@@ -646,31 +763,58 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         readTimeMinutes: Math.max(1, Math.round((action.saveArticle.content || '').split(/\s+/).filter(Boolean).length / 180)),
         savedWordTerms: []
       };
-      onSaveArticle?.(art);
-      setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '📖 收錄文章確認',
+          message: `確定要將文章《${art.title}》收錄至您的文章閱讀庫嗎？`,
+          type: 'info',
+          confirmText: '確認收錄',
+          onConfirm: () => {
+            onSaveArticle?.(art);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將文章《${art.title}》收錄至文章閱讀庫！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onSaveArticle?.(art);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     }
   };
 
   return (
     <div className="flex flex-col h-[calc(100vh-4.25rem)] max-w-6xl mx-auto px-3 sm:px-6 py-4">
-      {/* Top Header & Scenario Switcher */}
+      {/* Top Header & Unified Status */}
       <div className="flex-shrink-0 mb-3 space-y-3">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-2xl bg-gradient-to-tr ${currentScenario.accent} text-white flex items-center justify-center shadow-md shadow-indigo-500/20`}>
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
               <Sparkles className="w-5 h-5 animate-pulse" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-tight">
-                  AI 智能多場景語伴
+                  VocabMin 全能 AI 智囊
                 </h2>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-800/50">
-                  {currentScenario.tag}
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-800/50 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span>已連線雲端資料庫</span>
                 </span>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {currentScenario.desc}
+              <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5 flex-wrap">
+                <span>單字庫現有 <strong className="text-indigo-600 dark:text-indigo-400 font-bold">{existingWords.length}</strong> 個單字</span>
+                <span>•</span>
+                <span>收藏文章 <strong className="text-purple-600 dark:text-purple-400 font-bold">{existingArticles.length}</strong> 篇</span>
+                <span>•</span>
+                <span>今日待複習 <strong className="text-amber-600 dark:text-amber-400 font-bold">{existingWords.filter((w) => (w.nextReview || 0) <= Date.now()).length}</strong> 字</span>
               </p>
             </div>
           </div>
@@ -690,8 +834,12 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           </div>
         </div>
 
-        {/* Scenario Tabs Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {/* Quick Inspiration Category Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+          <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 shrink-0 mr-1 flex items-center gap-1">
+            <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+            <span>靈感話題：</span>
+          </span>
           {SCENARIOS.map((sc) => {
             const Icon = sc.icon;
             const isActive = activeScenario === sc.id;
@@ -699,29 +847,14 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
               <button
                 key={sc.id}
                 onClick={() => setActiveScenario(sc.id)}
-                className={`p-2.5 rounded-2xl text-left transition-all border flex items-center gap-2.5 ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 shrink-0 whitespace-nowrap active:scale-95 ${
                   isActive
-                    ? 'bg-white dark:bg-slate-800 shadow-md border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-500/20'
-                    : 'bg-slate-100/70 dark:bg-slate-800/40 border-slate-200/60 dark:border-slate-700/60 hover:bg-white/60 dark:hover:bg-slate-800/60 opacity-80 hover:opacity-100'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-transparent shadow-sm shadow-indigo-500/20'
+                    : 'bg-white/80 dark:bg-slate-800/80 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
                 }`}
               >
-                <div
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
-                    isActive
-                      ? `bg-gradient-to-tr ${sc.accent} text-white shadow-sm`
-                      : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className={`text-xs font-bold truncate ${isActive ? 'text-slate-900 dark:text-white' : 'text-slate-600 dark:text-slate-400'}`}>
-                    {sc.name}
-                  </div>
-                  <div className="text-[10px] text-slate-400 truncate">
-                    {sc.tag}
-                  </div>
-                </div>
+                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-indigo-500 dark:text-indigo-400'}`} />
+                <span>{sc.name}</span>
               </button>
             );
           })}
@@ -733,17 +866,17 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         {messages.length === 0 ? (
           /* Honest, Clean Initial State (ZERO Hallucinated Pre-canned Dialogues) */
           <div className="flex flex-col items-center justify-center min-h-[300px] text-center max-w-xl mx-auto py-8">
-            <div className={`w-14 h-14 rounded-3xl bg-gradient-to-tr ${currentScenario.accent} text-white flex items-center justify-center shadow-lg shadow-indigo-500/20 mb-4`}>
-              <currentScenario.icon className="w-7 h-7" />
+            <div className={`w-14 h-14 rounded-3xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20 mb-4`}>
+              <Sparkles className="w-7 h-7 animate-pulse" />
             </div>
 
             <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-slate-100 mb-1">
-              您好！我是您的 {currentScenario.name}
+              您好！我是您的 VocabMin 全能 AI 智囊
             </h3>
 
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 max-w-md">
-              目前單字庫收錄 <span className="font-semibold text-indigo-600 dark:text-indigo-400">{existingWords.length}</span> 個單字、<span className="font-semibold text-amber-600 dark:text-amber-400">{existingArticles.length}</span> 篇閱讀文章。
-              請隨時提出任何需求，我將忠實理解您的意圖，提供零預設立場、精準無幻覺的專業協助。
+              已連線讀取您的個人資料庫（目前單字庫共 <span className="font-semibold text-indigo-600 dark:text-indigo-400">{existingWords.length}</span> 個單字、<span className="font-semibold text-purple-600 dark:text-purple-400">{existingArticles.length}</span> 篇閱讀文章）。
+              請隨時提出任何問題或操作指令，我將精準理解您的意圖並提供專業協助。
             </p>
 
             {/* Smart Scenario Starter Chips */}

@@ -44,6 +44,7 @@ interface FloatingAIAssistantProps {
   activeStudyQuestion?: ActiveStudyQuestion | null;
   activeInspectedWord?: string | null;
   onAddWords: (newWords: Partial<Word>[]) => void;
+  onUpdateWordGroup?: (term: string, updatedEntries: Word[]) => void;
   onOpenCambridge: (term: string) => void;
   onNavigateToTab: (tab: ViewTab) => void;
   settings: AppSettings;
@@ -250,6 +251,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   onDeleteArticle,
   onClearAllWords,
   onDeleteWordGroup,
+  onUpdateWordGroup,
   onBatchStandardizeWords,
   onDeduplicateWords,
   onResetAllMastery,
@@ -275,6 +277,108 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   const [executedActions, setExecutedActions] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [chipOffsets, setChipOffsets] = useState<Record<string, number>>({});
+
+  // Draggable floating orb position
+  const [orbPos, setOrbPos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const saved = localStorage.getItem('vocabmin_floating_ai_pos');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    initX: number;
+    initY: number;
+    moved: boolean;
+  } | null>(null);
+
+  // Keep orb within screen bounds on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      setOrbPos((prev) => {
+        if (!prev) return null;
+        const clampedX = Math.max(12, Math.min(window.innerWidth - 68, prev.x));
+        const clampedY = Math.max(12, Math.min(window.innerHeight - 68, prev.y));
+        return { x: clampedX, y: clampedY };
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleDragStart = (clientX: number, clientY: number) => {
+    const defaultX = window.innerWidth - 76;
+    const defaultY = window.innerHeight - (window.innerWidth < 640 ? 120 : 80);
+    const curX = orbPos ? orbPos.x : defaultX;
+    const curY = orbPos ? orbPos.y : defaultY;
+    dragRef.current = {
+      startX: clientX,
+      startY: clientY,
+      initX: curX,
+      initY: curY,
+      moved: false
+    };
+    setIsDragging(true);
+  };
+
+  const handleDragMove = useCallback((clientX: number, clientY: number) => {
+    if (!dragRef.current) return;
+    const dx = clientX - dragRef.current.startX;
+    const dy = clientY - dragRef.current.startY;
+    if (Math.hypot(dx, dy) > 5) {
+      dragRef.current.moved = true;
+    }
+    const newX = Math.max(12, Math.min(window.innerWidth - 68, dragRef.current.initX + dx));
+    const newY = Math.max(12, Math.min(window.innerHeight - 68, dragRef.current.initY + dy));
+    setOrbPos({ x: newX, y: newY });
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setIsDragging(false);
+    setOrbPos((current) => {
+      if (current) {
+        try {
+          localStorage.setItem('vocabmin_floating_ai_pos', JSON.stringify(current));
+        } catch {}
+      }
+      return current;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMouseMove = (e: MouseEvent) => {
+      handleDragMove(e.clientX, e.clientY);
+    };
+    const onMouseUp = () => {
+      handleDragEnd();
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches[0]) {
+        handleDragMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    };
+    const onTouchEnd = () => {
+      handleDragEnd();
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onTouchEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [isDragging, handleDragMove, handleDragEnd]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -573,19 +677,91 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onDeduplicateWords?.();
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
-    } else if (actionType === 'batch_standardize' && (Array.isArray(action.words) || Array.isArray(action.batchStandardize?.updatedWords))) {
-      onBatchStandardizeWords?.(action.words || action.batchStandardize?.updatedWords);
-      setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `bot-done-${Date.now()}`,
-          role: 'assistant',
-          content: `✅ 已完成批量單字標準化更新！`,
-          timestamp: Date.now(),
-          scenarioTab: currentTab
+    } else if (actionType === 'add_words' && Array.isArray(action.words || action.addWords)) {
+      const wordsToAdd = action.words || action.addWords || [];
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '📥 新增單字確認',
+          message: `確定要將以下 ${wordsToAdd.length} 個單字新增至單字庫嗎？\n\n${wordsToAdd.map((w: any) => `• ${w.term} (${w.pos || 'n.'})：${w.def || ''}`).slice(0, 6).join('\n')}${wordsToAdd.length > 6 ? `\n...等共 ${wordsToAdd.length} 個單字` : ''}`,
+          type: 'info',
+          confirmText: '確認新增',
+          onConfirm: () => {
+            onAddWords(wordsToAdd);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功為您將 ${wordsToAdd.length} 個新單字收錄至單字庫！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onAddWords(wordsToAdd);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (actionType === 'update_word' && action.updateWord) {
+      const { term, newEntries } = action.updateWord;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✏️ 修改單字確認',
+          message: `確定要更新單字庫中「${term}」的資料嗎？`,
+          type: 'warning',
+          confirmText: '確認更新',
+          onConfirm: () => {
+            if (term && newEntries && onUpdateWordGroup) {
+              onUpdateWordGroup(term, newEntries);
+            }
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功更新單字「${term}」的條目！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        if (term && newEntries && onUpdateWordGroup) {
+          onUpdateWordGroup(term, newEntries);
         }
-      ]);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (actionType === 'batch_standardize' && (Array.isArray(action.words) || Array.isArray(action.batchStandardize?.updatedWords))) {
+      const listToUpdate = action.words || action.batchStandardize?.updatedWords;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✨ 批量標準化單字庫確認',
+          message: `確定要為單字庫中的單字補齊英英釋義與標準化排版嗎？`,
+          type: 'info',
+          confirmText: '確認執行',
+          onConfirm: () => {
+            onBatchStandardizeWords?.(listToUpdate);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已完成批量單字標準化更新！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onBatchStandardizeWords?.(listToUpdate);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     } else if (actionType === 'save_article' && action.saveArticle) {
       const art: Article = {
         id: action.saveArticle.id || `art-${Date.now()}`,
@@ -599,18 +775,31 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         readTimeMinutes: Math.max(1, Math.round((action.saveArticle.content || '').split(/\s+/).filter(Boolean).length / 180)),
         savedWordTerms: []
       };
-      onSaveArticle?.(art);
-      setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `bot-done-${Date.now()}`,
-          role: 'assistant',
-          content: `✅ 已成功將文章《${art.title}》收錄至文章閱讀庫！`,
-          timestamp: Date.now(),
-          scenarioTab: currentTab
-        }
-      ]);
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '📖 收錄文章確認',
+          message: `確定要將文章《${art.title}》收錄至您的文章閱讀庫嗎？`,
+          type: 'info',
+          confirmText: '確認收錄',
+          onConfirm: () => {
+            onSaveArticle?.(art);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將文章《${art.title}》收錄至文章閱讀庫！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onSaveArticle?.(art);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     }
   }, [
     articles.length,
@@ -622,6 +811,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     onClearAllWords,
     onDeleteArticle,
     onDeleteWordGroup,
+    onUpdateWordGroup,
     onResetAllMastery,
     onDeduplicateWords,
     onBatchStandardizeWords,
@@ -688,13 +878,16 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         scenarioTitle: scenario.title,
         scenarioDesc: scenario.desc,
         totalWordsCount: words.length,
+        totalArticlesCount: articles.length,
         dueWordsCount,
         dailyStreak: dailyStats?.streak || 0,
         learnedToday: dailyStats?.learnedToday || 0,
         isReadingArticle: !!currentArticle,
         activeArticleTitle: currentArticle?.title || null,
         activeStudyQuestion: (currentTab === 'review' || currentTab === 'quiz') ? activeStudyQuestion : null,
-        activeInspectedWord: activeInspectedWord || null
+        activeInspectedWord: activeInspectedWord || null,
+        allWordTerms: words.map((w) => w.term),
+        allArticleTitles: articles.map((a) => a.title)
       };
 
       // Full current article details to eliminate hallucination completely
@@ -913,12 +1106,30 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   };
 
   const handleAddAllWords = (wordsList: Partial<Word>[], batchKey: string) => {
-    onAddWords(wordsList);
-    const updated = { ...addedWordsMap };
-    wordsList.forEach((_, idx) => {
-      updated[`${batchKey}-${idx}`] = true;
-    });
-    setAddedWordsMap(updated);
+    if (!wordsList || wordsList.length === 0) return;
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: '📥 新增單字確認',
+        message: `確定要將以下 ${wordsList.length} 個單字新增至單字庫嗎？\n\n${wordsList.map((w) => `• ${w.term} (${w.pos || 'n.'})：${w.def || ''}`).slice(0, 6).join('\n')}${wordsList.length > 6 ? `\n...等共 ${wordsList.length} 個單字` : ''}`,
+        type: 'info',
+        confirmText: '確認新增',
+        onConfirm: () => {
+          onAddWords(wordsList);
+          const updated = { ...addedWordsMap };
+          wordsList.forEach((_, idx) => {
+            updated[`${batchKey}-${idx}`] = true;
+          });
+          setAddedWordsMap(updated);
+        }
+      });
+    } else {
+      onAddWords(wordsList);
+      const updated = { ...addedWordsMap };
+      wordsList.forEach((_, idx) => {
+        updated[`${batchKey}-${idx}`] = true;
+      });
+      setAddedWordsMap(updated);
+    }
   };
 
   const ScenarioIcon = scenario.icon;
@@ -926,34 +1137,61 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   return (
     <>
       {/* ========================================================================= */}
-      {/* 1. FLOATING ORB (小球) - Fixed at Bottom-Right across ALL pages           */}
+      {/* 1. DRAGGABLE FLOATING ORB (可拖曳移動小浮球) - 隨心拖動不擋畫面            */}
       {/* ========================================================================= */}
-      <div className="fixed bottom-20 sm:bottom-6 right-4 sm:right-6 z-40 select-none group">
-        {!isOpen && (
+      {!isOpen && (
+        <div
+          style={
+            orbPos
+              ? { left: `${orbPos.x}px`, top: `${orbPos.y}px` }
+              : undefined
+          }
+          className={`${
+            orbPos
+              ? 'fixed z-40 select-none'
+              : 'fixed bottom-20 sm:bottom-6 right-4 sm:right-6 z-40 select-none'
+          } ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        >
           <div className="relative flex items-center">
             {/* Scenario Tooltip Pill on Hover */}
             <div className="absolute right-full mr-3 pointer-events-none opacity-0 group-hover:opacity-100 transition-all duration-200 transform translate-x-1 group-hover:translate-x-0 hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 dark:bg-slate-800/95 text-white text-xs font-bold shadow-lg backdrop-blur-md whitespace-nowrap border border-white/10">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>{scenario.shortLabel}：點擊獲得即時場景協助</span>
+              <span>{scenario.shortLabel}：點擊召喚・可隨意拖曳調整位置</span>
             </div>
 
-            {/* The Floating AI Orb Button */}
+            {/* The Draggable Floating AI Orb Button */}
             <button
-              onClick={() => {
+              onMouseDown={(e) => {
+                if (e.button !== 0) return;
+                handleDragStart(e.clientX, e.clientY);
+              }}
+              onTouchStart={(e) => {
+                if (e.touches[0]) {
+                  handleDragStart(e.touches[0].clientX, e.touches[0].clientY);
+                }
+              }}
+              onClick={(e) => {
+                if (dragRef.current?.moved) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  return;
+                }
                 setIsOpen(true);
                 setIsMinimized(false);
               }}
-              className={`relative w-14 h-14 rounded-full bg-gradient-to-tr ${scenario.orbColor} text-white shadow-xl shadow-indigo-500/30 flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 hover:shadow-indigo-500/50 ring-4 ring-white/80 dark:ring-slate-800/80 cursor-pointer overflow-hidden`}
-              title={`${scenario.title} - 點擊召喚 AI 助手`}
+              className={`relative w-14 h-14 rounded-full bg-gradient-to-tr ${scenario.orbColor} text-white shadow-xl shadow-indigo-500/30 flex items-center justify-center transition-transform duration-200 ${
+                isDragging ? 'scale-105 shadow-2xl ring-4 ring-indigo-400' : 'hover:scale-110 active:scale-95 ring-4 ring-white/80 dark:ring-slate-800/80'
+              } cursor-grab active:cursor-grabbing overflow-hidden`}
+              title={`${scenario.title} - 點擊召喚 AI 助手（按住可隨意拖曳位置）`}
             >
               {/* Subtle inner rotating shimmer */}
-              <div className="absolute inset-0 bg-white/20 opacity-0 hover:opacity-100 transition-opacity rounded-full"></div>
+              <div className="absolute inset-0 bg-white/20 opacity-0 hover:opacity-100 transition-opacity rounded-full pointer-events-none"></div>
               
               {/* Pulsing Aura Ring */}
               <div className="absolute -inset-1 rounded-full bg-white/30 animate-ping opacity-20 pointer-events-none"></div>
 
               {/* Icon */}
-              <div className="relative z-10 flex flex-col items-center justify-center">
+              <div className="relative z-10 flex flex-col items-center justify-center pointer-events-none">
                 <Sparkles className="w-6 h-6 animate-pulse" />
                 <span className="text-[8px] font-black tracking-tighter uppercase mt-0.5">
                   AI
@@ -961,11 +1199,11 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
               </div>
 
               {/* Status Dot */}
-              <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-white dark:ring-slate-900"></span>
+              <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-white dark:ring-slate-900 pointer-events-none"></span>
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 2. CONTEXTUAL AI MODAL / DRAWER (場景對話面板)                            */}

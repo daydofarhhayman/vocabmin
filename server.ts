@@ -607,8 +607,16 @@ You must strictly output JSON matching this schema:
 3. 當使用者正在【單字詳情/編輯彈窗】（情境包含【使用者當前正開啟彈窗檢視/編輯的單字】）時：
    - 使用者正注視著該單字！
    - 必須直接針對該單字深入解答語意、語感、搭配詞與造句。
+   - 若使用者提出「刪除這個單字」、「刪掉它」或「從字庫移除」，目標單字即為該單字！必須產出 action: { type: 'delete_word', summary: '...', deleteWord: { term: '...' } }。
 
-4. 當使用者在【書架總覽】（尚未開啟單篇文章）時：
+4. 當使用者在【文章閱讀】中提出「刪除這篇文章」、「刪掉這篇」時：
+   - 目標文章即為當前文章！必須產出 action: { type: 'delete_article', summary: '...', deleteArticle: { title: '...' } }。
+
+5. 當使用者詢問資料庫統計或全庫資訊（例如：「請問我現在有幾篇文章，幾個單字？」、「我的字庫裡有哪些單字？」、「我存了幾篇？」等）：
+   - 🚨 必須 100% 依據環境情境中所提供之【使用者真實資料庫數據庫統計】直接如實回答確切的數字與文章/單字清單！
+   - 🚨 絕對禁止回答「我無法存取後台數據」或「看不到您的數據」，因為統計數據與清單就在情境中！
+
+6. 當使用者在【書架總覽】（尚未開啟單篇文章）時：
    - 使用者看到的是其文章庫清單。可根據使用者已有文章庫題材進行討論，或提供閱讀規劃。
    - 只有當使用者明確表示「請幫我寫/生成/創建一篇全新文章」（例如：「幫我寫一篇關於海洋保護的B2英文短文」）時，才在 "article" 物件生成文章。
 
@@ -660,11 +668,12 @@ You must strictly output JSON matching this schema:
    - ONLY trigger when the user EXPLICITLY COMMANDS an operational database modification:
      * "清空所有單字" / "刪除所有單字" / "清空單字庫" -> action: { type: 'clear_all_words', summary: '清空單字庫中的所有單字' }
      * "清空所有文章" / "刪除所有文章" / "清空文章閱讀庫" -> action: { type: 'clear_all_articles', summary: '清空文章閱讀庫中的所有文章' }
-     * "刪除單字 [term]" -> action: { type: 'delete_word', summary: '從單字庫刪除「...」', deleteWord: { term: '...' } }
-     * "刪除文章 [title]" -> action: { type: 'delete_article', summary: '從文章閱讀庫刪除指定文章', deleteArticle: { title: '...' } }
+     * "刪除單字 [term]" / "刪除這個單字" -> action: { type: 'delete_word', summary: '從單字庫刪除「...」', deleteWord: { term: '...' } }
+     * "刪除文章 [title]" / "刪除這篇文章" -> action: { type: 'delete_article', summary: '從文章閱讀庫刪除指定文章', deleteArticle: { title: '...' } }
      * "合併重複單字" / "去重" -> action: { type: 'deduplicate_words', summary: '合併單字庫中重複的單字' }
      * "重置所有單字熟練度" -> action: { type: 'reset_mastery', summary: '重置所有單字熟練度為 Level 0' }
      * "全庫單字標準化" / "補齊英文釋義" -> action: { type: 'batch_standardize', summary: '為現有單字補齊英文釋義並標準化' }
+     * "修改單字 [term]" -> action: { type: 'update_word', summary: '修改單字「...」之釋義或例句', updateWord: { term: '...' } }
    - ⚠️ CRITICAL ZERO-HALLUCINATION PROTOCOL (絕對禁止假執行幻覺):
      * You do NOT have direct execution access to alter, delete, or clear the database in the background.
      * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
@@ -694,7 +703,7 @@ You must strictly output JSON matching this schema:
           ? `文章閱讀（正在沉浸式閱讀文章《${screenContext.activeArticleTitle || ''}》）`
           : `文章閱讀（目前在書架總覽瀏覽文章列表，共 ${screenContext.totalArticlesCount || 0} 篇）`,
         list: `單字庫（全庫單字管理，共 ${screenContext.totalWordsCount || 0} 個單字）`,
-        ai: 'AI 學習語伴（自由英文深度對話與即時語伴諮詢）'
+        ai: 'AI 學習語伴（自由英文深度對話與全庫即時智囊）'
       };
       screenLines.push(`【使用者當前操作畫面】: ${tabNames[screenContext.currentTab] || screenContext.currentTab}`);
       if (screenContext.totalWordsCount !== undefined) {
@@ -719,14 +728,46 @@ You must strictly output JSON matching this schema:
         screenLines.push(qLines.join('\n'));
       }
       if (screenContext.activeInspectedWord) {
-        screenLines.push(`【🔍 使用者當前正開啟彈窗檢視/編輯的單字】: 「${screenContext.activeInspectedWord}」`);
+        screenLines.push(`【🔍 使用者當前正開啟彈窗檢視/編輯的單字】: 「${screenContext.activeInspectedWord}」（若使用者說「解釋這個單字」或「刪除這個單字」，請直接針對此詞處理）`);
       }
       contextParts.push(screenLines.join('\n'));
     } else if (scenario) {
       contextParts.push(`【使用者當前所在場景】: ${scenario}${scenarioDesc ? ` (${scenarioDesc})` : ''}`);
     }
 
-    // 2. Active Article Full Details Injection (CRITICAL FOR ANTI-HALLUCINATION)
+    // 2. Authoritative Database Knowledge Injection (100% Truth for Word/Article Inquiries)
+    const wordsTotal =
+      screenContext?.totalWordsCount !== undefined
+        ? screenContext.totalWordsCount
+        : Array.isArray(existingWordsSummary)
+        ? existingWordsSummary.length
+        : undefined;
+
+    const articlesTotal =
+      screenContext?.totalArticlesCount !== undefined
+        ? screenContext.totalArticlesCount
+        : Array.isArray(existingArticlesSummary)
+        ? existingArticlesSummary.length
+        : undefined;
+
+    if (wordsTotal !== undefined || articlesTotal !== undefined || (screenContext?.allWordTerms && screenContext.allWordTerms.length > 0)) {
+      const dbInfo: string[] = [
+        `【📚 使用者真實資料庫數據庫統計（100% 精準權威數據，請如實直接回答使用者的查詢）】:`,
+        wordsTotal !== undefined ? `- 單字庫收錄總量: 共 ${wordsTotal} 個單字` : '',
+        articlesTotal !== undefined ? `- 文章閱讀庫總量: 共 ${articlesTotal} 篇文章` : '',
+        screenContext?.dueWordsCount !== undefined ? `- 今日待複習單字數: ${screenContext.dueWordsCount} 個` : '',
+        screenContext?.dailyStreak !== undefined ? `- 連續打卡天數: ${screenContext.dailyStreak} 天` : '',
+        screenContext?.allWordTerms && Array.isArray(screenContext.allWordTerms) && screenContext.allWordTerms.length > 0
+          ? `- 使用者現有單字清單 (全部 ${screenContext.allWordTerms.length} 字): [${screenContext.allWordTerms.slice(0, 150).join(', ')}${screenContext.allWordTerms.length > 150 ? '...等' : ''}]`
+          : '',
+        screenContext?.allArticleTitles && Array.isArray(screenContext.allArticleTitles) && screenContext.allArticleTitles.length > 0
+          ? `- 使用者現有文章清單 (全部 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.map((t: string) => `《${t}》`).join(', ')}]`
+          : ''
+      ].filter(Boolean);
+      contextParts.push(dbInfo.join('\n'));
+    }
+
+    // 3. Active Article Full Details Injection (CRITICAL FOR ANTI-HALLUCINATION)
     if (currentArticle && currentArticle.title) {
       const artDetails: string[] = [
         `【⭐⭐⭐ 使用者目前正開啟並停留在以下文章的閱讀畫面（完整內文如下，請嚴格基於此文回答）⭐⭐⭐】`,
@@ -748,16 +789,8 @@ You must strictly output JSON matching this schema:
       contextParts.push(artDetails.join('\n'));
     }
 
-    // 3. Selective summary injection to prevent distraction & cross-article hallucination
-    const promptCleanForCtx = rawUserPrompt.toLowerCase();
-    const isAskingAboutShelf =
-      promptCleanForCtx.includes('書架') ||
-      promptCleanForCtx.includes('文章庫') ||
-      promptCleanForCtx.includes('閱讀庫') ||
-      promptCleanForCtx.includes('推薦文章') ||
-      promptCleanForCtx.includes('推薦一篇');
-
-    if ((!currentArticle || isAskingAboutShelf) && existingArticlesSummary && Array.isArray(existingArticlesSummary) && existingArticlesSummary.length > 0) {
+    // 4. Selective summary samples injection
+    if (!currentArticle && existingArticlesSummary && Array.isArray(existingArticlesSummary) && existingArticlesSummary.length > 0) {
       contextParts.push(
         `【使用者的文章閱讀庫現有收錄資料（共 ${existingArticlesSummary.length} 篇，僅供參考）】: \n${JSON.stringify(
           existingArticlesSummary.slice(0, 10)
@@ -765,19 +798,9 @@ You must strictly output JSON matching this schema:
       );
     }
 
-    const isAskingAboutWordBank =
-      promptCleanForCtx.includes('單字庫') ||
-      promptCleanForCtx.includes('我的單字') ||
-      promptCleanForCtx.includes('字庫') ||
-      promptCleanForCtx.includes('去重') ||
-      promptCleanForCtx.includes('清空') ||
-      promptCleanForCtx.includes('體檢') ||
-      promptCleanForCtx.includes('熟練度') ||
-      (screenContext && screenContext.currentTab === 'list');
-
-    if (isAskingAboutWordBank && existingWordsSummary && Array.isArray(existingWordsSummary) && existingWordsSummary.length > 0) {
+    if (existingWordsSummary && Array.isArray(existingWordsSummary) && existingWordsSummary.length > 0) {
       contextParts.push(
-        `【使用者的單字庫現有資料（共 ${existingWordsSummary.length} 個，僅供查詢/參考，非修改請求請勿擅自操作）】: \n${JSON.stringify(
+        `【使用者的單字庫現有資料（共 ${existingWordsSummary.length} 個，僅供查詢/參考）】: \n${JSON.stringify(
           existingWordsSummary.slice(0, 30)
         )}`
       );

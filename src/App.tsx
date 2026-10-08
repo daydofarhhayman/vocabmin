@@ -629,6 +629,37 @@ export default function App() {
     [user, showToast]
   );
 
+  // Batch standardize words
+  const handleBatchStandardizeWords = useCallback(
+    (updatedList: Partial<Word>[]) => {
+      setWords((prev) => {
+        const updateByTerm = new Map(
+          updatedList.map((u) => [(u.term || '').trim().toLowerCase(), u])
+        );
+        const merged = prev.map((w) => {
+          const u = updateByTerm.get((w.term || '').trim().toLowerCase());
+          if (u) {
+            return {
+              ...w,
+              pos: u.pos || w.pos,
+              def: u.def || w.def,
+              defEn: u.defEn !== undefined ? u.defEn : w.defEn,
+              ex: u.ex !== undefined ? u.ex : w.ex
+            };
+          }
+          return w;
+        });
+        storage.saveLocalWords(merged);
+        if (user) {
+          storage.saveCloudWordsOnly(merged).catch(console.error);
+        }
+        return merged;
+      });
+      showToast('成功完成單字庫標準化更新！');
+    },
+    [user, showToast]
+  );
+
   // Import / Export
   const handleExportJSON = () => {
     storage.exportJSON(words, dailyStats, settings);
@@ -950,32 +981,7 @@ export default function App() {
             onAddWords={handleAddWords}
             onUpdateWordGroup={handleUpdateWordGroup}
             onDeleteWordGroup={handleDeleteWordGroup}
-            onBatchStandardizeWords={(updatedList) => {
-              setWords((prev) => {
-                const updateByTerm = new Map(
-                  updatedList.map((u) => [(u.term || '').trim().toLowerCase(), u])
-                );
-                const merged = prev.map((w) => {
-                  const u = updateByTerm.get((w.term || '').trim().toLowerCase());
-                  if (u) {
-                    return {
-                      ...w,
-                      pos: u.pos || w.pos,
-                      def: u.def || w.def,
-                      defEn: u.defEn !== undefined ? u.defEn : w.defEn,
-                      ex: u.ex !== undefined ? u.ex : w.ex
-                    };
-                  }
-                  return w;
-                });
-                storage.saveLocalWords(merged);
-                if (user) {
-                  storage.saveCloudWordsOnly(merged).catch(console.error);
-                }
-                return merged;
-              });
-              showToast('成功完成單字庫標準化更新！');
-            }}
+            onBatchStandardizeWords={handleBatchStandardizeWords}
             onDeduplicateWords={handleDeduplicateWords}
             onClearAllWords={handleClearAllWords}
             onResetAllMastery={handleResetAllMastery}
@@ -1016,6 +1022,8 @@ export default function App() {
         activeStudyQuestion={activeStudyQuestion}
         activeInspectedWord={editModalWord?.term || detailWordGroup?.term || null}
         onAddWords={handleAddWords}
+        onUpdateWordGroup={handleUpdateWordGroup}
+        onBatchStandardizeWords={handleBatchStandardizeWords}
         onOpenCambridge={(term) => setCambridgeWord(term)}
         onNavigateToTab={(tab) => setCurrentTab(tab)}
         settings={settings}
