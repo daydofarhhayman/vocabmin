@@ -1683,11 +1683,15 @@ app.post('/api/ai/article-lookup', async (req, res) => {
     return res.status(400).json({ error: 'Word is required' });
   }
 
-  const cacheKey = cleanWord.toLowerCase();
+  const cleanSentence = (sentence || '').trim();
+  const cacheKey = cleanSentence
+    ? `${cleanWord.toLowerCase()}::${cleanSentence.toLowerCase().slice(0, 80)}`
+    : cleanWord.toLowerCase();
+
   if (!forceRefresh && wordLookupCache.has(cacheKey)) {
     const cached = wordLookupCache.get(cacheKey);
     // Ensure cached entry is strictly valid (def is not just the English term, defEn is present)
-    if (cached && cached.def && cached.def.toLowerCase() !== cacheKey && cached.defEn) {
+    if (cached && cached.def && cached.def.toLowerCase() !== cleanWord.toLowerCase() && cached.defEn) {
       return res.json({
         ...cached,
         term: cleanWord,
@@ -1776,6 +1780,160 @@ Provide accurate contextual details in JSON:
     wordLookupCache.set(cacheKey, fallback);
     return res.json({
       ...fallback,
+      fromCache: false
+    });
+  }
+});
+
+// Cache for all meanings of words (polysemy / 一詞多義)
+const wordAllMeaningsCache = new Map<string, any[]>();
+
+// API: Polysemous word lookup - Returns all common definitions & parts of speech for a word
+app.post('/api/ai/word-all-meanings', async (req, res) => {
+  const word = req.body.word || req.body.term;
+  const cleanWord = (word || '').trim();
+  const forceRefresh = !!req.body.forceRefresh;
+
+  if (!cleanWord) {
+    return res.status(400).json({ error: 'Word is required' });
+  }
+
+  const cacheKey = cleanWord.toLowerCase();
+  if (!forceRefresh && wordAllMeaningsCache.has(cacheKey)) {
+    return res.json({
+      term: cleanWord,
+      meanings: wordAllMeaningsCache.get(cacheKey),
+      fromCache: true
+    });
+  }
+
+  const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
+
+  if (ai) {
+    try {
+      const prompt = `You are an expert bilingual lexicographer (Traditional Chinese / English).
+Analyze the English word: "${cleanWord}".
+Identify its distinct, common dictionary definitions and parts of speech (一詞多義).
+Extract up to 4-5 most frequent and useful distinct meanings.
+
+Return a JSON object with:
+- "term": "${cleanWord}"
+- "meanings": array of distinct definitions:
+  - "pos": "n." | "v." | "adj." | "adv." | "phr." | "other"
+  - "def": accurate, natural Traditional Chinese definition (繁體中文解釋)
+  - "defEn": authentic, concise English definition (英英釋義)
+  - "ex": short, natural English example sentence (8-14 words max)`;
+
+      const config = {
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            term: { type: Type.STRING },
+            meanings: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  pos: { type: Type.STRING },
+                  def: { type: Type.STRING },
+                  defEn: { type: Type.STRING },
+                  ex: { type: Type.STRING }
+                },
+                required: ['pos', 'def']
+              }
+            }
+          },
+          required: ['term', 'meanings']
+        }
+      };
+
+      const response = await generateWithModelFallback(ai, config, prompt);
+      const parsed = JSON.parse(response.text || '{}');
+      if (Array.isArray(parsed.meanings) && parsed.meanings.length > 0) {
+        const validMeanings = parsed.meanings.filter(
+          (m: any) => m.def && m.def.toLowerCase() !== cleanWord.toLowerCase()
+        );
+        if (validMeanings.length > 0) {
+          wordAllMeaningsCache.set(cacheKey, validMeanings);
+          return res.json({
+            term: cleanWord,
+            meanings: validMeanings,
+            fromCache: false
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('Word all meanings AI error, falling back to dictionary:', err?.message || err);
+    }
+  }
+
+  // Fallback: Bilingual dictionary lookup for polysemous definitions
+  try {
+    const fallbackMeanings: any[] = [];
+    const transUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&dt=bd&q=${encodeURIComponent(cleanWord)}`;
+    const resTrans = await fetch(transUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+
+    if (resTrans.ok) {
+      const data = await resTrans.json();
+      // data[1] is dictionary table: [ [pos_name, [def1, def2, ...]], ... ]
+      if (Array.isArray(data[1])) {
+        for (const posGroup of data[1]) {
+          const rawPos = String(posGroup[0] || '').toLowerCase();
+          let posTag = 'n.';
+          if (rawPos.includes('verb')) posTag = 'v.';
+          else if (rawPos.includes('noun')) posTag = 'n.';
+          else if (rawPos.includes('adjective')) posTag = 'adj.';
+          else if (rawPos.includes('adverb')) posTag = 'adv.';
+          else if (rawPos.includes('preposition') || rawPos.includes('phrase')) posTag = 'phr.';
+          else posTag = 'other';
+
+          const defsList = Array.isArray(posGroup[1]) ? posGroup[1].slice(0, 2) : [];
+          for (const d of defsList) {
+            if (d && !fallbackMeanings.some((m) => m.def === d)) {
+              fallbackMeanings.push({
+                pos: posTag,
+                def: String(d).trim(),
+                defEn: `Definition of ${cleanWord} as a ${rawPos}`,
+                ex: `It is common to use ${cleanWord} in everyday conversations.`
+              });
+            }
+          }
+        }
+      }
+
+      // If no dictionary table, take primary translation
+      if (fallbackMeanings.length === 0 && data[0]?.[0]?.[0]) {
+        fallbackMeanings.push({
+          pos: 'n.',
+          def: String(data[0][0][0]).trim(),
+          defEn: `English definition of ${cleanWord}`,
+          ex: `The term ${cleanWord} is frequently used.`
+        });
+      }
+    }
+
+    wordAllMeaningsCache.set(cacheKey, fallbackMeanings);
+    return res.json({
+      term: cleanWord,
+      meanings: fallbackMeanings,
+      fromCache: false
+    });
+  } catch (err: any) {
+    console.error('All meanings fallback failed:', err);
+    return res.json({
+      term: cleanWord,
+      meanings: [
+        {
+          pos: 'n.',
+          def: cleanWord,
+          defEn: `Definition for ${cleanWord}`,
+          ex: `Learning ${cleanWord} in context.`
+        }
+      ],
       fromCache: false
     });
   }

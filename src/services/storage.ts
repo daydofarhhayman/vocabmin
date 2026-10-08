@@ -716,6 +716,16 @@ export class StorageService {
     }
   }
 
+  public async deleteCloudWordById(wordId: string): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    try {
+      await deleteDoc(doc(firestoreDb, 'users', uid, 'words', wordId));
+    } catch (e) {
+      console.error('Failed to delete cloud word by id:', e);
+    }
+  }
+
   public async saveCloudWordsOnly(words: Word[]): Promise<void> {
     if (!this.currentUser || !firestoreDb) return;
     const uid = this.currentUser.uid;

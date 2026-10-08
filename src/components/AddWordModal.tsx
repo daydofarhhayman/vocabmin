@@ -272,6 +272,50 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     }
   };
 
+  // Lookup all common meanings (一詞多義)
+  const [isAllMeaningsLoading, setIsAllMeaningsLoading] = useState(false);
+
+  const handleLookupAllMeanings = async (targetTerm?: string) => {
+    const cleanTerm = (targetTerm || term).trim();
+    if (!cleanTerm || isAllMeaningsLoading) return;
+
+    const currentSettings = storage.getLocalSettings();
+    const apiKey = currentSettings?.geminiApiKey;
+
+    setIsAllMeaningsLoading(true);
+    try {
+      const res = await fetch('/api/ai/word-all-meanings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
+        },
+        body: JSON.stringify({
+          term: cleanTerm,
+          apiKey
+        })
+      });
+
+      if (!res.ok) throw new Error('Query failed');
+      const data = await res.json();
+
+      if (Array.isArray(data.meanings) && data.meanings.length > 0) {
+        setDefinitions(
+          data.meanings.map((m: any) => ({
+            pos: normalizePos(m.pos),
+            def: (m.def || '').trim(),
+            defEn: m.defEn ? m.defEn.trim() : undefined,
+            ex: m.ex ? m.ex.trim() : ''
+          }))
+        );
+      }
+    } catch (err) {
+      console.warn('Lookup all meanings error:', err);
+    } finally {
+      setIsAllMeaningsLoading(false);
+    }
+  };
+
   const handleSelectSuggestion = (suggestedWord: string) => {
     setTerm(suggestedWord);
     setCandidateSuggestions([]);
@@ -614,15 +658,29 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                 </label>
 
                 {term.trim() && (
-                  <button
-                    type="button"
-                    onClick={() => handleLookupWord()}
-                    disabled={isAiLoading}
-                    className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 transition active:scale-95 cursor-pointer disabled:opacity-50"
-                  >
-                    <Sparkles className={`w-3.5 h-3.5 ${isAiLoading ? 'animate-spin' : ''}`} />
-                    <span>{isAiLoading ? 'AI 查詢釋義中...' : 'AI 智慧補齊釋義與例句'}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleLookupWord()}
+                      disabled={isAiLoading || isAllMeaningsLoading}
+                      className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                      title="自動查詢並填入最主要之釋義"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${isAiLoading ? 'animate-spin' : ''}`} />
+                      <span>{isAiLoading ? 'AI 查詢釋義中...' : 'AI 智慧補齊釋義'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleLookupAllMeanings()}
+                      disabled={isAiLoading || isAllMeaningsLoading}
+                      className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200/60 dark:border-purple-800/60 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                      title="一次查詢並自動列出此單字的所有常用詞性與意思 (一詞多義)"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${isAllMeaningsLoading ? 'animate-spin' : ''}`} />
+                      <span>{isAllMeaningsLoading ? '查詢多義中...' : 'AI 查詢一詞多義'}</span>
+                    </button>
+                  </div>
                 )}
               </div>
 

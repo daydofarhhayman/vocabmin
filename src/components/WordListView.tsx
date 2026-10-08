@@ -20,6 +20,9 @@ interface WordListViewProps {
   onOpenAdd: (initialTerm?: string) => void;
   onEditWord: (word: Word) => void;
   onDeleteGroup: (term: string) => void;
+  onDeleteSingleWord?: (wordId: string, term: string, defSnippet?: string) => void;
+  onAddWords?: (newWords: Partial<Word>[]) => void;
+  onUpdateWordGroup?: (oldTerm: string, updatedList: Partial<Word>[]) => void;
   onUpdateSettings: (settings: Partial<AppSettings>) => void;
   onOpenCambridge: (word: string) => void;
 }
@@ -30,6 +33,9 @@ export const WordListView: React.FC<WordListViewProps> = ({
   onOpenAdd,
   onEditWord,
   onDeleteGroup,
+  onDeleteSingleWord,
+  onAddWords,
+  onUpdateWordGroup,
   onUpdateSettings,
   onOpenCambridge
 }) => {
@@ -98,10 +104,10 @@ export const WordListView: React.FC<WordListViewProps> = ({
       result = result.filter((g) => g.entries.some((e) => e.pos === posFilter));
     }
 
-    // Level filter
+    // Level filter (matches if any definition in the word group is at this level)
     if (levelFilter !== 'ALL') {
       const lvl = parseInt(levelFilter);
-      result = result.filter((g) => g.minLevel === lvl);
+      result = result.filter((g) => g.entries.some((e) => (e.level || 0) === lvl));
     }
 
     // Sort
@@ -123,13 +129,19 @@ export const WordListView: React.FC<WordListViewProps> = ({
     return result;
   }, [groupedWords, searchTerm, posFilter, levelFilter, sortBy]);
 
-  // Keep selectedGroup in sync if filteredGroups changes (e.g. after edit/delete)
+  // Keep selectedGroup in sync if groupedWords changes (e.g. after edit/delete/add definition)
+  const currentSelectedGroup = useMemo(() => {
+    if (!selectedGroup) return null;
+    const clean = selectedGroup.term.trim().toLowerCase();
+    return groupedWords.find((g) => g.term.trim().toLowerCase() === clean) || null;
+  }, [selectedGroup, groupedWords]);
+
   const selectedIndex = useMemo(() => {
-    if (!selectedGroup) return -1;
+    if (!currentSelectedGroup) return -1;
     return filteredGroups.findIndex(
-      (g) => g.term.toLowerCase() === selectedGroup.term.toLowerCase()
+      (g) => g.term.toLowerCase() === currentSelectedGroup.term.toLowerCase()
     );
-  }, [selectedGroup, filteredGroups]);
+  }, [currentSelectedGroup, filteredGroups]);
 
   // Paginated slice to maintain high frame-rate and memory efficiency
   const totalPages = Math.ceil(filteredGroups.length / pageSize) || 1;
@@ -360,11 +372,17 @@ export const WordListView: React.FC<WordListViewProps> = ({
                     </button>
                   </div>
 
-                  {/* Main: English Word Prominent */}
+                  {/* Main: English Word Prominent & Definition preview */}
                   <div className="my-auto py-1">
                     <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-white capitalize tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
                       {group.term}
                     </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      <span className="font-semibold text-slate-400 dark:text-slate-500 text-[10px] mr-1">
+                        [{group.entries[0]?.pos}]
+                      </span>
+                      {group.entries[0]?.def}
+                    </p>
                   </div>
 
                   {/* Bottom hint: subtle click-to-view indicator */}
@@ -377,7 +395,7 @@ export const WordListView: React.FC<WordListViewProps> = ({
             })}
           </div>
         ) : (
-          /* LIST VIEW - Pure English Words Rows */
+          /* LIST VIEW - English Word Rows with Definition Previews */
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-slate-700/60">
             {paginatedGroups.map((group) => {
               const now = Date.now();
@@ -409,6 +427,26 @@ export const WordListView: React.FC<WordListViewProps> = ({
                     >
                       <Volume2 className="w-4 h-4" />
                     </button>
+
+                    {/* Definition preview in List View */}
+                    <div className="hidden sm:flex items-center gap-1.5 min-w-0 max-w-md truncate text-xs text-slate-500 dark:text-slate-400">
+                      {group.entries.slice(0, 2).map((e, idx) => (
+                        <span key={idx} className="truncate">
+                          <span className="font-bold text-slate-400 dark:text-slate-500 font-mono text-[10px] mr-1">
+                            [{e.pos}]
+                          </span>
+                          <span>{e.def}</span>
+                          {idx === 0 && group.entries.length > 1 && (
+                            <span className="mx-1.5 opacity-40">|</span>
+                          )}
+                        </span>
+                      ))}
+                      {group.entries.length > 2 && (
+                        <span className="text-[10px] text-slate-400 shrink-0 font-medium">
+                          +{group.entries.length - 2}
+                        </span>
+                      )}
+                    </div>
 
                     {group.entries.length > 1 && (
                       <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400 shrink-0">
@@ -459,8 +497,8 @@ export const WordListView: React.FC<WordListViewProps> = ({
 
       {/* Word Detail Modal */}
       <WordDetailModal
-        isOpen={!!selectedGroup}
-        group={selectedGroup}
+        isOpen={!!currentSelectedGroup}
+        group={currentSelectedGroup}
         onClose={() => setSelectedGroup(null)}
         settings={settings}
         onEditWord={(w) => {
@@ -471,6 +509,9 @@ export const WordListView: React.FC<WordListViewProps> = ({
           setSelectedGroup(null);
           onDeleteGroup(term);
         }}
+        onDeleteSingleWord={onDeleteSingleWord}
+        onAddWords={onAddWords}
+        onUpdateWordGroup={onUpdateWordGroup}
         onOpenCambridge={(term) => {
           onOpenCambridge(term);
         }}

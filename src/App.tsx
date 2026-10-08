@@ -396,29 +396,44 @@ export default function App() {
     [recordActivity]
   );
 
-  // Edit word group (update all definitions with same term)
+  // Edit word group (update all definitions with same term, strictly preserving existing SRS stats)
   const handleUpdateWordGroup = useCallback(
     (oldTerm: string, updatedList: Partial<Word>[]) => {
       setWords((prev) => {
+        const cleanOldTerm = oldTerm.trim().toLowerCase();
+        const oldEntries = prev.filter(
+          (w) => w.term.trim().toLowerCase() === cleanOldTerm
+        );
         // Remove old entries
         const clean = prev.filter(
-          (w) => w.term.trim().toLowerCase() !== oldTerm.trim().toLowerCase()
+          (w) => w.term.trim().toLowerCase() !== cleanOldTerm
         );
         const now = Date.now();
-        const newEntries: Word[] = updatedList.map((item, idx) => ({
-          id: item.id || `w-${now}-${idx}`,
-          term: item.term || oldTerm,
-          pos: item.pos || 'n.',
-          def: item.def || '',
-          defEn: item.defEn !== undefined ? item.defEn : undefined,
-          ex: item.ex || '',
-          level: item.level !== undefined ? item.level : 0,
-          interval: item.interval || 1,
-          easeFactor: item.easeFactor || 2.5,
-          timestamp: item.timestamp || now,
-          lastReview: item.lastReview || now,
-          nextReview: item.nextReview || now + 86400000
-        }));
+        const newEntries: Word[] = updatedList.map((item, idx) => {
+          // Match by id first, then by pos+def
+          const matchedOld =
+            (item.id && oldEntries.find((o) => o.id === item.id)) ||
+            oldEntries.find(
+              (o) =>
+                o.pos === item.pos &&
+                o.def.trim().toLowerCase() === (item.def || '').trim().toLowerCase()
+            );
+
+          return {
+            id: item.id || matchedOld?.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`,
+            term: item.term || oldTerm,
+            pos: item.pos || matchedOld?.pos || 'n.',
+            def: item.def || matchedOld?.def || '',
+            defEn: item.defEn !== undefined ? item.defEn : matchedOld?.defEn,
+            ex: item.ex !== undefined ? item.ex : (matchedOld?.ex || ''),
+            level: item.level !== undefined ? item.level : (matchedOld?.level ?? 0),
+            interval: item.interval || matchedOld?.interval || 1,
+            easeFactor: item.easeFactor || matchedOld?.easeFactor || 2.5,
+            timestamp: matchedOld?.timestamp || item.timestamp || now,
+            lastReview: matchedOld?.lastReview || item.lastReview || now,
+            nextReview: matchedOld?.nextReview || item.nextReview || (now + 86400000)
+          };
+        });
 
         const finalWords = [...newEntries, ...clean];
         storage.saveLocalWords(finalWords);
@@ -580,6 +595,34 @@ export default function App() {
           });
           setConfirmConfig((c) => ({ ...c, isOpen: false }));
           showToast(`已刪除「${term}」`);
+        }
+      });
+    },
+    [user, showToast]
+  );
+
+  // Delete a single definition of a word without affecting other definitions
+  const handleDeleteSingleWord = useCallback(
+    (wordId: string, term: string, defSnippet?: string) => {
+      setConfirmConfig({
+        isOpen: true,
+        title: '刪除單字釋義',
+        message: `確定要刪除「${term}」的此項釋義${defSnippet ? `「${defSnippet}」` : ''}嗎？`,
+        type: 'danger',
+        confirmText: '確認刪除',
+        onConfirm: () => {
+          setWords((prev) => {
+            const updated = prev.filter((w) => w.id !== wordId);
+            storage.saveLocalWords(updated);
+            if (user) {
+              storage.deleteCloudWordById(wordId).catch((err) =>
+                console.error('Cloud delete word error:', err)
+              );
+            }
+            return updated;
+          });
+          setConfirmConfig((c) => ({ ...c, isOpen: false }));
+          showToast(`已刪除「${term}」的該項釋義`);
         }
       });
     },
@@ -877,6 +920,9 @@ export default function App() {
             }}
             onEditWord={(w) => setEditModalWord(w)}
             onDeleteGroup={handleDeleteWordGroup}
+            onDeleteSingleWord={handleDeleteSingleWord}
+            onAddWords={handleAddWords}
+            onUpdateWordGroup={handleUpdateWordGroup}
             onUpdateSettings={handleUpdateSettings}
             onOpenCambridge={(term) => setCambridgeWord(term)}
           />

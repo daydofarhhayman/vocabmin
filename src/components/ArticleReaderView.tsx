@@ -643,10 +643,17 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       : (inspectedWord.example || inspectedWord.sentenceContext || `Context from article: ${currentArticle.title}`);
     const cleanLower = termToSave.toLowerCase();
 
-    // Check if already in words
-    const existing = wordLookupMap.get(cleanLower);
+    // Check if exact (term + pos + def) is already in words
+    const existingEntries = words.filter(
+      (w) => w.term.trim().toLowerCase() === cleanLower
+    );
+    const isExactDefAlreadyInLib = existingEntries.some(
+      (w) =>
+        (w.pos || '').trim().toLowerCase() === (inspectedWord.pos || '').trim().toLowerCase() &&
+        w.def.trim().toLowerCase() === defToSave.trim().toLowerCase()
+    );
 
-    if (existing) {
+    if (isExactDefAlreadyInLib) {
       // Just record to article saved terms if not recorded
       if (!currentArticle.savedWordTerms.includes(termToSave)) {
         const updatedSaved = [...currentArticle.savedWordTerms, termToSave];
@@ -2825,7 +2832,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           </span>
                           <div className="space-y-1.5">
                             {msg.suggestedWords.map((sw, swIdx) => {
-                              const isAlreadyInLib = wordLookupMap.has(sw.term?.toLowerCase() || '');
+                              const isExactInLib = words.some(
+                                (w) =>
+                                  w.term.toLowerCase() === (sw.term || '').toLowerCase() &&
+                                  w.def.toLowerCase() === (sw.def || '').toLowerCase()
+                              );
+                              const hasOtherMeanings = words.some(
+                                (w) => w.term.toLowerCase() === (sw.term || '').toLowerCase()
+                              );
                               return (
                                 <div
                                   key={swIdx}
@@ -2847,7 +2861,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
                                   <button
                                     onClick={() => {
-                                      if (isAlreadyInLib) return;
+                                      if (isExactInLib) return;
                                       onAddWords([
                                         {
                                           term: sw.term,
@@ -2870,14 +2884,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                                         confetti({ particleCount: 20, spread: 35 });
                                       } catch {}
                                     }}
-                                    disabled={isAlreadyInLib}
+                                    disabled={isExactInLib}
                                     className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition shrink-0 ${
-                                      isAlreadyInLib
+                                      isExactInLib
                                         ? 'bg-slate-100 dark:bg-slate-800 text-slate-400'
+                                        : hasOtherMeanings
+                                        ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-xs'
                                         : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs'
                                     }`}
                                   >
-                                    {isAlreadyInLib ? '已在字庫' : '+ 收錄'}
+                                    {isExactInLib ? '已在單字庫' : hasOtherMeanings ? '+ 追加新釋義' : '+ 收錄'}
                                   </button>
                                 </div>
                               );
@@ -3109,9 +3125,11 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   ) : (
                     <div className="space-y-2">
                       {extractedKeywords.map((kw, kIdx) => {
-                        const isAlreadySaved =
-                          wordLookupMap.has(kw.term.toLowerCase()) ||
-                          currentArticle.savedWordTerms.includes(kw.term);
+                        const isAlreadySaved = words.some(
+                          (w) =>
+                            w.term.toLowerCase() === kw.term.toLowerCase() &&
+                            w.def.toLowerCase() === (kw.def || '').toLowerCase()
+                        );
 
                         return (
                           <div

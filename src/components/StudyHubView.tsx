@@ -1124,6 +1124,33 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
                 </div>
               )}
 
+              {/* Polysemy reminder if word has other meanings in library */}
+              {(() => {
+                const otherMeanings = words.filter(
+                  (w) =>
+                    w.term.trim().toLowerCase() === currentQ.word.term.trim().toLowerCase() &&
+                    w.id !== currentQ.word.id
+                );
+                if (otherMeanings.length === 0) return null;
+                return (
+                  <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl text-xs text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-900/50 space-y-1.5">
+                    <span className="font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300">
+                      💡 一詞多義提醒（字庫中收錄的其它義項）：
+                    </span>
+                    <div className="space-y-1 pl-2 border-l-2 border-indigo-300 dark:border-indigo-700 text-[11px]">
+                      <p>
+                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">[{currentQ.word.pos}]</span> {currentQ.word.def} <span className="opacity-70">(本題所測)</span>
+                      </p>
+                      {otherMeanings.map((om, oIdx) => (
+                        <p key={oIdx} className="opacity-80">
+                          <span className="font-mono font-bold">[{om.pos}]</span> {om.def}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Manual Next Question Button */}
               <button
                 onClick={handleNextQuestion}
