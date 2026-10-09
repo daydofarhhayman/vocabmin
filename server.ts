@@ -678,7 +678,8 @@ You must strictly output JSON matching this schema:
      * "批次將 [term1, term2...] 分類為 [category]" / "把這幾個單字歸類至 [category]" / "將除了 [catA] 之外的單字全部加入 [catB] 分類" -> action: { type: 'batch_set_category', summary: '批次將 N 個單字歸類至「...」', batchSetCategory: { terms: [...], category: '...' } }
      * "新增分類 [category]" / "建立新分類 [category]" -> action: { type: 'add_category', summary: '新增自訂分類「...」', addCategory: { name: '...' } }
      * "將分類 [old] 改名為 [new]" / "更名分類 [old] 為 [new]" -> action: { type: 'rename_category', summary: '將分類「...」更名為「...」', renameCategory: { oldName: '...', newName: '...' } }
-     * "刪除分類 [category]" / "移除分類 [category]" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
+     * "刪除分類 [category]" / "移除分類 [category]" / "將 [category] 分類中的單字全部換成未分類狀態，並刪除分類" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
+       🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting words or clearing the vocabulary library! When the user commands to delete or reset a category, action MUST be "delete_category" (or "batch_set_category"), and NEVER "clear_all_words"! In VocabMin, deleting a category safely retains all words and resets their category to "未分類".
    - ⚠️ CRITICAL ZERO-HALLUCINATION & MANDATORY ACTION BINDING PROTOCOL (絕對禁止假執行幻覺與物件遺漏):
      * You do NOT have direct execution access to alter, delete, or clear the database in the background.
      * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything without emitting an "action" (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").

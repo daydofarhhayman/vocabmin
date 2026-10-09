@@ -1279,14 +1279,74 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         }
       }
 
-      // Check for clear all words intent or claim
-      const claimsClearWords = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(botContent);
+      // Detect category context
+      const isCategoryContext = /(?:分類|自訂分類)/i.test(trimmedLower) || (botAction && String(botAction.type).includes('category'));
+
+      // Check for delete category intent (PRIORITIZED before clear_all_words)
+      const isUserAskingDeleteCat =
+        !isQuestionOrHowTo &&
+        (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(trimmedLower) ||
+         /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(trimmedLower));
+
+      if (
+        (isUserAskingDeleteCat && (!botAction || botAction.type === 'clear_all_words')) ||
+        botAction?.type === 'delete_category' ||
+        botAction?.type === 'deleteCategory'
+      ) {
+        let catName = (
+          botAction?.deleteCategory?.name ||
+          botAction?.deleteCategory?.category ||
+          botAction?.name ||
+          botAction?.category ||
+          ''
+        ).trim();
+
+        if (!catName) {
+          const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
+          const foundKnown = allKnownCats.find((c) =>
+            trimmedLower.includes(c.toLowerCase()) || (botContent || '').toLowerCase().includes(c.toLowerCase())
+          );
+          if (foundKnown) {
+            catName = foundKnown;
+          } else {
+            const match =
+              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?\s*分類/i) ||
+              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?/i) ||
+              trimmedLower.match(/([a-zA-Z0-9\u4e00-\u9fa5\s_-]+?)\s*分類.*(?:刪除|移除)/i);
+            if (match) catName = match[1].trim();
+          }
+        }
+
+        if (catName) {
+          botAction = {
+            type: 'delete_category',
+            summary: `刪除自訂分類「${catName}」（原單字保留並設為未分類）`,
+            deleteCategory: { name: catName }
+          };
+          botContent = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
+        }
+      }
+
+      // Check for clear all words intent or claim (ONLY when NOT in category context!)
+      const claimsClearWords =
+        !isCategoryContext &&
+        !isUserAskingDeleteCat &&
+        !botContent.includes('分類') &&
+        /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(botContent);
+
       const isUserAskingClearWords =
+        !isCategoryContext &&
+        !isUserAskingDeleteCat &&
         !isUserAskingClearArticles &&
         !isQuestionOrHowTo &&
         (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(trimmedLower) ||
          /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
          /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(trimmedLower));
+
+      // If Gemini accidentally returned clear_all_words during a category command, suppress it!
+      if (botAction?.type === 'clear_all_words' && (isCategoryContext || isUserAskingDeleteCat)) {
+        botAction = null;
+      }
 
       if (botAction?.type === 'clear_all_words' || (!botAction && (claimsClearWords || isUserAskingClearWords))) {
         botAction = {
@@ -1428,20 +1488,6 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           addCategory: { name: catName }
         };
         botContent = `已為您建立「新增自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以新增分類「${catName}」。`;
-      }
-
-      // Check for delete category intent
-      const isUserAskingDeleteCat =
-        !isQuestionOrHowTo &&
-        trimmedLower.match(/(?:刪除|移除)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?$/i);
-      if (!botAction && isUserAskingDeleteCat) {
-        const catName = isUserAskingDeleteCat[1].trim();
-        botAction = {
-          type: 'delete_category',
-          summary: `刪除自訂分類「${catName}」`,
-          deleteCategory: { name: catName }
-        };
-        botContent = `已為您建立「刪除自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」。`;
       }
 
       // Suppress accidental vocabulary word cards whenever a database/category operation is active
