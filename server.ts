@@ -1812,28 +1812,52 @@ Provide accurate contextual details in JSON:
 function cleanCambridgeMd(str: string): string {
   if (!str) return '';
   return str
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [text](url) -> text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) -> text
+    .replace(/\([^)]*https?:\/\/[^)]*\)/g, '') // remove raw markdown link URLs
     .replace(/\[\[[^\]]+\]\]/g, '') // [[ U ]], [[ C ]]
+    .replace(/\[[^\]]+\]/g, '') // remaining brackets
     .replace(/[*_#]/g, '')
     .trim();
 }
 
-// Robust parser for Cambridge Dictionary Traditional Chinese markdown
+// Robust parser for Cambridge Dictionary Traditional Chinese markdown (supports both EN & ZH-TW page layouts)
 function parseCambridgeMarkdown(word: string, markdown: string): any[] {
   const cleanWord = word.trim().toLowerCase();
   const meanings: any[] = [];
 
-  const startIdx = markdown.indexOf('# Translation of');
-  let content = startIdx >= 0 ? markdown.slice(startIdx) : markdown;
+  // Match English or Traditional Chinese entry header
+  let content = markdown;
+  const enStart = markdown.indexOf('# Translation of');
+  const zhStartMatch = markdown.match(/# \*\*?[^\n*#]+\*\*? 在英語-(中文|漢語)/i);
+  const zhStart = zhStartMatch ? zhStartMatch.index : -1;
 
-  // Cut off right at the copyright/footer: (Translation of **{word}** from the Cambridge...
-  const endMarkerIdx = content.indexOf('(Translation of');
-  if (endMarkerIdx > 0) {
-    content = content.slice(0, endMarkerIdx);
+  if (enStart >= 0 && (zhStart < 0 || enStart < zhStart)) {
+    content = markdown.slice(enStart);
+  } else if (zhStart >= 0) {
+    content = markdown.slice(zhStart);
   }
 
-  const browseIdx = content.indexOf('## Browse');
-  if (browseIdx > 0) content = content.slice(0, browseIdx);
+  // End marker: copyright footer or examples / browse header in either English or Chinese
+  const endMarkers = [
+    '(Translation of',
+    '從劍橋英語',
+    '在劍橋英語',
+    '詞典的翻譯',
+    '## Examples of',
+    '的 例句',
+    '## Browse',
+    '## 瀏覽'
+  ];
+  let minEnd = -1;
+  for (const marker of endMarkers) {
+    const idx = content.indexOf(marker);
+    if (idx > 100 && (minEnd === -1 || idx < minEnd)) {
+      minEnd = idx;
+    }
+  }
+  if (minEnd > 100) {
+    content = content.slice(0, minEnd);
+  }
 
   const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
 
@@ -1861,39 +1885,62 @@ function parseCambridgeMarkdown(word: string, markdown: string): any[] {
     const cleanedLine = cleanCambridgeMd(rawLine);
     const hasChinese = /[\u4e00-\u9fa5]/.test(rawLine);
 
+    // Filter out CEFR lines (e.g. A2, B1, C2), codes, phonetics, audio, navigation
+    const isCefrOrCode =
+      /^(A1|A2|B1|B2|C1|C2)\b/i.test(cleanedLine) ||
+      rawLine.includes('/help/codes.html') ||
+      rawLine.includes('codes.html') ||
+      rawLine.includes('Audio') ||
+      rawLine.includes('Share on') ||
+      rawLine.includes('在臉書上分享') ||
+      rawLine.includes('Add to word list') ||
+      rawLine.includes('加入詞彙表') ||
+      rawLine.includes('More examples') ||
+      rawLine.includes('Fewer examples') ||
+      rawLine.includes('Synonyms') ||
+      rawLine.includes('Grammar');
+
     // Identify candidate English definition line
     const isEnDef =
       !hasChinese &&
+      !isCefrOrCode &&
       !rawLine.startsWith('#') &&
       !rawLine.startsWith('*') &&
       !rawLine.startsWith('!') &&
-      !rawLine.includes('Audio') &&
-      !rawLine.includes('Share on') &&
-      !rawLine.includes('Add to word list') &&
-      !rawLine.includes('More examples') &&
-      !rawLine.includes('Fewer examples') &&
-      !rawLine.includes('Synonyms') &&
-      !rawLine.includes('Grammar') &&
-      cleanedLine.length >= 8 &&
+      cleanedLine.length >= 10 &&
       cleanedLine.length <= 400 &&
-      !cleanedLine.startsWith('http');
+      !cleanedLine.startsWith('http') &&
+      cleanedLine.split(/\s+/).length >= 2;
 
     if (isEnDef && i + 1 < lines.length) {
-      const nextLine = lines[i + 1];
-      const nextHasChinese = /[\u4e00-\u9fa5]/.test(nextLine);
+      // Look up to 2 lines ahead for Chinese definition in case of blank/tag line
+      let nextLine = '';
+      let nextLineIdx = -1;
+      for (let look = 1; look <= 2 && i + look < lines.length; look++) {
+        const candidate = lines[i + look];
+        const trimmedCandidate = candidate.trim();
+        if (
+          /[\u4e00-\u9fa5]/.test(candidate) &&
+          !/^[a-zA-Z]/.test(trimmedCandidate) && // Definitions start with Chinese or brackets, never English
+          !candidate.includes('Cambridge') &&
+          !candidate.includes('詞典') &&
+          !candidate.includes('分享') &&
+          !candidate.includes('加入詞彙表') &&
+          !candidate.includes('例句')
+        ) {
+          nextLine = candidate;
+          nextLineIdx = i + look;
+          break;
+        }
+      }
 
-      if (
-        nextHasChinese &&
-        !nextLine.includes('Cambridge') &&
-        !nextLine.includes('Share on') &&
-        !nextLine.includes('Facebook')
-      ) {
+      if (nextLine) {
         const defEn = cleanedLine;
         const defZh = cleanCambridgeMd(nextLine);
 
         // Find example sentence in subsequent lines
         let ex = '';
-        for (let j = i + 2; j < Math.min(i + 8, lines.length); j++) {
+        for (let j = nextLineIdx + 1; j < Math.min(nextLineIdx + 8, lines.length); j++) {
           const lRaw = lines[j];
           if (lRaw.startsWith('###') || lRaw.startsWith('#')) break;
           const lClean = cleanCambridgeMd(lRaw);
@@ -1944,7 +1991,7 @@ async function fetchCambridgeMeanings(word: string): Promise<any[] | null> {
   try {
     const url = `https://r.jina.ai/https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`;
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(9500),
       headers: {
         'Accept': 'text/plain',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -1953,7 +2000,15 @@ async function fetchCambridgeMeanings(word: string): Promise<any[] | null> {
 
     if (!res.ok) return null;
     const markdown = await res.text();
-    if (!markdown.includes('# Translation of')) return null;
+    const hasCambridgeHeader =
+      markdown.includes('# Translation of') ||
+      markdown.includes('在英語-中文') ||
+      markdown.includes('在英語-漢語') ||
+      markdown.includes('詞典中的翻譯') ||
+      markdown.includes('劍橋英語-中文') ||
+      markdown.includes('Cambridge English-Chinese');
+
+    if (!hasCambridgeHeader) return null;
 
     const meanings = parseCambridgeMarkdown(cleanWord, markdown);
     if (meanings && meanings.length > 0) {
