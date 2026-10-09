@@ -36,10 +36,12 @@ interface AddWordModalProps {
 }
 
 interface DefinitionInput {
+  id?: string;
   pos: POS;
   def: string;
   defEn?: string;
   ex: string;
+  selected?: boolean;
 }
 
 interface ParsedWordItem {
@@ -138,9 +140,10 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   // Single word state
   const [term, setTerm] = useState('');
   const [definitions, setDefinitions] = useState<DefinitionInput[]>([
-    { pos: 'n.', def: '', ex: '' }
+    { pos: 'n.', def: '', ex: '', selected: true }
   ]);
-  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [lookupSource, setLookupSource] = useState<'cambridge' | 'ai' | 'dictionary' | null>(null);
+  const [lookupSourceLabel, setLookupSourceLabel] = useState<string | null>(null);
   const [candidateSuggestions, setCandidateSuggestions] = useState<string[]>([]);
   const [detectedClipboard, setDetectedClipboard] = useState<string | null>(null);
 
@@ -230,49 +233,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Single word lookup & auto-complete using fast bilingual/AI engine
-  const handleLookupWord = async (targetTerm?: string) => {
-    const cleanTerm = (targetTerm || term).trim();
-    if (!cleanTerm || isAiLoading) return;
-
-    const currentSettings = storage.getLocalSettings();
-    const apiKey = currentSettings?.geminiApiKey;
-
-    setIsAiLoading(true);
-    try {
-      const res = await fetch('/api/ai/article-lookup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
-        },
-        body: JSON.stringify({
-          word: cleanTerm,
-          apiKey
-        })
-      });
-
-      if (!res.ok) throw new Error('Lookup failed');
-      const data = await res.json();
-
-      if (data && data.def) {
-        setDefinitions([
-          {
-            pos: normalizePos(data.pos),
-            def: data.def.trim(),
-            defEn: data.defEn ? data.defEn.trim() : undefined,
-            ex: data.ex ? data.ex.trim() : ''
-          }
-        ]);
-      }
-    } catch (err) {
-      console.warn('Fast lookup fallback:', err);
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
-  // Lookup all common meanings (一詞多義)
+  // Multi-definition lookup (Priority: Cambridge Dictionary -> AI Generation -> Bilingual Fallback)
   const [isAllMeaningsLoading, setIsAllMeaningsLoading] = useState(false);
 
   const handleLookupAllMeanings = async (targetTerm?: string) => {
@@ -283,6 +244,9 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     const apiKey = currentSettings?.geminiApiKey;
 
     setIsAllMeaningsLoading(true);
+    setLookupSource(null);
+    setLookupSourceLabel(null);
+
     try {
       const res = await fetch('/api/ai/word-all-meanings', {
         method: 'POST',
@@ -300,13 +264,35 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
       const data = await res.json();
 
       if (Array.isArray(data.meanings) && data.meanings.length > 0) {
+        setLookupSource(data.source || 'cambridge');
+        setLookupSourceLabel(
+          data.sourceLabel ||
+            (data.source === 'cambridge'
+              ? '劍橋英漢辭典 (Cambridge Dictionary)'
+              : 'Gemini AI 智能解析')
+        );
+
+        const existingDefsForTerm = existingTermsMap.get(cleanTerm.toLowerCase()) || [];
+
         setDefinitions(
-          data.meanings.map((m: any) => ({
-            pos: normalizePos(m.pos),
-            def: (m.def || '').trim(),
-            defEn: m.defEn ? m.defEn.trim() : undefined,
-            ex: m.ex ? m.ex.trim() : ''
-          }))
+          data.meanings.map((m: any, idx: number) => {
+            const normDef = (m.def || '').trim().toLowerCase();
+            const normPos = normalizePos(m.pos);
+            const isAlreadyInLib = existingDefsForTerm.some(
+              (e) =>
+                (e.pos || '').trim().toLowerCase() === normPos.toLowerCase() &&
+                e.def.trim().toLowerCase() === normDef
+            );
+
+            return {
+              id: `def-item-${Date.now()}-${idx}`,
+              pos: normPos,
+              def: (m.def || '').trim(),
+              defEn: m.defEn ? m.defEn.trim() : undefined,
+              ex: m.ex ? m.ex.trim() : '',
+              selected: !isAlreadyInLib // 未收錄之釋義預設勾選
+            };
+          })
         );
       }
     } catch (err) {
@@ -316,26 +302,41 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     }
   };
 
+  // Direct alias: Single word lookup also queries multiple meanings
+  const handleLookupWord = handleLookupAllMeanings;
+
   const handleSelectSuggestion = (suggestedWord: string) => {
     setTerm(suggestedWord);
     setCandidateSuggestions([]);
-    handleLookupWord(suggestedWord);
+    handleLookupAllMeanings(suggestedWord);
   };
 
   const handleApplyClipboard = () => {
     if (!detectedClipboard) return;
     setTerm(detectedClipboard);
-    handleLookupWord(detectedClipboard);
+    handleLookupAllMeanings(detectedClipboard);
     setDetectedClipboard(null);
   };
 
   const handleAddDefBlock = () => {
-    setDefinitions((prev) => [...prev, { pos: 'n.', def: '', ex: '' }]);
+    setDefinitions((prev) => [...prev, { pos: 'n.', def: '', ex: '', selected: true }]);
   };
 
   const handleRemoveDefBlock = (index: number) => {
     if (definitions.length <= 1) return;
     setDefinitions((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleToggleDefSelected = (index: number) => {
+    setDefinitions((prev) =>
+      prev.map((item, i) =>
+        i === index ? { ...item, selected: item.selected === false ? true : false } : item
+      )
+    );
+  };
+
+  const handleToggleSelectAllDefs = (selectAll: boolean) => {
+    setDefinitions((prev) => prev.map((item) => ({ ...item, selected: selectAll })));
   };
 
   const handleDefChange = (index: number, field: keyof DefinitionInput, value: string) => {
@@ -344,13 +345,25 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     );
   };
 
-  // Save single word
+  // Check if definition already exists in user's library
+  const isDefAlreadyInLibrary = (pos: POS, defText: string) => {
+    if (!defText.trim()) return false;
+    return currentMatchingWords.some(
+      (w) => w.pos === pos && w.def.trim().toLowerCase() === defText.trim().toLowerCase()
+    );
+  };
+
+  // Save single word with multiple selected definitions
   const handleSaveSingle = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanTerm = term.trim();
     if (!cleanTerm) return;
 
-    const validDefs = definitions.filter((d) => d.def.trim().length > 0);
+    let validDefs = definitions.filter((d) => d.selected !== false && d.def.trim().length > 0);
+    // Fallback: If user unchecked everything, take any non-empty definitions
+    if (!validDefs.length) {
+      validDefs = definitions.filter((d) => d.def.trim().length > 0);
+    }
     if (!validDefs.length) return;
 
     const newWords: Partial<Word>[] = validDefs.map((d) => ({
@@ -367,7 +380,9 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     onAddWords(newWords);
     // Reset form
     setTerm('');
-    setDefinitions([{ pos: 'n.', def: '', ex: '' }]);
+    setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
+    setLookupSource(null);
+    setLookupSourceLabel(null);
     setCandidateSuggestions([]);
     onClose();
   };
@@ -661,24 +676,22 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <button
                       type="button"
-                      onClick={() => handleLookupWord()}
-                      disabled={isAiLoading || isAllMeaningsLoading}
-                      className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 transition active:scale-95 cursor-pointer disabled:opacity-50"
-                      title="自動查詢並填入最主要之釋義"
-                    >
-                      <Sparkles className={`w-3.5 h-3.5 ${isAiLoading ? 'animate-spin' : ''}`} />
-                      <span>{isAiLoading ? 'AI 查詢釋義中...' : 'AI 智慧補齊釋義'}</span>
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => handleLookupAllMeanings()}
-                      disabled={isAiLoading || isAllMeaningsLoading}
-                      className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 flex items-center gap-1.5 px-3 py-1 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200/60 dark:border-purple-800/60 transition active:scale-95 cursor-pointer disabled:opacity-50"
-                      title="一次查詢並自動列出此單字的所有常用詞性與意思 (一詞多義)"
+                      disabled={isAllMeaningsLoading}
+                      className="text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/70 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-800 transition active:scale-95 cursor-pointer disabled:opacity-50"
+                      title="優先從劍橋字典 (Cambridge Dictionary) 抓取多種解釋，若無收錄則由 AI 智能生成"
                     >
-                      <Sparkles className={`w-3.5 h-3.5 ${isAllMeaningsLoading ? 'animate-spin' : ''}`} />
-                      <span>{isAllMeaningsLoading ? '查詢多義中...' : 'AI 查詢一詞多義'}</span>
+                      {isAllMeaningsLoading ? (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 animate-spin text-emerald-600 dark:text-emerald-400" />
+                          <span>正在檢索劍橋字典 / AI 備援...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-sm">🏛️</span>
+                          <span>查詢多種釋義 (優先劍橋 / AI 備援)</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 )}
@@ -691,7 +704,15 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   autoFocus
                   value={term}
                   onChange={(e) => setTerm(e.target.value)}
-                  placeholder="例如：epiphany, resilient, synergy..."
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      if (term.trim() && (!definitions.length || !definitions[0].def.trim())) {
+                        e.preventDefault();
+                        handleLookupAllMeanings(term.trim());
+                      }
+                    }
+                  }}
+                  placeholder="例如：epiphany, resilient, present, run..."
                   className="w-full p-3.5 pr-12 rounded-2xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 font-bold text-base outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-800 dark:text-white"
                 />
                 {term.trim() && (
@@ -706,6 +727,48 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                 )}
               </div>
 
+              {/* Lookup Source Banner */}
+              {lookupSource && (
+                <div
+                  className={`mt-2 p-3 rounded-2xl border text-xs flex items-center justify-between animate-enter ${
+                    lookupSource === 'cambridge'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
+                      : lookupSource === 'ai'
+                      ? 'bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800 text-purple-900 dark:text-purple-200'
+                      : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">
+                      {lookupSource === 'cambridge' ? '🏛️' : lookupSource === 'ai' ? '✨' : '📖'}
+                    </span>
+                    <div>
+                      <span className="font-bold">
+                        {lookupSource === 'cambridge'
+                          ? '優先自劍橋字典 (Cambridge Dictionary) 抓取資料'
+                          : lookupSource === 'ai'
+                          ? '劍橋字典無此詞，由 Gemini AI 智能解析多種釋義'
+                          : '雙語辭典備援查詢'}
+                      </span>
+                      <span className="opacity-80 ml-1.5">
+                        ・共為您整理 {definitions.length} 種釋義
+                      </span>
+                    </div>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                      lookupSource === 'cambridge'
+                        ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300'
+                        : lookupSource === 'ai'
+                        ? 'bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300'
+                        : 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300'
+                    }`}
+                  >
+                    {lookupSource === 'cambridge' ? '權威劍橋辭典' : lookupSource === 'ai' ? 'AI 智能備援' : '雙語辭典'}
+                  </span>
+                </div>
+              )}
+
               {/* Duplicate Detection Warning */}
               {currentMatchingWords.length > 0 && (
                 <div className="mt-2 p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 text-xs text-indigo-900 dark:text-indigo-300 flex items-start gap-2">
@@ -716,7 +779,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       {currentMatchingWords.map((w) => `[${w.pos}] ${w.def}`).join('； ')}
                     </span>
                     <p className="text-[11px] opacity-75 mt-0.5">
-                      您可以直接在下方追加新的詞性與釋義，儲存後將自動整合至同一個單字卡中！
+                      您可以勾選或追加新的詞性與釋義，儲存後將自動整合至同一個單字卡中！
                     </p>
                   </div>
                 </div>
@@ -743,11 +806,32 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
             {/* Definitions & POS List */}
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs font-bold text-slate-400 uppercase">
-                <span>釋義清單 (支援多個詞性)</span>
+                <div className="flex items-center gap-2">
+                  <span>釋義清單 (共 {definitions.length} 項)</span>
+                  {definitions.length > 1 && (
+                    <div className="flex items-center gap-1.5 ml-2 normal-case font-semibold text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectAllDefs(true)}
+                        className="text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        全選
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSelectAllDefs(false)}
+                        className="text-slate-400 hover:underline"
+                      >
+                        全不選
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={handleAddDefBlock}
-                  className="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-bold"
+                  className="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 font-bold cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>{t.btn_add_def}</span>
@@ -756,19 +840,44 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
               {definitions.map((defItem, idx) => (
                 <div
-                  key={idx}
-                  className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 relative group space-y-2.5"
+                  key={defItem.id || idx}
+                  className={`p-4 rounded-2xl border transition relative group space-y-2.5 ${
+                    defItem.selected !== false
+                      ? 'bg-slate-50 dark:bg-slate-700/40 border-slate-200/90 dark:border-slate-600'
+                      : 'bg-slate-50/40 dark:bg-slate-800/30 border-slate-200/40 dark:border-slate-700/40 opacity-70'
+                  }`}
                 >
-                  {definitions.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveDefBlock(idx)}
-                      className="absolute top-2.5 right-2.5 text-slate-300 hover:text-rose-500 p-1"
-                      title="移除此釋義"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-200/50 dark:border-slate-700/50">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={defItem.selected !== false}
+                        onChange={() => handleToggleDefSelected(idx)}
+                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+                      />
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                        收錄此釋義 (釋義 #{idx + 1})
+                      </span>
+                    </label>
+
+                    <div className="flex items-center gap-2">
+                      {isDefAlreadyInLibrary(defItem.pos, defItem.def) && (
+                        <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-300/80 dark:border-amber-800">
+                          已收錄於字庫
+                        </span>
+                      )}
+                      {definitions.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveDefBlock(idx)}
+                          className="text-slate-300 hover:text-rose-500 p-1 rounded-lg transition"
+                          title="移除此釋義"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
                   <div className="grid grid-cols-12 gap-2">
                     <div className="col-span-4 sm:col-span-3">
@@ -795,7 +904,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       </label>
                       <input
                         type="text"
-                        required
+                        required={defItem.selected !== false}
                         value={defItem.def}
                         onChange={(e) => handleDefChange(idx, 'def', e.target.value)}
                         placeholder="請輸入中文解釋..."
@@ -806,13 +915,13 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 mb-1">
-                      英英釋義 (選填 / AI 可自動生成)
+                      英英釋義 (選填 / 劍橋・AI 自動填寫)
                     </label>
                     <input
                       type="text"
                       value={defItem.defEn || ''}
                       onChange={(e) => handleDefChange(idx, 'defEn', e.target.value)}
-                      placeholder="例：a moment of sudden intuitive understanding (英英解釋)"
+                      placeholder="例：authentic English definition"
                       className="w-full p-2.5 rounded-xl bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 text-xs font-medium outline-none"
                     />
                   </div>
@@ -835,10 +944,14 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
             <button
               type="submit"
-              className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white font-bold rounded-2xl shadow-lg shadow-indigo-500/20 text-sm transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3.5 bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-600 hover:opacity-95 text-white font-bold rounded-2xl shadow-lg shadow-indigo-500/20 text-sm transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
             >
               <Check className="w-4 h-4" />
-              <span>收錄至單字庫</span>
+              <span>
+                {definitions.filter((d) => d.selected !== false && d.def.trim().length > 0).length > 1
+                  ? `一次收錄所選 ${definitions.filter((d) => d.selected !== false && d.def.trim().length > 0).length} 項釋義至單字庫`
+                  : '收錄至單字庫'}
+              </span>
             </button>
           </form>
         )}

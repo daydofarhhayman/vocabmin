@@ -13,6 +13,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.5.7',
+    date: '2026-10-09',
+    type: 'feat',
+    changes: [
+      '🏛️ 劍橋英漢辭典優先檢索整合：單字庫查詢全面升級為優先自劍橋雙語辭典（Cambridge Dictionary）抓取權威釋義，完整解析詞性（n./v./adj./adv./phr.）、繁中釋義、英英定義與道地例句。',
+      '🤖 AI 智能無縫備援機制：當劍橋字典未收錄該詞或連線異常時，自動切換至 Gemini AI 智能解析該詞的所有常用詞性與造句，介面清晰標示資料來源徽章。',
+      '📝 單字庫新增介面多義勾選與批量收錄：新增單字彈窗（AddWordModal）支援一鍵查詢多種解釋，提供各義項獨立勾選框（支援全選/全不選）、重複收錄預警與自訂編輯，支援一次收錄多種釋義至同一單字卡。',
+      '🔍 單字詳情與編輯多義功能同步升級：單字詳情頁（WordDetailModal）與編輯頁（EditWordModal）之一詞多義探索功能同步導入劍橋優先/AI備援雙軌機制。'
+    ]
+  },
+  {
     version: '1.5.6',
     date: '2026-10-09',
     type: 'feat',

@@ -309,7 +309,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
                       ) : (
                         <Sparkles className="w-3.5 h-3.5" />
                       )}
-                      <span>{isAiFetchMeaningsLoading ? '查詢中...' : '自動補齊多義'}</span>
+                      <span>{isAiFetchMeaningsLoading ? '檢索中...' : '補齊多義 (優先劍橋/AI)'}</span>
                     </button>
                   </>
                 )}

@@ -1808,10 +1808,169 @@ Provide accurate contextual details in JSON:
   }
 });
 
+// Clean markdown artifacts from Cambridge dictionary scraped text
+function cleanCambridgeMd(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [text](url) -> text
+    .replace(/\[\[[^\]]+\]\]/g, '') // [[ U ]], [[ C ]]
+    .replace(/[*_#]/g, '')
+    .trim();
+}
+
+// Robust parser for Cambridge Dictionary Traditional Chinese markdown
+function parseCambridgeMarkdown(word: string, markdown: string): any[] {
+  const cleanWord = word.trim().toLowerCase();
+  const meanings: any[] = [];
+
+  const startIdx = markdown.indexOf('# Translation of');
+  let content = startIdx >= 0 ? markdown.slice(startIdx) : markdown;
+
+  // Cut off right at the copyright/footer: (Translation of **{word}** from the Cambridge...
+  const endMarkerIdx = content.indexOf('(Translation of');
+  if (endMarkerIdx > 0) {
+    content = content.slice(0, endMarkerIdx);
+  }
+
+  const browseIdx = content.indexOf('## Browse');
+  if (browseIdx > 0) content = content.slice(0, browseIdx);
+
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  let currentPos = 'n.';
+
+  const detectPos = (str: string): string | null => {
+    const lower = str.toLowerCase();
+    if (lower.startsWith('noun') || lower.includes('noun')) return 'n.';
+    if (lower.startsWith('verb') || lower.includes('verb')) return 'v.';
+    if (lower.startsWith('adjective') || lower.includes('adjective')) return 'adj.';
+    if (lower.startsWith('adverb') || lower.includes('adverb')) return 'adv.';
+    if (lower.includes('phrasal verb') || lower.includes('idiom') || lower.includes('preposition')) return 'phr.';
+    return null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+
+    // Detect POS header
+    if (rawLine.startsWith('###') || rawLine.length < 35) {
+      const p = detectPos(rawLine);
+      if (p) currentPos = p;
+    }
+
+    const cleanedLine = cleanCambridgeMd(rawLine);
+    const hasChinese = /[\u4e00-\u9fa5]/.test(rawLine);
+
+    // Identify candidate English definition line
+    const isEnDef =
+      !hasChinese &&
+      !rawLine.startsWith('#') &&
+      !rawLine.startsWith('*') &&
+      !rawLine.startsWith('!') &&
+      !rawLine.includes('Audio') &&
+      !rawLine.includes('Share on') &&
+      !rawLine.includes('Add to word list') &&
+      !rawLine.includes('More examples') &&
+      !rawLine.includes('Fewer examples') &&
+      !rawLine.includes('Synonyms') &&
+      !rawLine.includes('Grammar') &&
+      cleanedLine.length >= 8 &&
+      cleanedLine.length <= 400 &&
+      !cleanedLine.startsWith('http');
+
+    if (isEnDef && i + 1 < lines.length) {
+      const nextLine = lines[i + 1];
+      const nextHasChinese = /[\u4e00-\u9fa5]/.test(nextLine);
+
+      if (
+        nextHasChinese &&
+        !nextLine.includes('Cambridge') &&
+        !nextLine.includes('Share on') &&
+        !nextLine.includes('Facebook')
+      ) {
+        const defEn = cleanedLine;
+        const defZh = cleanCambridgeMd(nextLine);
+
+        // Find example sentence in subsequent lines
+        let ex = '';
+        for (let j = i + 2; j < Math.min(i + 8, lines.length); j++) {
+          const lRaw = lines[j];
+          if (lRaw.startsWith('###') || lRaw.startsWith('#')) break;
+          const lClean = cleanCambridgeMd(lRaw);
+          if (
+            (lRaw.startsWith('*') || lClean.toLowerCase().includes(cleanWord)) &&
+            lClean.length >= 15 &&
+            !lClean.includes('Add to word list') &&
+            !lClean.includes('See more') &&
+            !lClean.includes('Synonyms')
+          ) {
+            const matchZh = lClean.search(/[\u4e00-\u9fa5]/);
+            if (matchZh > 10) {
+              ex = lClean.slice(0, matchZh).trim();
+            } else {
+              ex = lClean;
+            }
+            break;
+          }
+        }
+
+        if (defZh && !meanings.some((m) => m.def === defZh)) {
+          meanings.push({
+            pos: currentPos,
+            def: defZh,
+            defEn: defEn,
+            ex: ex || `Authentic usage example of "${word}".`
+          });
+        }
+      }
+    }
+  }
+
+  return meanings.slice(0, 8);
+}
+
+// Memory cache for Cambridge Dictionary lookups
+const cambridgeMeaningsCache = new Map<string, any[]>();
+
+// Fetch authentic definitions from Cambridge Dictionary with quick timeout fallback
+async function fetchCambridgeMeanings(word: string): Promise<any[] | null> {
+  const cleanWord = word.trim().toLowerCase();
+  if (!cleanWord || !/^[a-zA-Z\s'-]+$/.test(cleanWord)) return null;
+
+  if (cambridgeMeaningsCache.has(cleanWord)) {
+    return cambridgeMeaningsCache.get(cleanWord)!;
+  }
+
+  try {
+    const url = `https://r.jina.ai/https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(6000),
+      headers: {
+        'Accept': 'text/plain',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!res.ok) return null;
+    const markdown = await res.text();
+    if (!markdown.includes('# Translation of')) return null;
+
+    const meanings = parseCambridgeMarkdown(cleanWord, markdown);
+    if (meanings && meanings.length > 0) {
+      cambridgeMeaningsCache.set(cleanWord, meanings);
+      return meanings;
+    }
+  } catch (err: any) {
+    console.warn(`Cambridge lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
+  }
+  return null;
+}
+
 // Cache for all meanings of words (polysemy / 一詞多義)
-const wordAllMeaningsCache = new Map<string, any[]>();
+const wordAllMeaningsCache = new Map<string, { meanings: any[]; source: string; sourceLabel: string }>();
 
 // API: Polysemous word lookup - Returns all common definitions & parts of speech for a word
+// Priority 1: Cambridge Dictionary (劍橋字典) -> Priority 2: Gemini AI -> Priority 3: Bilingual Dict Fallback
 app.post('/api/ai/word-all-meanings', async (req, res) => {
   const word = req.body.word || req.body.term;
   const cleanWord = (word || '').trim();
@@ -1823,13 +1982,39 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
 
   const cacheKey = cleanWord.toLowerCase();
   if (!forceRefresh && wordAllMeaningsCache.has(cacheKey)) {
+    const cached = wordAllMeaningsCache.get(cacheKey)!;
     return res.json({
       term: cleanWord,
-      meanings: wordAllMeaningsCache.get(cacheKey),
+      meanings: cached.meanings,
+      source: cached.source,
+      sourceLabel: cached.sourceLabel,
       fromCache: true
     });
   }
 
+  // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先從劍橋字典中抓資料)
+  try {
+    const cambridgeResults = await fetchCambridgeMeanings(cleanWord);
+    if (cambridgeResults && cambridgeResults.length > 0) {
+      const payload = {
+        meanings: cambridgeResults,
+        source: 'cambridge',
+        sourceLabel: '劍橋英漢辭典 (Cambridge Dictionary)'
+      };
+      wordAllMeaningsCache.set(cacheKey, payload);
+      return res.json({
+        term: cleanWord,
+        meanings: cambridgeResults,
+        source: 'cambridge',
+        sourceLabel: '劍橋英漢辭典 (Cambridge Dictionary)',
+        fromCache: false
+      });
+    }
+  } catch (cambridgeErr: any) {
+    console.warn('Cambridge lookup error, falling back to AI:', cambridgeErr?.message || cambridgeErr);
+  }
+
+  // 2. SECOND PRIORITY: AI Generation (沒有劍橋收錄才使用 AI 生成)
   const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
 
   if (ai) {
@@ -1879,10 +2064,17 @@ Return a JSON object with:
           (m: any) => m.def && m.def.toLowerCase() !== cleanWord.toLowerCase()
         );
         if (validMeanings.length > 0) {
-          wordAllMeaningsCache.set(cacheKey, validMeanings);
+          const payload = {
+            meanings: validMeanings,
+            source: 'ai',
+            sourceLabel: 'Gemini AI 智能解析 (劍橋無收錄)'
+          };
+          wordAllMeaningsCache.set(cacheKey, payload);
           return res.json({
             term: cleanWord,
             meanings: validMeanings,
+            source: 'ai',
+            sourceLabel: 'Gemini AI 智能解析 (劍橋無收錄)',
             fromCache: false
           });
         }
@@ -1939,10 +2131,17 @@ Return a JSON object with:
       }
     }
 
-    wordAllMeaningsCache.set(cacheKey, fallbackMeanings);
+    const payload = {
+      meanings: fallbackMeanings,
+      source: 'dictionary',
+      sourceLabel: '雙語辭典備援 (Google Dictionary)'
+    };
+    wordAllMeaningsCache.set(cacheKey, payload);
     return res.json({
       term: cleanWord,
       meanings: fallbackMeanings,
+      source: 'dictionary',
+      sourceLabel: '雙語辭典備援 (Google Dictionary)',
       fromCache: false
     });
   } catch (err: any) {
@@ -1957,6 +2156,8 @@ Return a JSON object with:
           ex: `Learning ${cleanWord} in context.`
         }
       ],
+      source: 'fallback',
+      sourceLabel: '基本備援',
       fromCache: false
     });
   }

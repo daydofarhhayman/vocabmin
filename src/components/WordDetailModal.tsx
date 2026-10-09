@@ -77,6 +77,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
   // AI Discover Polysemy / other meanings state
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiDiscoveredMeanings, setAiDiscoveredMeanings] = useState<DiscoveredMeaning[]>([]);
+  const [discoveredSource, setDiscoveredSource] = useState<'cambridge' | 'ai' | null>(null);
   const [aiQueried, setAiQueried] = useState(false);
   const [addedAiIndices, setAddedAiIndices] = useState<Record<number, boolean>>({});
 
@@ -221,6 +222,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
       const data = await res.json();
 
       if (Array.isArray(data.meanings)) {
+        setDiscoveredSource(data.source === 'cambridge' ? 'cambridge' : 'ai');
         // Filter out definitions that the user already has in group.entries
         const existingDefs = group.entries.map((e) => ({
           pos: (e.pos || '').trim().toLowerCase(),
@@ -426,14 +428,14 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
                   onClick={handleDiscoverPolysemy}
                   disabled={isAiLoading}
                   className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:text-purple-700 flex items-center gap-1 px-2.5 py-1 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200/60 dark:border-purple-800/60 transition active:scale-95 disabled:opacity-50"
-                  title="由 AI 查詢此單字其他常見詞性與釋義"
+                  title="優先由劍橋字典查詢，若無則由 AI 查詢此單字其他常見詞性與釋義"
                 >
                   {isAiLoading ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : (
                     <Sparkles className="w-3.5 h-3.5" />
                   )}
-                  <span>{isAiLoading ? '探索中...' : 'AI 探索更多釋義'}</span>
+                  <span>{isAiLoading ? '探索中...' : '探索更多釋義 (優先劍橋/AI)'}</span>
                 </button>
               </div>
             </div>
@@ -538,8 +540,16 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
               <div className="mb-4 p-4 rounded-2xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200/80 dark:border-purple-900/60 space-y-3 animate-enter">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-purple-900 dark:text-purple-200 flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                    <span>AI 聯網探測到此單字的其他常用釋義：</span>
+                    {discoveredSource === 'cambridge' ? (
+                      <span className="text-sm">🏛️</span>
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                    )}
+                    <span>
+                      {discoveredSource === 'cambridge'
+                        ? '劍橋字典 (Cambridge) 探測到此單字的其他常用釋義：'
+                        : 'AI 智能解析此單字的其他常用釋義：'}
+                    </span>
                   </span>
                   <button
                     onClick={() => setAiQueried(false)}
@@ -552,7 +562,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
                 {isAiLoading ? (
                   <div className="py-4 text-center text-xs text-purple-600 dark:text-purple-400 flex items-center justify-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>正在全面查詢權威詞典之一詞多義...</span>
+                    <span>正在優先檢索劍橋字典（若無則啟用 AI 生成）...</span>
                   </div>
                 ) : aiDiscoveredMeanings.length === 0 ? (
                   <p className="text-xs text-slate-500 dark:text-slate-400 py-1">
