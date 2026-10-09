@@ -1289,7 +1289,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
          /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(trimmedLower));
 
       if (
-        (isUserAskingDeleteCat && (!botAction || botAction.type === 'clear_all_words')) ||
+        isUserAskingDeleteCat ||
         botAction?.type === 'delete_category' ||
         botAction?.type === 'deleteCategory'
       ) {
@@ -1303,17 +1303,18 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
 
         if (!catName) {
           const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
-          const foundKnown = allKnownCats.find((c) =>
+          const sortedCats = [...allKnownCats].sort((a, b) => b.length - a.length);
+          const foundKnown = sortedCats.find((c) =>
             trimmedLower.includes(c.toLowerCase()) || (botContent || '').toLowerCase().includes(c.toLowerCase())
           );
           if (foundKnown) {
             catName = foundKnown;
           } else {
             const match =
-              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?\s*分類/i) ||
-              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?/i) ||
-              trimmedLower.match(/([a-zA-Z0-9\u4e00-\u9fa5\s_-]+?)\s*分類.*(?:刪除|移除)/i);
-            if (match) catName = match[1].trim();
+              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?\s*分類/i) ||
+              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?/i) ||
+              trimmedLower.match(/(?:將|把)?\s*([a-zA-Z0-9\u4e00-\u9fa5\s_\-\.]{2,50}?)\s*分類.*(?:刪除|移除|拿掉)/i);
+            if (match) catName = match[1].replace(/(?:中的|分類)$/, '').trim();
           }
         }
 
@@ -1324,6 +1325,35 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
             deleteCategory: { name: catName }
           };
           botContent = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
+        }
+      }
+
+      // Quarantine: Block invalid delete_article when in category context, title contains 分類, or on words tab without article intent
+      if (botAction?.type === 'delete_article') {
+        const artTitle = (botAction.deleteArticle?.title || '').toLowerCase();
+        const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
+        if (
+          isCategoryContext ||
+          isUserAskingDeleteCat ||
+          artTitle.includes('分類') ||
+          allKnownCats.some((c) => c.toLowerCase() === artTitle) ||
+          (currentTab === 'list' && !trimmedLower.includes('文章') && !trimmedLower.includes('閱讀庫'))
+        ) {
+          botAction = null;
+        }
+      }
+
+      // Quarantine: Block invalid delete_word when term is a category or in category context
+      if (botAction?.type === 'delete_word') {
+        const term = (botAction.deleteWord?.term || '').toLowerCase();
+        const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
+        if (
+          isCategoryContext ||
+          isUserAskingDeleteCat ||
+          term.includes('分類') ||
+          allKnownCats.some((c) => c.toLowerCase() === term)
+        ) {
+          botAction = null;
         }
       }
 

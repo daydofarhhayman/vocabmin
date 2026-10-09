@@ -680,6 +680,7 @@ You must strictly output JSON matching this schema:
      * "將分類 [old] 改名為 [new]" / "更名分類 [old] 為 [new]" -> action: { type: 'rename_category', summary: '將分類「...」更名為「...」', renameCategory: { oldName: '...', newName: '...' } }
      * "刪除分類 [category]" / "移除分類 [category]" / "將 [category] 分類中的單字全部換成未分類狀態，並刪除分類" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
        🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting words or clearing the vocabulary library! When the user commands to delete or reset a category, action MUST be "delete_category" (or "batch_set_category"), and NEVER "clear_all_words"! In VocabMin, deleting a category safely retains all words and resets their category to "未分類".
+       🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting an article! If the user says "刪除 [Name] 分類" or mentions "分類", [Name] is a CATEGORY, NOT an article! NEVER output "delete_article" for category commands!
    - ⚠️ CRITICAL ZERO-HALLUCINATION & MANDATORY ACTION BINDING PROTOCOL (絕對禁止假執行幻覺與物件遺漏):
      * You do NOT have direct execution access to alter, delete, or clear the database in the background.
      * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything without emitting an "action" (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
@@ -1210,32 +1211,124 @@ You must strictly output JSON matching this schema:
     const promptClean = rawUserPrompt.trim().toLowerCase();
     const isQuestionOrHowTo = /(?:如何|怎麼|怎樣|教我|什麼是|能不能|可以嗎|如果|為甚麼|為什麼)/.test(promptClean);
 
-    // Intent: Clear all articles
-    // e.g. "請幫我刪除所有文章", "清空所有文章", "刪除全部文章", "把所有文章清掉", "清空文章庫", "書架文章全部清除", "移除所有文章"
-    const isExplicitClearArticles =
-      !isQuestionOrHowTo &&
-      (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(promptClean) ||
-       /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
-       /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(promptClean));
+    // Detect category context
+    const isCategoryContext = /(?:分類|自訂分類)/i.test(promptClean) || (parsedData.action && String(parsedData.action.type).includes('category'));
 
-    // Intent: Clear all words
-    // e.g. "清空所有單字", "請幫我刪除全部單字", "清空單字庫", "把全庫單字清除", "刪除所有生詞"
+    // Category list from screen context (longest first so multi-word categories match accurately)
+    const customCats: string[] = Array.isArray(screenContext?.customCategories) ? screenContext.customCategories : [];
+    const sortedCats = [...customCats].sort((a, b) => b.length - a.length);
+
+    // Intent: Delete category (PRIORITIZED FIRST to protect against misidentifying as word/article deletion)
+    const isDeleteCategory =
+      !isQuestionOrHowTo &&
+      (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(promptClean) ||
+       /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(promptClean));
+
+    if (
+      isDeleteCategory ||
+      parsedData.action?.type === 'delete_category' ||
+      (parsedData.action as any)?.type === 'deleteCategory'
+    ) {
+      let catName = (
+        parsedData.action?.deleteCategory?.name ||
+        (parsedData.action as any)?.deleteCategory?.category ||
+        (parsedData.action as any)?.name ||
+        (parsedData.action as any)?.category ||
+        ''
+      ).trim();
+
+      if (!catName) {
+        const foundKnown = sortedCats.find((c) =>
+          promptClean.includes(c.toLowerCase()) || (parsedData.reply || '').toLowerCase().includes(c.toLowerCase())
+        );
+        if (foundKnown) {
+          catName = foundKnown;
+        } else {
+          const match =
+            promptClean.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?\s*分類/i) ||
+            promptClean.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?/i) ||
+            promptClean.match(/(?:將|把)?\s*([a-zA-Z0-9\u4e00-\u9fa5\s_\-\.]{2,50}?)\s*分類.*(?:刪除|移除|拿掉)/i);
+          if (match) {
+            catName = match[1].replace(/(?:中的|分類)$/, '').trim();
+          }
+        }
+      }
+
+      if (catName) {
+        parsedData.action = {
+          type: 'delete_category',
+          summary: `刪除自訂分類「${catName}」（原單字保留並設為未分類）`,
+          deleteCategory: { name: catName }
+        };
+        parsedData.reply = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
+      }
+    }
+
+    // Intent: Clear all articles (MUST NOT TRIGGER IN CATEGORY CONTEXT)
+    const isExplicitClearArticles =
+      !isCategoryContext &&
+      !isDeleteCategory &&
+      !isQuestionOrHowTo &&
+      ((/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(promptClean) ||
+        /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
+        /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(promptClean)));
+
+    // Intent: Clear all words (MUST NOT TRIGGER IN CATEGORY CONTEXT)
     const isExplicitClearWords =
       !isExplicitClearArticles &&
+      !isCategoryContext &&
+      !isDeleteCategory &&
       !isQuestionOrHowTo &&
-      (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(promptClean) ||
-       /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
-       /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(promptClean));
+      ((/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(promptClean) ||
+        /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
+        /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(promptClean)));
 
-    // Intent: Delete specific article
-    // e.g. "刪除文章 The Psychology of Flow", "幫我刪除文章《...》", "移除文章 ..."
-    const deleteArticleMatch = !isQuestionOrHowTo && !isExplicitClearArticles &&
-      promptClean.match(/(?:刪除|移除|刪掉)\s*(?:文章|短文)?\s*[《「"']?([^》」"'\n\r]{2,80})[》」"']?/i);
+    // Intent: Delete specific article (MUST EXPLICITLY REQUIRE 文章/短文 OR 《...》, NEVER MATCH IN CATEGORY CONTEXT)
+    let deleteArticleMatch: RegExpMatchArray | null = null;
+    if (!isQuestionOrHowTo && !isExplicitClearArticles && !isCategoryContext && !isDeleteCategory) {
+      deleteArticleMatch =
+        promptClean.match(/(?:刪除|移除|刪掉)\s*(?:文章|短文)\s*[《「"']?([^》」"'\n\r]{2,80})[》」"']?/i) ||
+        promptClean.match(/(?:刪除|移除|刪掉)\s*《([^》\n\r]{2,80})》/i);
 
-    // Intent: Delete specific word
-    // e.g. "刪除單字 serendipity", "刪除單字 apple", "移除生詞 ..."
-    const deleteWordMatch = !isQuestionOrHowTo && !isExplicitClearWords && !isExplicitClearArticles &&
-      promptClean.match(/(?:刪除|移除|刪掉)\s*(?:單字|單詞|生詞)?\s*[《「"']?([a-zA-Z\-\s]{2,40})[》」"']?/i);
+      if (deleteArticleMatch) {
+        const titleCand = deleteArticleMatch[1].trim().toLowerCase();
+        if (titleCand.includes('分類') || sortedCats.some((c) => c.toLowerCase() === titleCand)) {
+          deleteArticleMatch = null;
+        }
+      }
+    }
+
+    // Intent: Delete specific word (MUST REQUIRE EXPLICIT 單字/生詞/單詞 OR QUOTES, NEVER MATCH IN CATEGORY CONTEXT)
+    let deleteWordMatch: RegExpMatchArray | null = null;
+    if (!isQuestionOrHowTo && !isExplicitClearWords && !isExplicitClearArticles && !isCategoryContext && !isDeleteCategory) {
+      deleteWordMatch =
+        promptClean.match(/(?:刪除|移除|刪掉)\s*(?:單字|單詞|生詞)\s*[《「"']?([a-zA-Z\-\s]{2,40})[》」"']?/i) ||
+        promptClean.match(/(?:刪除|移除|刪掉)\s*[「"']([a-zA-Z\-\s]{2,40})[」"']/i);
+
+      if (deleteWordMatch) {
+        const wordCand = deleteWordMatch[1].trim().toLowerCase();
+        if (wordCand.includes('分類') || sortedCats.some((c) => c.toLowerCase() === wordCand)) {
+          deleteWordMatch = null;
+        }
+      }
+    }
+
+    // Strict Anti-Collision Quarantine for Categories: wipe out accidental article/all-words destruction
+    if (isCategoryContext || isDeleteCategory) {
+      if (
+        parsedData.action?.type === 'delete_article' ||
+        parsedData.action?.type === 'clear_all_articles' ||
+        parsedData.action?.type === 'clear_all_words'
+      ) {
+        parsedData.action = undefined;
+      }
+      if (parsedData.action?.type === 'delete_word') {
+        const term = (parsedData.action.deleteWord?.term || (parsedData.action as any).term || '').toLowerCase();
+        if (sortedCats.some((c) => c.toLowerCase() === term) || term.includes('分類')) {
+          parsedData.action = undefined;
+        }
+      }
+    }
 
     const isExplicitDeduplicate =
       !isQuestionOrHowTo &&
@@ -1387,6 +1480,54 @@ You must strictly output JSON matching this schema:
             updatedWords
           }
         };
+      } else if (parsedData.action.type === 'delete_category' || (parsedData.action as any).type === 'deleteCategory') {
+        parsedData.action.type = 'delete_category';
+        const name = (
+          parsedData.action.deleteCategory?.name ||
+          (parsedData.action as any).deleteCategory?.category ||
+          (parsedData.action as any).name ||
+          (parsedData.action as any).category ||
+          ''
+        ).trim();
+        parsedData.action.deleteCategory = { name };
+        if (!parsedData.action.summary) {
+          parsedData.action.summary = `刪除自訂分類「${name}」（原單字保留並設為未分類）`;
+        }
+      } else if (
+        parsedData.action.type === 'add_category' ||
+        (parsedData.action as any).type === 'addCategory' ||
+        (parsedData.action as any).type === 'create_category'
+      ) {
+        parsedData.action.type = 'add_category';
+        const name = (
+          parsedData.action.addCategory?.name ||
+          (parsedData.action as any).name ||
+          ''
+        ).trim();
+        parsedData.action.addCategory = { name };
+        if (!parsedData.action.summary) {
+          parsedData.action.summary = `新增自訂分類「${name}」`;
+        }
+      } else if (
+        parsedData.action.type === 'batch_set_category' ||
+        (parsedData.action as any).type === 'batchSetCategory' ||
+        (parsedData.action as any).type === 'categorize_words'
+      ) {
+        parsedData.action.type = 'batch_set_category';
+        const category = (
+          parsedData.action.batchSetCategory?.category ||
+          (parsedData.action as any).category ||
+          ''
+        ).trim();
+        const terms = (
+          parsedData.action.batchSetCategory?.terms ||
+          (parsedData.action as any).terms ||
+          []
+        );
+        parsedData.action.batchSetCategory = { category, terms };
+        if (!parsedData.action.summary) {
+          parsedData.action.summary = `批次將 ${terms.length} 個單字歸類至「${category || '未分類'}」`;
+        }
       }
     }
 
@@ -1411,6 +1552,22 @@ You must strictly output JSON matching this schema:
         const term = parsedData.action.deleteWord?.term || '';
         if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
           parsedData.reply = `已為您建立刪除單字「${term}」的確認卡片，請點擊下方卡片按鈕確認刪除。`;
+        }
+      } else if (parsedData.action.type === 'delete_category') {
+        const name = parsedData.action.deleteCategory?.name || '';
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${name}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
+        }
+      } else if (parsedData.action.type === 'add_category') {
+        const name = parsedData.action.addCategory?.name || '';
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:新增|建立)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立「新增自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以新增分類「${name}」。`;
+        }
+      } else if (parsedData.action.type === 'batch_set_category') {
+        const terms = parsedData.action.batchSetCategory?.terms || [];
+        const category = parsedData.action.batchSetCategory?.category || '未分類';
+        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:歸類|分類|設定)/i.test(parsedData.reply)) {
+          parsedData.reply = `已為您建立「批次分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以將 ${terms.length} 個單字歸類至「${category}」。`;
         }
       }
     }

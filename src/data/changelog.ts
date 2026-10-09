@@ -13,6 +13,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.6.5',
+    date: '2026-10-09',
+    type: 'fix',
+    changes: [
+      '🛡️ 徹底根除「刪除分類誤判為刪除文章」重大缺陷：修復後端正則中文章關鍵字可選導致將「刪除某分類」誤判為刪除文章《某分類》並產生錯誤操作卡片的連鎖問題。',
+      '⚡ 意圖解析引擎深度重構（分類第一優先）：後端與前端將自訂分類操作（delete_category / batch_set_category）全面拉至第一優先層，支援英文多單字分類名稱（如 High Energy Physics）之完整擷取。',
+      '🛑 全端隔離防護網（Quarantine Shield）：只要操作涉及「分類」語境，嚴格 100% 阻斷 delete_article、clear_all_articles、clear_all_words 與誤刪單字操作，保障單字庫安全無虞。',
+      '📋 操作卡片與確認對話框規範化：刪除分類卡片明確保障「原單字安全保留並重設為未分類」，確認執行後自動將該分類所有單字無損轉為未分類並移除分類標籤。'
+    ]
+  },
+  {
     version: '1.6.4',
     date: '2026-10-09',
     type: 'fix',
