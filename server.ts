@@ -521,6 +521,55 @@ async function fetchExternalUrlContent(url: string): Promise<{ title: string; te
   }
 }
 
+/**
+ * Execute on-demand data providers requested by Gemini to eliminate hallucinations and save tokens
+ */
+function executeDataProvider(provider: string, param: string, screenContext: any): string {
+  if (!screenContext) return '無可用的畫面或資料庫數據。';
+
+  switch (provider) {
+    case 'get_categories': {
+      const stats = screenContext.categoryStats || {};
+      const cats: string[] = screenContext.allCategories || screenContext.customCategories || Object.keys(stats);
+      if (cats.length === 0) return '目前資料庫中無任何自訂分類。';
+      const lines = cats.map((c) => `- 分類「${c}」: 收錄 ${stats[c] || 0} 個單字`);
+      if (stats['未分類'] !== undefined) {
+        lines.push(`- 「未分類」: 收錄 ${stats['未分類']} 個單字`);
+      }
+      return `【資料庫全庫分類清單與統計 (共 ${cats.length} 個分類)】:\n${lines.join('\n')}`;
+    }
+    case 'get_words_by_category': {
+      const targetCategory = (param || '').trim();
+      const wordsWithCats = screenContext.wordsWithCategories || [];
+      const matched = wordsWithCats.filter((w: any) =>
+        (w.category || '未分類').toLowerCase() === targetCategory.toLowerCase()
+      );
+      const terms = matched.map((w: any) => w.term);
+      return `【資料庫分類「${targetCategory}」下的單字查詢結果】:\n共找到 ${terms.length} 個單字:\n${terms.length > 0 ? terms.join(', ') : '（目前此分類下無單字）'}`;
+    }
+    case 'search_words': {
+      const query = (param || '').trim().toLowerCase();
+      const allTerms: string[] = screenContext.allWordTerms || [];
+      const wordsWithCats = screenContext.wordsWithCategories || [];
+      const matched = allTerms.filter((t: string) => t.toLowerCase().includes(query));
+      const details = matched.slice(0, 50).map((t: string) => {
+        const item = wordsWithCats.find((w: any) => w.term.toLowerCase() === t.toLowerCase());
+        return `${t}${item?.category ? ` (分類: ${item.category})` : ''}`;
+      });
+      return `【單字庫搜尋「${param}」結果 (共找到 ${matched.length} 個符合單字)】:\n${details.length > 0 ? details.join(', ') : '（未找到符合的單字）'}`;
+    }
+    case 'get_articles': {
+      const titles: string[] = screenContext.allArticleTitles || [];
+      return `【文章閱讀庫現有文章清單 (共 ${titles.length} 篇)】:\n${titles.length > 0 ? titles.map((t, idx) => `${idx + 1}. 《${t}》`).join('\n') : '（目前無任何收錄文章）'}`;
+    }
+    case 'get_stats': {
+      return `【資料庫核心數據統計】:\n- 單字總數: ${screenContext.totalWordsCount || 0} 個\n- 文章總數: ${screenContext.totalArticlesCount || 0} 篇\n- 今日待複習: ${screenContext.dueWordsCount || 0} 個\n- 連續打卡: ${screenContext.dailyStreak || 0} 天\n- 今日已學: ${screenContext.learnedToday || 0} 個`;
+    }
+    default:
+      return `未知的資料提供者: ${provider}`;
+  }
+}
+
 // API: AI Vocabulary Operations (Chat, Word Lookup, Standardization, Auto-Complete, Modifying, Deletion)
 app.post('/api/ai/chat', async (req, res) => {
   try {
@@ -698,7 +747,18 @@ You must strictly output JSON matching this schema:
 
 6. LANGUAGE ADAPTATION:
    - Default language: Warm, professional Traditional Chinese (繁體中文, 台灣語境).
-   - If the user writes in English, practices dialogue, asks for roleplay, or requests English responses, respond naturally and fluently in English (with bilingual notes if helpful).`;
+   - If the user writes in English, practices dialogue, asks for roleplay, or requests English responses, respond naturally and fluently in English (with bilingual notes if helpful).
+
+7. 🛠️ ON-DEMAND DATA ACCESS (按需資料請求對接機制 - 節省 Token 與杜絕幻覺):
+   - To save tokens and eliminate hallucinations, raw database listings are NOT bloated into every turn.
+   - If you need exact database information to safely and accurately fulfill the user's operational command or inquiry, you can ask for it via the "request_data" field in your JSON response!
+   - Available data providers:
+     * "get_categories": Returns the complete, real list of all categories in the user's library and word counts per category. (Use this whenever the user commands category modifications, category deletions, or asks what categories exist!)
+     * "get_words_by_category": Provide "param" as the category name. Returns the exact list of words belonging to that category. (Use this when the user asks to reset words in a category or recategorize words!)
+     * "search_words": Provide "param" as search term. Returns matching words in the user's library.
+     * "get_articles": Returns all article titles in the reading library.
+     * "get_stats": Returns total counts of words, articles, and reviews.
+   - When you set "request_data", VocabMin will immediately query the database and feed the real data to you in a follow-up turn. Once you receive the real data, output the final "action" and "reply" with "request_data": null.`;
 
     // Construct conversation contents
     const rawContents: any[] = [];
@@ -764,28 +824,28 @@ You must strictly output JSON matching this schema:
         ? existingArticlesSummary.length
         : undefined;
 
-    if (wordsTotal !== undefined || articlesTotal !== undefined || (screenContext?.allWordTerms && screenContext.allWordTerms.length > 0)) {
+    const allCats: string[] = screenContext?.allCategories || screenContext?.customCategories || [];
+
+    if (wordsTotal !== undefined || articlesTotal !== undefined || allCats.length > 0) {
       const dbInfo: string[] = [
-        `【📚 使用者真實資料庫數據庫統計（100% 精準權威數據，請如實直接回答使用者的查詢）】:`,
+        `【📚 使用者真實資料庫概覽與按需資料對接】:`,
         wordsTotal !== undefined ? `- 單字庫收錄總量: 共 ${wordsTotal} 個單字` : '',
         articlesTotal !== undefined ? `- 文章閱讀庫總量: 共 ${articlesTotal} 篇文章` : '',
         screenContext?.dueWordsCount !== undefined ? `- 今日待複習單字數: ${screenContext.dueWordsCount} 個` : '',
         screenContext?.dailyStreak !== undefined ? `- 連續打卡天數: ${screenContext.dailyStreak} 天` : '',
-        screenContext?.allWordTerms && Array.isArray(screenContext.allWordTerms) && screenContext.allWordTerms.length > 0
-          ? `- 使用者現有單字清單 (全部 ${screenContext.allWordTerms.length} 字): [${screenContext.allWordTerms.slice(0, 150).join(', ')}${screenContext.allWordTerms.length > 150 ? '...等' : ''}]`
-          : '',
-        screenContext?.customCategories && Array.isArray(screenContext.customCategories) && screenContext.customCategories.length > 0
-          ? `- 現有自訂分類標籤清單: [${screenContext.customCategories.join(', ')}]`
+        allCats.length > 0
+          ? `- 現有自訂分類標籤清單: [${allCats.join(', ')}]`
           : '',
         screenContext?.categoryStats
           ? `- 各分類收錄單字量統計: ${JSON.stringify(screenContext.categoryStats)}`
           : '',
-        screenContext?.wordsWithCategories && Array.isArray(screenContext.wordsWithCategories) && screenContext.wordsWithCategories.length > 0
-          ? `- 現有單字之分類歸屬完整清單: [${screenContext.wordsWithCategories.slice(0, 200).map((w: any) => `${w.term}: ${w.category || '未分類'}`).join('; ')}]`
-          : '',
         screenContext?.allArticleTitles && Array.isArray(screenContext.allArticleTitles) && screenContext.allArticleTitles.length > 0
-          ? `- 使用者現有文章清單 (全部 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.map((t: string) => `《${t}》`).join(', ')}]`
-          : ''
+          ? `- 現有文章清單 (共 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.slice(0, 20).map((t: string) => `《${t}》`).join(', ')}]`
+          : '',
+        `\n💡 【按需資料請求機制 (On-Demand Data Access - 大幅節省 Token 並杜絕幻覺)】:`,
+        `- 為節省 Token 並杜絕幻覺，單字庫完整龐大清單預設不全部載入。`,
+        `- 若你需要特定分類下的完整單字清單、搜尋特定單字、文章詳細清單等，請在第一輪輸出 request_data: { provider: "...", param: "..." }，系統將立即為你查詢真實資料庫並進入第二輪對接！`,
+        `- 可用 provider: get_categories, get_words_by_category, search_words, get_articles, get_stats。`
       ].filter(Boolean);
       contextParts.push(dbInfo.join('\n'));
     }
@@ -810,23 +870,6 @@ You must strictly output JSON matching this schema:
           : ''
       ].filter(Boolean);
       contextParts.push(artDetails.join('\n'));
-    }
-
-    // 4. Selective summary samples injection
-    if (!currentArticle && existingArticlesSummary && Array.isArray(existingArticlesSummary) && existingArticlesSummary.length > 0) {
-      contextParts.push(
-        `【使用者的文章閱讀庫現有收錄資料（共 ${existingArticlesSummary.length} 篇，僅供參考）】: \n${JSON.stringify(
-          existingArticlesSummary.slice(0, 10)
-        )}`
-      );
-    }
-
-    if (existingWordsSummary && Array.isArray(existingWordsSummary) && existingWordsSummary.length > 0) {
-      contextParts.push(
-        `【使用者的單字庫現有資料（共 ${existingWordsSummary.length} 個，僅供查詢/參考）】: \n${JSON.stringify(
-          existingWordsSummary.slice(0, 30)
-        )}`
-      );
     }
 
     if (rawInputWords && rawInputWords.length > 0) {
@@ -1153,6 +1196,20 @@ You must strictly output JSON matching this schema:
                 required: ['name']
               }
             }
+          },
+          request_data: {
+            type: Type.OBJECT,
+            description: 'Request real database data from VocabMin before final proposal to avoid hallucinations and token waste.',
+            properties: {
+              provider: {
+                type: Type.STRING,
+                description: 'Data provider: get_categories, get_words_by_category, search_words, get_articles, get_stats'
+              },
+              param: {
+                type: Type.STRING,
+                description: 'Parameter for data provider (e.g. category name, search term, or empty string)'
+              }
+            }
           }
         },
         required: ['reply']
@@ -1170,6 +1227,42 @@ You must strictly output JSON matching this schema:
         reply: outputText,
         words: []
       };
+    }
+
+    // On-demand data access: Agentic multi-turn query loop (up to 2 iterations)
+    let agentLoopCount = 0;
+    while (parsedData.request_data && parsedData.request_data.provider && agentLoopCount < 2) {
+      agentLoopCount++;
+      const provider = String(parsedData.request_data.provider).trim();
+      const param = String(parsedData.request_data.param || '').trim();
+      const providerResult = executeDataProvider(provider, param, screenContext);
+
+      contents.push({
+        role: 'model',
+        parts: [{ text: JSON.stringify(parsedData) }]
+      });
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            text: `[SYSTEM DATA PROVIDER RESPONSE for "${provider}" (param: "${param}")]:\n${providerResult}\n\n【指令要求】：你已獲得精準的資料庫真實數據。請根據這些真實數據與使用者的需求，輸出最終的 reply 與對應的 action（若需要操作）。本次最終輸出請將 request_data 設為 null，並提供完整確切的繁體中文回覆與安全確認卡片。`
+          }
+        ]
+      });
+
+      try {
+        const loopResponse = await generateWithModelFallback(ai, config, contents);
+        const loopOutput = loopResponse.text || '{}';
+        const parsedLoop = JSON.parse(loopOutput);
+        if (parsedLoop && (parsedLoop.reply || parsedLoop.action || (parsedLoop.words && parsedLoop.words.length > 0))) {
+          parsedData = parsedLoop;
+        } else {
+          break;
+        }
+      } catch (loopErr) {
+        console.error('On-demand data provider loop error:', loopErr);
+        break;
+      }
     }
 
     // Process article ONLY if model returned valid article content
@@ -1215,7 +1308,9 @@ You must strictly output JSON matching this schema:
     const isCategoryContext = /(?:分類|自訂分類)/i.test(promptClean) || (parsedData.action && String(parsedData.action.type).includes('category'));
 
     // Category list from screen context (longest first so multi-word categories match accurately)
-    const customCats: string[] = Array.isArray(screenContext?.customCategories) ? screenContext.customCategories : [];
+    const customCats: string[] = Array.isArray(screenContext?.allCategories)
+      ? screenContext.allCategories
+      : (Array.isArray(screenContext?.customCategories) ? screenContext.customCategories : []);
     const sortedCats = [...customCats].sort((a, b) => b.length - a.length);
 
     // Intent: Delete category (PRIORITIZED FIRST to protect against misidentifying as word/article deletion)
@@ -1244,14 +1339,29 @@ You must strictly output JSON matching this schema:
         if (foundKnown) {
           catName = foundKnown;
         } else {
-          const match =
-            promptClean.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?\s*分類/i) ||
-            promptClean.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?/i) ||
-            promptClean.match(/(?:將|把)?\s*([a-zA-Z0-9\u4e00-\u9fa5\s_\-\.]{2,50}?)\s*分類.*(?:刪除|移除|拿掉)/i);
-          if (match) {
-            catName = match[1].replace(/(?:中的|分類)$/, '').trim();
+          // Strict quoted extract
+          const quotedMatch =
+            promptClean.match(/[「『"']([^「『"'」』\n\r]+)[」』"']\s*(?:這個)?分類/i) ||
+            promptClean.match(/分類\s*[「『"']([^「『"'」』\n\r]+)[」』"']/i);
+          if (quotedMatch) {
+            catName = quotedMatch[1].trim();
+          } else {
+            // Strict word extract right next to 分類 (no greedy cross-sentence verbs)
+            const strictMatch =
+              promptClean.match(/(?:刪除|移除|清掉|拿掉)\s*(?:這個)?分類\s*([a-zA-Z0-9_\u4e00-\u9fa5\s]{1,30}?)(?:$|[，,。])/i) ||
+              promptClean.match(/([a-zA-Z0-9_\u4e00-\u9fa5\s]{1,30}?)\s*(?:這個)?分類.*(?:刪除|移除|清掉|拿掉)/i);
+            if (strictMatch) {
+              const cand = strictMatch[1].replace(/(?:中的|分類)$/, '').trim();
+              if (cand && !/(?:將|把|變成|全部|所有|單字|生詞)/.test(cand)) {
+                catName = cand;
+              }
+            }
           }
         }
+      }
+
+      if (catName && /(?:中的|變成|全部|所有|單字|生詞|請幫我)/.test(catName)) {
+        catName = catName.replace(/^(?:請幫我|將|把|全部|所有)+/g, '').replace(/(?:中的|變成|全部|所有|單字|生詞)+$/g, '').trim();
       }
 
       if (catName) {

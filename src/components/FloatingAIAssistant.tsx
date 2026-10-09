@@ -30,7 +30,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
-import { DEFAULT_CATEGORIES } from '../services/storage';
+import { DEFAULT_CATEGORIES, getAllWordCategories } from '../services/storage';
 import { AIArticleCard } from './AIArticleCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import type { ActiveStudyQuestion } from './StudyHubView';
@@ -1147,8 +1147,9 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         activeInspectedWord: activeInspectedWord || null,
         allWordTerms: words.map((w) => w.term),
         allArticleTitles: articles.map((a) => a.title),
-        customCategories: settings.customCategories || DEFAULT_CATEGORIES,
-        categoryStats: (settings.customCategories || DEFAULT_CATEGORIES).reduce((acc: any, cat: string) => {
+        allCategories: getAllWordCategories(words, settings),
+        customCategories: getAllWordCategories(words, settings),
+        categoryStats: getAllWordCategories(words, settings).reduce((acc: any, cat: string) => {
           acc[cat] = words.filter((w) => w.category === cat).length;
           return acc;
         }, { '未分類': words.filter((w) => !w.category || w.category === '未分類').length }),
@@ -1302,7 +1303,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         ).trim();
 
         if (!catName) {
-          const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
+          const allKnownCats = getAllWordCategories(words, settings);
           const sortedCats = [...allKnownCats].sort((a, b) => b.length - a.length);
           const foundKnown = sortedCats.find((c) =>
             trimmedLower.includes(c.toLowerCase()) || (botContent || '').toLowerCase().includes(c.toLowerCase())
@@ -1311,10 +1312,9 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
             catName = foundKnown;
           } else {
             const match =
-              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?\s*分類/i) ||
-              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?/i) ||
-              trimmedLower.match(/(?:將|把)?\s*([a-zA-Z0-9\u4e00-\u9fa5\s_\-\.]{2,50}?)\s*分類.*(?:刪除|移除|拿掉)/i);
-            if (match) catName = match[1].replace(/(?:中的|分類)$/, '').trim();
+              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']([^「『"'」』\n\r]+?)[」』"']\s*(?:自訂)?分類/i) ||
+              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']([^「『"'」』\n\r]+?)[」』"']/i);
+            if (match) catName = match[1].trim();
           }
         }
 

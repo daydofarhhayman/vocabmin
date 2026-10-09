@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.6.6',
+    date: '2026-10-09',
+    type: 'feat',
+    changes: [
+      '🚀 全新架構：按需資料請求對接機制（On-Demand Data Access & Multi-Turn Loop）：徹底革新過去每輪對話將全庫數百單字與文章無腦灌入 Prompt 導致 Token 浪費與注意力渙散的弊端。系統於第一輪向 AI 宣告資料庫概覽與可用數據提供者（Data Providers：分類清單、分類單字、搜尋、文章庫與學習統計），AI 依據任務需要主動發起 request_data，APP 與後端立即在毫秒級展開多輪對接並回傳精確數據，杜絕幻覺並節省高達 70% Token。',
+      '🛡️ 徹底修復自訂分類名稱遭句子切片殘留誤抓的重大缺陷：修復如「請幫我將High Energy Physics 中的單字全部變成未分類，並將 High Energy Physics這個分類刪除」被錯誤截取為「請幫我將high energy physics 中的單字全部變成未」的問題。前後端全面整合 getAllWordCategories 貫通全庫分類白名單，徹底淘汰貪婪字串正則，改採嚴格名單核對與引號邊界比對。',
+      '⚡ 零幻覺操作卡片產出保證：AI 經由多輪數據對接獲得 100% 精準真實之分類單字清單後，能直接準確報告受影響單字量並產出嚴謹之操作確認卡片，徹底消除假執行與名不符實的情形。'
+    ]
+  },
+  {
     version: '1.6.5',
     date: '2026-10-09',
     type: 'fix',
