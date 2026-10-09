@@ -26,6 +26,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Word, AppSettings, Article, POS } from '../types';
+import { DEFAULT_CATEGORIES } from '../services/storage';
 import { AIArticleCard } from './AIArticleCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -74,6 +75,11 @@ interface AIAssistantViewProps {
   onClearAllArticles?: () => void;
   onDeleteArticle?: (titleOrId: string) => void;
   onNavigateToTab?: (tab: any) => void;
+  onUpdateTermCategory?: (term: string, newCategory?: string) => void;
+  onBatchUpdateTermsCategory?: (terms: string[], newCategory?: string) => void;
+  onAddCategory?: (categoryName: string) => void;
+  onRenameCategory?: (oldName: string, newName: string) => void;
+  onDeleteCategory?: (categoryName: string) => void;
   onRequestConfirm?: (config: {
     title: string;
     message: string;
@@ -173,6 +179,11 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   onClearAllArticles,
   onDeleteArticle,
   onNavigateToTab,
+  onUpdateTermCategory,
+  onBatchUpdateTermsCategory,
+  onAddCategory,
+  onRenameCategory,
+  onDeleteCategory,
   onRequestConfirm
 }) => {
   const AI_VIEW_STORAGE_KEY = 'vocabmin_ai_assistant_view_history';
@@ -304,7 +315,13 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           level1: existingWords.filter((w) => w.level === 1).length,
           level2: existingWords.filter((w) => w.level === 2).length,
           level3: existingWords.filter((w) => (w.level || 0) >= 3).length
-        }
+        },
+        customCategories: settings.customCategories || DEFAULT_CATEGORIES,
+        categoryStats: (settings.customCategories || DEFAULT_CATEGORIES).reduce((acc: any, cat: string) => {
+          acc[cat] = existingWords.filter((w) => w.category === cat).length;
+          return acc;
+        }, { '未分類': existingWords.filter((w) => !w.category || w.category === '未分類').length }),
+        wordsWithCategories: existingWords.map((w) => ({ term: w.term, category: w.category || '未分類' }))
       };
 
       // Summary samples of existing words and articles
@@ -312,7 +329,8 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         term: w.term,
         pos: w.pos,
         def: w.def,
-        level: w.level
+        level: w.level,
+        category: w.category || '未分類'
       }));
 
       const existingArticlesSummary = existingArticles.slice(0, 20).map((a) => ({
@@ -785,6 +803,141 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         });
       } else {
         onSaveArticle?.(art);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (action.type === 'set_word_category' && action.setWordCategory?.term) {
+      const { term, category } = action.setWordCategory;
+      const targetCat = category?.trim();
+      const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🏷️ 單字分類調整確認',
+          message: `確定要將單字「${term}」的分類調整為 ${catLabel} 嗎？`,
+          type: 'info',
+          confirmText: '確認調整',
+          onConfirm: () => {
+            onUpdateTermCategory?.(term, targetCat);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將單字「${term}」歸類至 ${catLabel}！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onUpdateTermCategory?.(term, targetCat);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (action.type === 'batch_set_category' && action.batchSetCategory?.category) {
+      const { terms, category } = action.batchSetCategory;
+      const termList = Array.isArray(terms) ? terms : [];
+      const targetCat = category?.trim();
+      const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🏷️ 批次單字分類確認',
+          message: `確定要將以下 ${termList.length} 個單字批次分類至 ${catLabel} 嗎？\n[${termList.join(', ')}]`,
+          type: 'info',
+          confirmText: '確認批次分類',
+          onConfirm: () => {
+            onBatchUpdateTermsCategory?.(termList, targetCat);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將 ${termList.length} 個單字批次歸類至 ${catLabel}！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onBatchUpdateTermsCategory?.(termList, targetCat);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (action.type === 'add_category' && action.addCategory?.name) {
+      const name = action.addCategory.name.trim();
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '📁 新增單字分類確認',
+          message: `確定要建立新的自訂分類「${name}」嗎？`,
+          type: 'info',
+          confirmText: '確認新增',
+          onConfirm: () => {
+            onAddCategory?.(name);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功建立自訂分類「${name}」！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onAddCategory?.(name);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (action.type === 'rename_category' && action.renameCategory?.oldName && action.renameCategory?.newName) {
+      const { oldName, newName } = action.renameCategory;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✏️ 更名單字分類確認',
+          message: `確定要將分類「${oldName}」更名為「${newName}」嗎？\n該分類下的所有單字將自動同步更新。`,
+          type: 'info',
+          confirmText: '確認更名',
+          onConfirm: () => {
+            onRenameCategory?.(oldName, newName);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將分類「${oldName}」更名為「${newName}」！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onRenameCategory?.(oldName, newName);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (action.type === 'delete_category' && action.deleteCategory?.name) {
+      const name = action.deleteCategory.name.trim();
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🗑️ 刪除單字分類確認',
+          message: `確定要刪除分類「${name}」嗎？\n原屬於此分類的單字將安全保留並重設為「未分類」。`,
+          type: 'danger',
+          confirmText: '確認刪除',
+          onConfirm: () => {
+            onDeleteCategory?.(name);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功刪除分類「${name}」，原單字已設為未分類！`,
+                timestamp: Date.now()
+              }
+            ]);
+          }
+        });
+      } else {
+        onDeleteCategory?.(name);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
     }

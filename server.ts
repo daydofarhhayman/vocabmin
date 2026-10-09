@@ -674,6 +674,11 @@ You must strictly output JSON matching this schema:
      * "重置所有單字熟練度" -> action: { type: 'reset_mastery', summary: '重置所有單字熟練度為 Level 0' }
      * "全庫單字標準化" / "補齊英文釋義" -> action: { type: 'batch_standardize', summary: '為現有單字補齊英文釋義並標準化' }
      * "修改單字 [term]" -> action: { type: 'update_word', summary: '修改單字「...」之釋義或例句', updateWord: { term: '...' } }
+     * "將單字 [term] 分類為 [category]" / "幫我把 [term] 放到 [category] 分類" / "取消單字 [term] 的分類" -> action: { type: 'set_word_category', summary: '將單字「...」分類至「...」', setWordCategory: { term: '...', category: '...' } }
+     * "批次將 [term1, term2...] 分類為 [category]" / "把這幾個單字歸類至 [category]" -> action: { type: 'batch_set_category', summary: '批次將 N 個單字歸類至「...」', batchSetCategory: { terms: [...], category: '...' } }
+     * "新增分類 [category]" / "建立新分類 [category]" -> action: { type: 'add_category', summary: '新增自訂分類「...」', addCategory: { name: '...' } }
+     * "將分類 [old] 改名為 [new]" / "更名分類 [old] 為 [new]" -> action: { type: 'rename_category', summary: '將分類「...」更名為「...」', renameCategory: { oldName: '...', newName: '...' } }
+     * "刪除分類 [category]" / "移除分類 [category]" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
    - ⚠️ CRITICAL ZERO-HALLUCINATION PROTOCOL (絕對禁止假執行幻覺):
      * You do NOT have direct execution access to alter, delete, or clear the database in the background.
      * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
@@ -759,6 +764,15 @@ You must strictly output JSON matching this schema:
         screenContext?.dailyStreak !== undefined ? `- 連續打卡天數: ${screenContext.dailyStreak} 天` : '',
         screenContext?.allWordTerms && Array.isArray(screenContext.allWordTerms) && screenContext.allWordTerms.length > 0
           ? `- 使用者現有單字清單 (全部 ${screenContext.allWordTerms.length} 字): [${screenContext.allWordTerms.slice(0, 150).join(', ')}${screenContext.allWordTerms.length > 150 ? '...等' : ''}]`
+          : '',
+        screenContext?.customCategories && Array.isArray(screenContext.customCategories) && screenContext.customCategories.length > 0
+          ? `- 現有自訂分類標籤清單: [${screenContext.customCategories.join(', ')}]`
+          : '',
+        screenContext?.categoryStats
+          ? `- 各分類收錄單字量統計: ${JSON.stringify(screenContext.categoryStats)}`
+          : '',
+        screenContext?.wordsWithCategories && Array.isArray(screenContext.wordsWithCategories) && screenContext.wordsWithCategories.length > 0
+          ? `- 現有單字之分類歸屬範例 (前 40 字): [${screenContext.wordsWithCategories.slice(0, 40).map((w: any) => `${w.term}: ${w.category || '未分類'}`).join('; ')}]`
           : '',
         screenContext?.allArticleTitles && Array.isArray(screenContext.allArticleTitles) && screenContext.allArticleTitles.length > 0
           ? `- 使用者現有文章清單 (全部 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.map((t: string) => `《${t}》`).join(', ')}]`
@@ -876,7 +890,8 @@ You must strictly output JSON matching this schema:
                 pos: { type: Type.STRING, description: 'Part of speech: n., v., adj., adv., phr., or other' },
                 def: { type: Type.STRING, description: 'Standardized Traditional Chinese definition (繁體中文解釋)' },
                 defEn: { type: Type.STRING, description: 'Clear English definition explaining the word in English (英英釋義)' },
-                ex: { type: Type.STRING, description: 'Contextual English example sentence' }
+                ex: { type: Type.STRING, description: 'Contextual English example sentence' },
+                category: { type: Type.STRING, description: 'Appropriate category tag matching user categories or topic (e.g. 商務職場, 日常實用, 學術寫作, 科技潮流)' }
               },
               required: ['term', 'pos', 'def', 'defEn']
             }
@@ -949,7 +964,7 @@ You must strictly output JSON matching this schema:
               type: {
                 type: Type.STRING,
                 description:
-                  'Action type: add_words, update_word, delete_word, batch_standardize, deduplicate_words, clear_all_words, reset_mastery, save_article, delete_article, clear_all_articles'
+                  'Action type: add_words, update_word, delete_word, batch_standardize, deduplicate_words, clear_all_words, reset_mastery, save_article, delete_article, clear_all_articles, set_word_category, batch_set_category, add_category, rename_category, delete_category'
               },
               summary: {
                 type: Type.STRING,
@@ -1080,6 +1095,53 @@ You must strictly output JSON matching this schema:
                     }
                   }
                 }
+              },
+              setWordCategory: {
+                type: Type.OBJECT,
+                description: 'Details if type is set_word_category',
+                properties: {
+                  term: { type: Type.STRING, description: 'Target word to categorize' },
+                  category: { type: Type.STRING, description: 'Category name (or "未分類" to clear)' }
+                },
+                required: ['term']
+              },
+              batchSetCategory: {
+                type: Type.OBJECT,
+                description: 'Details if type is batch_set_category',
+                properties: {
+                  terms: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: 'List of target words'
+                  },
+                  category: { type: Type.STRING, description: 'Target category name (or "未分類" to clear)' }
+                },
+                required: ['terms', 'category']
+              },
+              addCategory: {
+                type: Type.OBJECT,
+                description: 'Details if type is add_category',
+                properties: {
+                  name: { type: Type.STRING, description: 'New custom category name' }
+                },
+                required: ['name']
+              },
+              renameCategory: {
+                type: Type.OBJECT,
+                description: 'Details if type is rename_category',
+                properties: {
+                  oldName: { type: Type.STRING, description: 'Existing category name' },
+                  newName: { type: Type.STRING, description: 'New category name' }
+                },
+                required: ['oldName', 'newName']
+              },
+              deleteCategory: {
+                type: Type.OBJECT,
+                description: 'Details if type is delete_category',
+                properties: {
+                  name: { type: Type.STRING, description: 'Category name to delete' }
+                },
+                required: ['name']
               }
             }
           }

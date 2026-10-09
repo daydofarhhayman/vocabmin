@@ -30,6 +30,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
+import { DEFAULT_CATEGORIES } from '../services/storage';
 import { AIArticleCard } from './AIArticleCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import type { ActiveStudyQuestion } from './StudyHubView';
@@ -57,6 +58,11 @@ interface FloatingAIAssistantProps {
   onResetAllMastery?: () => void;
   onSaveArticle?: (article: Article) => void;
   onOpenArticleInReader?: (article: Article) => void;
+  onUpdateTermCategory?: (term: string, newCategory?: string) => void;
+  onBatchUpdateTermsCategory?: (terms: string[], newCategory?: string) => void;
+  onAddCategory?: (categoryName: string) => void;
+  onRenameCategory?: (oldName: string, newName: string) => void;
+  onDeleteCategory?: (categoryName: string) => void;
   onRequestConfirm?: (config: {
     title: string;
     message: string;
@@ -188,12 +194,12 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
     badgeText: 'text-blue-700 dark:text-blue-300',
     orbColor: 'from-blue-500 to-cyan-600',
     chips: [
-      '分析我現有單字庫的詞彙等級分佈，點出盲點與強項',
+      '分析我現有單字庫的各類別分佈與健康度',
+      '幫我把單字庫中尚未分類的單字歸納到最合適的分類',
+      '我想針對「商務談判」主題擴充 4 個專業表達方式並歸類至商務職場',
       '為我推薦 5 個與我現有字庫主題相符的進階高分詞彙',
-      '我想針對「商務談判」主題擴充 4 個專業表達方式',
       '幫我檢查字庫是否有缺少完整例句或詞性的詞條',
-      '請為我推薦 5 個高頻職場會議常用英文動詞',
-      '我想學習 4 個描述情緒或心理狀態的精準英文詞彙'
+      '請為我推薦 5 個高頻職場會議常用英文動詞'
     ]
   },
   ai: {
@@ -257,6 +263,11 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   onResetAllMastery,
   onSaveArticle,
   onOpenArticleInReader,
+  onUpdateTermCategory,
+  onBatchUpdateTermsCategory,
+  onAddCategory,
+  onRenameCategory,
+  onDeleteCategory,
   onRequestConfirm
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -800,6 +811,146 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onSaveArticle?.(art);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
+    } else if (actionType === 'set_word_category' && action.setWordCategory?.term) {
+      const { term, category } = action.setWordCategory;
+      const targetCat = category?.trim();
+      const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🏷️ 單字分類調整確認',
+          message: `確定要將單字「${term}」的分類調整為 ${catLabel} 嗎？`,
+          type: 'info',
+          confirmText: '確認調整',
+          onConfirm: () => {
+            onUpdateTermCategory?.(term, targetCat);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將單字「${term}」歸類至 ${catLabel}！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onUpdateTermCategory?.(term, targetCat);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (actionType === 'batch_set_category' && action.batchSetCategory?.category) {
+      const { terms, category } = action.batchSetCategory;
+      const termList = Array.isArray(terms) ? terms : [];
+      const targetCat = category?.trim();
+      const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🏷️ 批次單字分類確認',
+          message: `確定要將以下 ${termList.length} 個單字批次分類至 ${catLabel} 嗎？\n[${termList.join(', ')}]`,
+          type: 'info',
+          confirmText: '確認批次分類',
+          onConfirm: () => {
+            onBatchUpdateTermsCategory?.(termList, targetCat);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將 ${termList.length} 個單字批次歸類至 ${catLabel}！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onBatchUpdateTermsCategory?.(termList, targetCat);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (actionType === 'add_category' && action.addCategory?.name) {
+      const name = action.addCategory.name.trim();
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '📁 新增單字分類確認',
+          message: `確定要建立新的自訂分類「${name}」嗎？`,
+          type: 'info',
+          confirmText: '確認新增',
+          onConfirm: () => {
+            onAddCategory?.(name);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功建立自訂分類「${name}」！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onAddCategory?.(name);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (actionType === 'rename_category' && action.renameCategory?.oldName && action.renameCategory?.newName) {
+      const { oldName, newName } = action.renameCategory;
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '✏️ 更名單字分類確認',
+          message: `確定要將分類「${oldName}」更名為「${newName}」嗎？\n該分類下的所有單字將自動同步更新。`,
+          type: 'info',
+          confirmText: '確認更名',
+          onConfirm: () => {
+            onRenameCategory?.(oldName, newName);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功將分類「${oldName}」更名為「${newName}」！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onRenameCategory?.(oldName, newName);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
+    } else if (actionType === 'delete_category' && action.deleteCategory?.name) {
+      const name = action.deleteCategory.name.trim();
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '🗑️ 刪除單字分類確認',
+          message: `確定要刪除分類「${name}」嗎？\n原屬於此分類的單字將安全保留並重設為「未分類」。`,
+          type: 'danger',
+          confirmText: '確認刪除',
+          onConfirm: () => {
+            onDeleteCategory?.(name);
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `bot-done-${Date.now()}`,
+                role: 'assistant',
+                content: `✅ 已成功刪除分類「${name}」，原單字已設為未分類！`,
+                timestamp: Date.now(),
+                scenarioTab: currentTab
+              }
+            ]);
+          }
+        });
+      } else {
+        onDeleteCategory?.(name);
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     }
   }, [
     articles.length,
@@ -815,7 +966,12 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     onResetAllMastery,
     onDeduplicateWords,
     onBatchStandardizeWords,
-    onSaveArticle
+    onSaveArticle,
+    onUpdateTermCategory,
+    onBatchUpdateTermsCategory,
+    onAddCategory,
+    onRenameCategory,
+    onDeleteCategory
   ]);
 
   // Pronounce helper
@@ -887,7 +1043,13 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         activeStudyQuestion: (currentTab === 'review' || currentTab === 'quiz') ? activeStudyQuestion : null,
         activeInspectedWord: activeInspectedWord || null,
         allWordTerms: words.map((w) => w.term),
-        allArticleTitles: articles.map((a) => a.title)
+        allArticleTitles: articles.map((a) => a.title),
+        customCategories: settings.customCategories || DEFAULT_CATEGORIES,
+        categoryStats: (settings.customCategories || DEFAULT_CATEGORIES).reduce((acc: any, cat: string) => {
+          acc[cat] = words.filter((w) => w.category === cat).length;
+          return acc;
+        }, { '未分類': words.filter((w) => !w.category || w.category === '未分類').length }),
+        wordsWithCategories: words.map((w) => ({ term: w.term, category: w.category || '未分類' }))
       };
 
       // Full current article details to eliminate hallucination completely
@@ -922,7 +1084,8 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         term: w.term,
         pos: w.pos,
         def: w.def,
-        level: w.level
+        level: w.level,
+        category: w.category || '未分類'
       }));
 
       // Existing articles summary across the library

@@ -1153,6 +1153,11 @@ export default function App() {
             onClearAllArticles={handleClearAllArticles}
             onDeleteArticle={handleDeleteArticle}
             onNavigateToTab={(tab) => setCurrentTab(tab)}
+            onUpdateTermCategory={handleUpdateTermCategory}
+            onBatchUpdateTermsCategory={handleBatchUpdateTermsCategory}
+            onAddCategory={handleAddCategory}
+            onRenameCategory={handleRenameCategory}
+            onDeleteCategory={handleDeleteCategory}
             onRequestConfirm={(config) => {
               setConfirmConfig({
                 isOpen: true,
@@ -1195,6 +1200,11 @@ export default function App() {
         onResetAllMastery={handleResetAllMastery}
         onSaveArticle={handleSaveArticle}
         onOpenArticleInReader={handleOpenArticleInReader}
+        onUpdateTermCategory={handleUpdateTermCategory}
+        onBatchUpdateTermsCategory={handleBatchUpdateTermsCategory}
+        onAddCategory={handleAddCategory}
+        onRenameCategory={handleRenameCategory}
+        onDeleteCategory={handleDeleteCategory}
         onRequestConfirm={(config) => {
           setConfirmConfig({
             isOpen: true,
