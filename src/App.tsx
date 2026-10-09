@@ -266,7 +266,7 @@ export default function App() {
         const merged = { ...prev, ...newSettings };
         storage.saveLocalSettings(merged);
         if (user) {
-          storage.syncToCloud(words, dailyStats, merged);
+          storage.saveCloudSettings(merged);
         }
         return merged;
       });
@@ -280,7 +280,7 @@ export default function App() {
         });
       }
     },
-    [words, dailyStats, user]
+    [user]
   );
 
   // Add words (with deduplication against identical term + pos + def)
@@ -461,7 +461,7 @@ export default function App() {
       const clean = newCat.trim();
       if (!clean || clean === '未分類') return;
       const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
-      if (currentCats.includes(clean)) return;
+      if (currentCats.some((c) => c.trim().toLowerCase() === clean.toLowerCase())) return;
 
       const updated = [...currentCats, clean];
       handleUpdateSettings({ customCategories: updated });
@@ -471,127 +471,163 @@ export default function App() {
   );
 
   const handleRenameCategory = useCallback(
-    (oldName: string, newName: string) => {
+    async (oldName: string, newName: string) => {
       const cleanOld = oldName.trim();
       const cleanNew = newName.trim();
-      if (!cleanOld || !cleanNew || cleanOld === cleanNew) return;
+      if (!cleanOld || !cleanNew || cleanOld.toLowerCase() === cleanNew.toLowerCase()) return;
 
       const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
-      const updatedCats = currentCats.map((c) => (c === cleanOld ? cleanNew : c));
-      handleUpdateSettings({ customCategories: updatedCats });
+      const updatedCats = currentCats.map((c) =>
+        c.trim().toLowerCase() === cleanOld.toLowerCase() ? cleanNew : c
+      );
+      const updatedSettings = { ...settings, customCategories: updatedCats };
+      setSettings(updatedSettings);
+      storage.saveLocalSettings(updatedSettings);
 
+      const affectedIds: string[] = [];
       setWords((prev) => {
-        let changed = false;
-        const updatedWords = prev.map((w) => {
-          if (w.category === cleanOld) {
-            changed = true;
+        const nextWords = prev.map((w) => {
+          if (w.category && w.category.trim().toLowerCase() === cleanOld.toLowerCase()) {
+            affectedIds.push(w.id);
             return { ...w, category: cleanNew };
           }
           return w;
         });
 
-        if (changed) {
-          storage.saveLocalWords(updatedWords);
-          if (user) {
-            storage.syncToCloud(updatedWords, dailyStats, settings);
-          }
-        }
-        return updatedWords;
+        storage.saveLocalWords(nextWords);
+        return nextWords;
       });
+
+      // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
+      if (user) {
+        try {
+          await storage.renameCloudCategory(cleanOld, cleanNew, affectedIds);
+        } catch (err) {
+          console.error('Failed to rename cloud category directly:', err);
+        }
+      }
 
       showToast(`已將分類「${cleanOld}」更名為「${cleanNew}」`);
     },
-    [settings, dailyStats, user, handleUpdateSettings, showToast]
+    [settings, user, showToast]
   );
 
   const handleDeleteCategory = useCallback(
-    (categoryName: string) => {
+    async (categoryName: string) => {
       const clean = categoryName.trim();
       if (!clean) return;
 
       const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
-      const updatedCats = currentCats.filter((c) => c !== clean);
-      handleUpdateSettings({ customCategories: updatedCats });
+      const updatedCats = currentCats.filter((c) => c.trim().toLowerCase() !== clean.toLowerCase());
+      const updatedSettings = { ...settings, customCategories: updatedCats };
+      setSettings(updatedSettings);
+      storage.saveLocalSettings(updatedSettings);
 
+      const affectedIds: string[] = [];
       setWords((prev) => {
-        let changed = false;
-        const updatedWords = prev.map((w) => {
-          if (w.category === clean) {
-            changed = true;
-            return { ...w, category: undefined };
+        const nextWords = prev.map((w) => {
+          if (w.category && w.category.trim().toLowerCase() === clean.toLowerCase()) {
+            affectedIds.push(w.id);
+            const copy = { ...w };
+            delete copy.category;
+            return copy;
           }
           return w;
         });
 
-        if (changed) {
-          storage.saveLocalWords(updatedWords);
-          if (user) {
-            storage.syncToCloud(updatedWords, dailyStats, settings);
-          }
-        }
-        return updatedWords;
+        storage.saveLocalWords(nextWords);
+        return nextWords;
       });
+
+      // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
+      if (user) {
+        try {
+          await storage.deleteCloudCategory(clean, affectedIds);
+        } catch (err) {
+          console.error('Failed to delete cloud category directly:', err);
+        }
+      }
 
       showToast(`已刪除分類「${clean}」，原單字已設為未分類`);
     },
-    [settings, dailyStats, user, handleUpdateSettings, showToast]
+    [settings, user, showToast]
   );
 
   const handleUpdateTermCategory = useCallback(
-    (term: string, newCategory?: string) => {
+    async (term: string, newCategory?: string) => {
       const cleanTerm = term.trim().toLowerCase();
       const cleanCat = newCategory?.trim();
       const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : cleanCat;
 
+      const affectedIds: string[] = [];
       setWords((prev) => {
-        let changed = false;
-        const updatedWords = prev.map((w) => {
+        const nextWords = prev.map((w) => {
           if (w.term.trim().toLowerCase() === cleanTerm) {
-            changed = true;
-            return { ...w, category: finalCat };
+            affectedIds.push(w.id);
+            const copy = { ...w };
+            if (finalCat) {
+              copy.category = finalCat;
+            } else {
+              delete copy.category;
+            }
+            return copy;
           }
           return w;
         });
 
-        if (changed) {
-          storage.saveLocalWords(updatedWords);
-          if (user) {
-            storage.syncToCloud(updatedWords, dailyStats, settings);
-          }
-        }
-        return updatedWords;
+        storage.saveLocalWords(nextWords);
+        return nextWords;
       });
+
+      // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
+      if (user && affectedIds.length > 0) {
+        try {
+          await storage.batchUpdateCloudWordsCategory(affectedIds, finalCat);
+        } catch (err) {
+          console.error('Failed to update cloud word category directly:', err);
+        }
+      }
 
       showToast(finalCat ? `已將「${term}」歸類至「${finalCat}」` : `已取消「${term}」的分類`);
     },
-    [dailyStats, settings, user, showToast]
+    [user, showToast]
   );
 
   const handleBatchUpdateTermsCategory = useCallback(
-    (terms: string[], newCategory?: string) => {
+    async (terms: string[], newCategory?: string) => {
       if (!terms.length) return;
       const termsSet = new Set(terms.map((t) => t.trim().toLowerCase()));
       const cleanCat = newCategory?.trim();
       const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : cleanCat;
 
+      const affectedIds: string[] = [];
       setWords((prev) => {
-        let changedCount = 0;
-        const updatedWords = prev.map((w) => {
+        const nextWords = prev.map((w) => {
           if (termsSet.has(w.term.trim().toLowerCase())) {
-            changedCount++;
-            return { ...w, category: finalCat };
+            affectedIds.push(w.id);
+            const copy = { ...w };
+            if (finalCat) {
+              copy.category = finalCat;
+            } else {
+              delete copy.category;
+            }
+            return copy;
           }
           return w;
         });
 
-        if (changedCount > 0) {
-          storage.saveLocalWords(updatedWords);
-          if (user) {
-            storage.syncToCloud(updatedWords, dailyStats, settings);
-          }
-        }
-        return updatedWords;
+        storage.saveLocalWords(nextWords);
+        return nextWords;
       });
+
+      // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
+      if (user && affectedIds.length > 0) {
+        try {
+          await storage.batchUpdateCloudWordsCategory(affectedIds, finalCat);
+        } catch (err) {
+          console.error('Failed to batch update cloud words category directly:', err);
+        }
+      }
 
       showToast(
         finalCat
@@ -599,7 +635,7 @@ export default function App() {
           : `已將 ${terms.length} 個單字設為未分類`
       );
     },
-    [dailyStats, settings, user, showToast]
+    [user, showToast]
   );
 
   // Deduplicate words: merge repeated items with same term and pos/def, keeping highest mastery and SRS stats

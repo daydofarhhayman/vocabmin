@@ -3,13 +3,15 @@ import { DEFAULT_ARTICLES } from '../utils/defaultArticles';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
+  initializeFirestore,
   collection,
   doc,
   setDoc,
   getDoc,
   getDocs,
   deleteDoc,
-  writeBatch
+  writeBatch,
+  deleteField
 } from 'firebase/firestore';
 import {
   getAuth,
@@ -111,7 +113,11 @@ try {
 
   if (firebaseConfig.apiKey) {
     const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-    firestoreDb = getFirestore(app);
+    try {
+      firestoreDb = initializeFirestore(app, { ignoreUndefinedProperties: true });
+    } catch {
+      firestoreDb = getFirestore(app);
+    }
     firebaseAuth = getAuth(app);
     googleProvider = new GoogleAuthProvider();
   }
@@ -585,7 +591,8 @@ export class StorageService {
         const batch = writeBatch(firestoreDb);
         const chunk = words.slice(i, i + 400);
         chunk.forEach((w) => {
-          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), w);
+          const cleanWord = JSON.parse(JSON.stringify(w));
+          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord);
         });
         await batch.commit();
       }
@@ -782,7 +789,8 @@ export class StorageService {
         const batch = writeBatch(firestoreDb);
         const chunk = words.slice(i, i + 400);
         chunk.forEach((w) => {
-          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), w);
+          const cleanWord = JSON.parse(JSON.stringify(w));
+          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord);
         });
         await batch.commit();
       }
@@ -794,6 +802,173 @@ export class StorageService {
       }, { merge: true });
     } catch (e) {
       console.error('Failed to save cloud words only:', e);
+    }
+  }
+
+  // ==========================================
+  // Direct Cloud Database Mutations for Categories
+  // ==========================================
+  public async deleteCloudCategory(categoryName: string, affectedWordIds?: string[]): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    const cleanCat = categoryName.trim().toLowerCase();
+
+    try {
+      // 1. Gather all word documents in Firestore that have this category
+      let targetIds = affectedWordIds;
+      if (!targetIds || targetIds.length === 0) {
+        const snap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
+        targetIds = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          if (data?.category && String(data.category).trim().toLowerCase() === cleanCat) {
+            targetIds!.push(d.id);
+          }
+        });
+      }
+
+      // 2. Batch update words in Firestore to delete the category field completely
+      if (targetIds && targetIds.length > 0) {
+        for (let i = 0; i < targetIds.length; i += 400) {
+          const batch = writeBatch(firestoreDb);
+          const chunk = targetIds.slice(i, i + 400);
+          chunk.forEach((id) => {
+            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
+              category: deleteField()
+            });
+          });
+          await batch.commit();
+        }
+      }
+
+      // 3. Update settings document in Firestore to remove category from customCategories
+      const settingsRef = doc(firestoreDb, 'users', uid, 'data', 'settings');
+      const settingsSnap = await getDoc(settingsRef);
+      if (settingsSnap.exists()) {
+        const settingsData = settingsSnap.data() as AppSettings;
+        const currentCats = settingsData.customCategories || [];
+        const updatedCats = currentCats.filter((c) => c.trim().toLowerCase() !== cleanCat);
+        await setDoc(settingsRef, { customCategories: updatedCats }, { merge: true });
+      }
+
+      // 4. Update sync timestamp
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        { lastSyncedAt: Date.now() },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to delete cloud category directly:', e);
+      throw e;
+    }
+  }
+
+  public async renameCloudCategory(oldName: string, newName: string, affectedWordIds?: string[]): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    const cleanOld = oldName.trim().toLowerCase();
+    const cleanNew = newName.trim();
+
+    try {
+      let targetIds = affectedWordIds;
+      if (!targetIds || targetIds.length === 0) {
+        const snap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
+        targetIds = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          if (data?.category && String(data.category).trim().toLowerCase() === cleanOld) {
+            targetIds!.push(d.id);
+          }
+        });
+      }
+
+      if (targetIds && targetIds.length > 0) {
+        for (let i = 0; i < targetIds.length; i += 400) {
+          const batch = writeBatch(firestoreDb);
+          const chunk = targetIds.slice(i, i + 400);
+          chunk.forEach((id) => {
+            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
+              category: cleanNew
+            });
+          });
+          await batch.commit();
+        }
+      }
+
+      const settingsRef = doc(firestoreDb, 'users', uid, 'data', 'settings');
+      const settingsSnap = await getDoc(settingsRef);
+      if (settingsSnap.exists()) {
+        const settingsData = settingsSnap.data() as AppSettings;
+        const currentCats = settingsData.customCategories || [];
+        const updatedCats = currentCats.map((c) =>
+          c.trim().toLowerCase() === cleanOld ? cleanNew : c
+        );
+        await setDoc(settingsRef, { customCategories: updatedCats }, { merge: true });
+      }
+
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        { lastSyncedAt: Date.now() },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to rename cloud category directly:', e);
+      throw e;
+    }
+  }
+
+  public async batchUpdateCloudWordsCategory(wordIds: string[], newCategory?: string): Promise<void> {
+    if (!this.currentUser || !firestoreDb || !wordIds.length) return;
+    const uid = this.currentUser.uid;
+    const cleanCat = newCategory?.trim();
+    const isUncategorized = !cleanCat || cleanCat === '未分類';
+
+    try {
+      for (let i = 0; i < wordIds.length; i += 400) {
+        const batch = writeBatch(firestoreDb);
+        const chunk = wordIds.slice(i, i + 400);
+        chunk.forEach((id) => {
+          if (isUncategorized) {
+            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
+              category: deleteField()
+            });
+          } else {
+            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
+              category: cleanCat
+            });
+          }
+        });
+        await batch.commit();
+      }
+
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        { lastSyncedAt: Date.now() },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to batch update cloud words category directly:', e);
+      throw e;
+    }
+  }
+
+  public async saveCloudSettings(settings: AppSettings): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    try {
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), settings, { merge: true });
+    } catch (e) {
+      console.error('Failed to save cloud settings:', e);
+    }
+  }
+
+  public async saveCloudStats(stats: DailyStats): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    try {
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats, { merge: true });
+    } catch (e) {
+      console.error('Failed to save cloud stats:', e);
     }
   }
 

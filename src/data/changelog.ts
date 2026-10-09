@@ -13,6 +13,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.6.7',
+    date: '2026-10-09',
+    type: 'fix',
+    changes: [
+      '☁️ 徹底修復「只刪除本地資料、重新整理後自訂分類與單字標籤又復原」之重大雲端同步缺陷：實作 Direct Cloud Database Mutation（雲端資料庫直寫變更），當使用者或 AI 執行刪除分類、批次設定分類或更名分類時，立即對 Firestore 雲端資料庫發動批次更新（使用 deleteField() 徹底抹除單字上的分類欄位，並自使用者的雲端 settings.customCategories 中同步移除），徹底保證重新整理後資料絕不回彈。',
+      '🛡️ 解決 Firestore undefined 屬性致命序列化異常：Firebase SDK 在 batch.set 遇到 undefined 屬性時會直接中斷整筆寫入。本次升級全面配置 ignoreUndefinedProperties: true，並在所有雲端寫入前實施深度序列化清洗（cleanWord），徹底根除雲端同步靜默失敗問題。',
+      '⚡ 徹底分離設定更新與單字全量同步：重構 handleUpdateSettings，設定變更時僅單獨直寫雲端 settings 文件，徹底消弭過去設定更新與單字更新同時觸發導致的閉包舊資料競態覆蓋（Race Condition）。',
+      '🏷️ 強化大小寫與空格不敏感分類比對：刪除與更名分類時全面採用 trim().toLowerCase() 模糊比對，避免因單字標籤與分類名稱存在大小寫差異導致過濾遺漏。'
+    ]
+  },
+  {
     version: '1.6.6',
     date: '2026-10-09',
     type: 'feat',
