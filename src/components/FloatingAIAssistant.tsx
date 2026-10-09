@@ -1390,6 +1390,51 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
       }
 
       // Check for batch set category intent or claim
+      const uncatWords = words.filter(
+        (w) => !w.category || w.category === '未分類' || w.category.trim() === ''
+      );
+
+      const isUserAskingUncategorizedBatch =
+        !isQuestionOrHowTo &&
+        (/(?:尚未分類|未分類).*(?:歸納|歸類|分類|配置|整理)|(?:歸納|歸類|分類|整理).*(?:尚未分類|未分類)/i.test(trimmedLower) ||
+          ((trimmedLower === '確認' || trimmedLower === '好的' || trimmedLower === '確定' || trimmedLower === '執行') &&
+           messages.some((m) => /(?:未分類|尚未分類).*(?:歸類|分類|需求)/.test(m.content))));
+
+      const claimsNoUncategorized =
+        uncatWords.length > 0 &&
+        /(?:沒有任何單字|已經成功分好類|為 0 個|沒有尚未分類|皆已分類)/i.test(botContent);
+
+      const isLazyDeflectionWithoutAction =
+        !botAction &&
+        /(?:我已為您發起|請確認此操作|進行智慧歸類的需求)/i.test(botContent);
+
+      if (
+        uncatWords.length > 0 &&
+        (isUserAskingUncategorizedBatch || claimsNoUncategorized || isLazyDeflectionWithoutAction)
+      ) {
+        if (!botAction) {
+          const catMatch =
+            botContent.match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
+            trimmedLower.match(/(?:加入|歸類至|移至|設為|放到)\s*([a-zA-Z0-9\u4e00-\u9fa5\s_-]+?)\s*分類/i);
+          const availableCats = (settings?.customCategories || []).filter((c: string) => c !== '未分類');
+          const targetCategory = catMatch ? catMatch[1].trim() : (availableCats[0] || 'General');
+
+          botAction = {
+            type: 'batch_set_category',
+            summary: `批次將 ${uncatWords.length} 個未分類單字歸類至「${targetCategory}」`,
+            batchSetCategory: {
+              terms: uncatWords.map((w) => w.term),
+              category: targetCategory
+            }
+          };
+        }
+
+        if (claimsNoUncategorized || isLazyDeflectionWithoutAction || !botContent || botContent.length < 20) {
+          const catTarget = botAction?.batchSetCategory?.category || '指定分類';
+          botContent = `為您分析單字庫中現有的 ${uncatWords.length} 個未分類單字：[${uncatWords.map((w) => w.term).join(', ')}]。已為您建立批次分類操作確認卡片，請點擊下方卡片確認按鈕以將其歸類至「${catTarget}」！`;
+        }
+      }
+
       const claimsBatchCategory =
         !botAction &&
         ((/(?:已為您|已成功|已經|已幫您).*(?:建立|整理).*(?:批次歸類|歸類至|加入.*分類|移至.*分類|設定.*分類|操作確認卡片)/i.test(botContent) ||

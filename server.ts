@@ -539,13 +539,17 @@ function executeDataProvider(provider: string, param: string, screenContext: any
       return `【資料庫全庫分類清單與統計 (共 ${cats.length} 個分類)】:\n${lines.join('\n')}`;
     }
     case 'get_words_by_category': {
-      const targetCategory = (param || '').trim();
+      const rawParam = (param || '').trim();
+      const isUncat = !rawParam || /^(?:未分類|尚未分類|無分類|uncategorized|none|未歸類)$/i.test(rawParam);
       const wordsWithCats = screenContext.wordsWithCategories || [];
-      const matched = wordsWithCats.filter((w: any) =>
-        (w.category || '未分類').toLowerCase() === targetCategory.toLowerCase()
-      );
+      const matched = wordsWithCats.filter((w: any) => {
+        const cat = (w.category || '未分類').trim().toLowerCase();
+        if (isUncat) return !w.category || cat === '未分類' || cat === '';
+        return cat === rawParam.toLowerCase();
+      });
       const terms = matched.map((w: any) => w.term);
-      return `【資料庫分類「${targetCategory}」下的單字查詢結果】:\n共找到 ${terms.length} 個單字:\n${terms.length > 0 ? terms.join(', ') : '（目前此分類下無單字）'}`;
+      const label = isUncat ? '未分類' : rawParam;
+      return `【資料庫分類「${label}」下的單字查詢結果】:\n共找到 ${terms.length} 個單字:\n${terms.length > 0 ? terms.join(', ') : '（目前此分類下無單字）'}`;
     }
     case 'search_words': {
       const query = (param || '').trim().toLowerCase();
@@ -730,6 +734,17 @@ You must strictly output JSON matching this schema:
      * "刪除分類 [category]" / "移除分類 [category]" / "將 [category] 分類中的單字全部換成未分類狀態，並刪除分類" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
        🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting words or clearing the vocabulary library! When the user commands to delete or reset a category, action MUST be "delete_category" (or "batch_set_category"), and NEVER "clear_all_words"! In VocabMin, deleting a category safely retains all words and resets their category to "未分類".
        🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting an article! If the user says "刪除 [Name] 分類" or mentions "分類", [Name] is a CATEGORY, NOT an article! NEVER output "delete_article" for category commands!
+     * "幫我把單字庫中尚未分類的單字歸納到最適當的分類" / "為未分類單字分類" / "自動歸納未分類" ->
+       🚨 絕對禁令：當情境中尚有未分類單字或各分類統計包含「未分類」時，嚴格禁止回答「未分類中沒有任何單字」或「所有單字都已經分好類了」！
+       🚨 絕對禁令：嚴格禁止回答假執行的確認語句（如「我已為您發起需求，請確認此操作」）卻不提供具體分類分析與操作卡片！
+       1. 檢視情境中提供的「未分類」單字清單（例如 Violation, Nomenclature, Intentional, Pion, Bending, Emulsion）。
+       2. 針對每一個未分類單字逐一進行領域與語意分析：
+          - 若符合現有分類（如 Chemistry），規劃歸入該分類。
+          - 若屬於其他專業領域（如 物理學/Physics, 法政學術/Academic, 日常實用/General），規劃適當的新分類名稱。
+       3. 在 "reply" 中給出完整且清晰的分類歸納方案（條列指出每個單字預計歸屬之分類與理由）。
+       4. 在 "action" 中產出主要的批次操作確認卡片：action: { type: 'batch_set_category', summary: '...', batchSetCategory: { terms: [...], category: '...' } }。
+     * 使用者簡短確認（"確認"、"好的"、"執行"、"確定"、"可以"）處理：
+       當使用者的輸入僅為「確認」或「好的」等簡短確認詞時，請檢視前一輪對話的討論內容。若上一輪討論為單字分類或庫存異動，請立即落實並輸出具體的 action 操作卡片，絕不能遺失上下文或假裝資料不存在！
    - ⚠️ CRITICAL ZERO-HALLUCINATION & MANDATORY ACTION BINDING PROTOCOL (絕對禁止假執行幻覺與物件遺漏):
      * You do NOT have direct execution access to alter, delete, or clear the database in the background.
      * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything without emitting an "action" (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
@@ -826,7 +841,14 @@ You must strictly output JSON matching this schema:
 
     const allCats: string[] = screenContext?.allCategories || screenContext?.customCategories || [];
 
-    if (wordsTotal !== undefined || articlesTotal !== undefined || allCats.length > 0) {
+    const wordsWithCats = Array.isArray(screenContext?.wordsWithCategories)
+      ? screenContext.wordsWithCategories
+      : [];
+    const uncategorizedWords = wordsWithCats
+      .filter((w: any) => !w.category || w.category === '未分類' || String(w.category).trim() === '')
+      .map((w: any) => w.term);
+
+    if (wordsTotal !== undefined || articlesTotal !== undefined || allCats.length > 0 || uncategorizedWords.length > 0) {
       const dbInfo: string[] = [
         `【📚 使用者真實資料庫概覽與按需資料對接】:`,
         wordsTotal !== undefined ? `- 單字庫收錄總量: 共 ${wordsTotal} 個單字` : '',
@@ -839,6 +861,9 @@ You must strictly output JSON matching this schema:
         screenContext?.categoryStats
           ? `- 各分類收錄單字量統計: ${JSON.stringify(screenContext.categoryStats)}`
           : '',
+        uncategorizedWords.length > 0
+          ? `- 🚨 目前尚有 ${uncategorizedWords.length} 個單字處於「未分類」狀態: [${uncategorizedWords.slice(0, 60).join(', ')}${uncategorizedWords.length > 60 ? '...等' : ''}]（若使用者要求「歸納未分類單字」、「智慧分類」等，請直接針對上述 ${uncategorizedWords.length} 個真實單字進行領域與語意分析，並產出分類建議與 batch_set_category 操作確認卡片，絕對嚴禁聲稱沒有未分類單字！）`
+          : '- 目前全庫單字皆已分類完成（未分類單字為 0 個）。',
         screenContext?.allArticleTitles && Array.isArray(screenContext.allArticleTitles) && screenContext.allArticleTitles.length > 0
           ? `- 現有文章清單 (共 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.slice(0, 20).map((t: string) => `《${t}》`).join(', ')}]`
           : '',
@@ -1551,6 +1576,56 @@ You must strictly output JSON matching this schema:
       };
       if (!parsedData.reply || parsedData.reply.length < 15) {
         parsedData.reply = `已為您為字庫中的 ${updatedWords.length} 個單字補全繁體中文解釋、英英釋義與例句，請點擊下方「確認執行」卡片按鈕即可同步更新至單字庫！`;
+      }
+    }
+
+    // Fallback & Anti-Hallucination: Categorize unclassified words
+    const effectiveUncategorizedWords = uncategorizedWords.length > 0
+      ? uncategorizedWords
+      : (Array.isArray(existingWordsSummary)
+          ? existingWordsSummary
+              .filter((w: any) => !w.category || w.category === '未分類' || String(w.category).trim() === '')
+              .map((w: any) => w.term)
+          : []);
+
+    const isUncategorizedBatchCommand =
+      !isQuestionOrHowTo &&
+      (/(?:尚未分類|未分類).*(?:歸納|歸類|分類|配置|整理)|(?:歸納|歸類|分類|整理).*(?:尚未分類|未分類)/i.test(promptClean) ||
+        ((promptClean === '確認' || promptClean === '好的' || promptClean === '確定' || promptClean === '執行') &&
+         contents.some((c: any) => /(?:未分類|尚未分類).*(?:歸類|分類|需求)/.test(c.parts?.[0]?.text || ''))));
+
+    const claimsNoUncategorized =
+      effectiveUncategorizedWords.length > 0 &&
+      /(?:沒有任何單字|已經成功分好類|為 0 個|沒有尚未分類|皆已分類)/i.test(parsedData.reply || '');
+
+    const isLazyDeflectionWithoutAction =
+      !parsedData.action &&
+      /(?:我已為您發起|請確認此操作|進行智慧歸類的需求)/i.test(parsedData.reply || '');
+
+    if (
+      effectiveUncategorizedWords.length > 0 &&
+      (isUncategorizedBatchCommand || claimsNoUncategorized || isLazyDeflectionWithoutAction)
+    ) {
+      if (!parsedData.action || parsedData.action.type !== 'batch_set_category') {
+        const existingCategoryNames = (allCats.length > 0 ? allCats : ['General']).filter((c) => c !== '未分類');
+        const mentionedCat = existingCategoryNames.find((c) =>
+          (parsedData.reply || '').toLowerCase().includes(c.toLowerCase())
+        );
+        const targetCategory = mentionedCat || existingCategoryNames[0] || 'General';
+
+        parsedData.action = {
+          type: 'batch_set_category',
+          summary: `批次將 ${effectiveUncategorizedWords.length} 個未分類單字歸類至「${targetCategory}」`,
+          batchSetCategory: {
+            terms: effectiveUncategorizedWords,
+            category: targetCategory
+          }
+        };
+      }
+
+      if (claimsNoUncategorized || isLazyDeflectionWithoutAction || !parsedData.reply || parsedData.reply.length < 20) {
+        const catTarget = parsedData.action?.batchSetCategory?.category || '指定分類';
+        parsedData.reply = `已為您檢測並分析單字庫中 ${effectiveUncategorizedWords.length} 個未分類單字：[${effectiveUncategorizedWords.join(', ')}]。為避免誤觸並保障您的資料安全，已為您建立批次分類操作確認卡片，請點擊下方卡片確認按鈕以將其歸類至「${catTarget}」！`;
       }
     }
 
