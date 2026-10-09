@@ -14,7 +14,8 @@ import {
   Plus,
   Check,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Tag
 } from 'lucide-react';
 import { WordGroup, Word, POS, AppSettings } from '../types';
 import { tts } from '../services/tts';
@@ -336,9 +337,15 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
           {/* Header Card: Word Term, Audio, Cambridge */}
           <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-50/70 to-slate-50 dark:from-indigo-950/30 dark:to-slate-900/40 border border-indigo-100/80 dark:border-indigo-900/40 flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <span className="text-[11px] font-bold text-indigo-500 uppercase tracking-wider block mb-1">
-                Vocabulary
-              </span>
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="text-[11px] font-bold text-indigo-500 uppercase tracking-wider">
+                  Vocabulary
+                </span>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/40 inline-flex items-center gap-1">
+                  <Tag className="w-3 h-3" />
+                  <span>{group.category || '未分類'}</span>
+                </span>
+              </div>
               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white capitalize tracking-tight truncate">
                 {group.term}
               </h2>

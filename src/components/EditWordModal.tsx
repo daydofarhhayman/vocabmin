@@ -12,6 +12,8 @@ interface EditWordModalProps {
   allWords: Word[];
   onUpdateGroup: (oldTerm: string, newWords: Partial<Word>[]) => void;
   lang: 'zh' | 'en';
+  categories?: string[];
+  onAddCategory?: (categoryName: string) => void;
 }
 
 interface DefinitionRow {
@@ -34,10 +36,15 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
   word,
   allWords,
   onUpdateGroup,
-  lang
+  lang,
+  categories = [],
+  onAddCategory
 }) => {
   const t = TRANSLATIONS[lang];
   const [term, setTerm] = useState('');
+  const [category, setCategory] = useState('未分類');
+  const [isAddingNewCat, setIsAddingNewCat] = useState(false);
+  const [newCatInput, setNewCatInput] = useState('');
   const [definitions, setDefinitions] = useState<DefinitionRow[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAiFetchMeaningsLoading, setIsAiFetchMeaningsLoading] = useState(false);
@@ -159,6 +166,9 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
   useEffect(() => {
     if (word) {
       setTerm(word.term);
+      setCategory(word.category || '未分類');
+      setIsAddingNewCat(false);
+      setNewCatInput('');
       const related = allWords.filter(
         (w) => w.term.trim().toLowerCase() === word.term.trim().toLowerCase()
       );
@@ -234,6 +244,9 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     const validDefs = definitions.filter((d) => d.def.trim().length > 0);
     if (!validDefs.length) return;
 
+    const cleanCategory = category.trim();
+    const finalCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
+
     // Preserve existing SRS intervals, easeFactor, and review dates
     const updatedWords: Partial<Word>[] = validDefs.map((d) => ({
       id: d.id,
@@ -242,6 +255,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
       def: d.def.trim(),
       defEn: (d.defEn || '').trim() || undefined,
       ex: d.ex.trim(),
+      category: finalCategory,
       level: d.level,
       interval: d.interval,
       easeFactor: d.easeFactor,
@@ -322,6 +336,75 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
               onChange={(e) => setTerm(e.target.value)}
               className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 font-bold text-base outline-none focus:ring-2 focus:ring-teal-500/20"
             />
+          </div>
+
+          {/* Category Selector */}
+          <div>
+            <label className="text-xs font-bold uppercase text-slate-400 block mb-1.5">
+              單字分類 (Category)
+            </label>
+            {!isAddingNewCat ? (
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <select
+                    value={category}
+                    onChange={(e) => {
+                      if (e.target.value === '__NEW__') {
+                        setIsAddingNewCat(true);
+                      } else {
+                        setCategory(e.target.value);
+                      }
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
+                  >
+                    <option value="未分類">未分類 (預設)</option>
+                    {(categories || []).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                    <option value="__NEW__">+ 新增自訂類別...</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={newCatInput}
+                  onChange={(e) => setNewCatInput(e.target.value)}
+                  placeholder="輸入新類別名稱..."
+                  maxLength={20}
+                  autoFocus
+                  className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-indigo-500 text-xs font-bold text-slate-800 dark:text-white outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const clean = newCatInput.trim();
+                    if (clean && clean !== '未分類') {
+                      if (onAddCategory) onAddCategory(clean);
+                      setCategory(clean);
+                    }
+                    setIsAddingNewCat(false);
+                    setNewCatInput('');
+                  }}
+                  className="px-3.5 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 cursor-pointer"
+                >
+                  確認
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddingNewCat(false);
+                    setNewCatInput('');
+                  }}
+                  className="px-3 py-2 bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-200 rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  取消
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Definitions List */}

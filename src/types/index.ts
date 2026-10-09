@@ -7,6 +7,7 @@ export interface Word {
   def: string; // Traditional Chinese definition
   defEn?: string; // English definition (英英釋義)
   ex?: string;
+  category?: string; // 自訂分類，預設空或 '未分類'
   level: number; // 0: New, 1: Learning, 2: Familiar, 3: Mastered
   interval: number; // Days until next review
   easeFactor: number; // SM-2 ease factor (default 2.5)
@@ -22,6 +23,7 @@ export interface WordGroup {
   interval: number;
   nextReview: number;
   lastReview: number;
+  category?: string; // 單字所屬分類
 }
 
 export interface DayStat {
@@ -58,6 +60,7 @@ export interface AppSettings {
   fontSize?: 'normal' | 'medium' | 'large'; // 閱讀字體級距
   appNickname?: string; // 個性化空間自訂名稱
   geminiApiKey?: string; // 自訂 Google Gemini API Key
+  customCategories?: string[]; // 使用者自訂單字庫分類清單
   // Backward compatibility optional fields
   mergeReview?: boolean;
   autoPlayAudio?: boolean;

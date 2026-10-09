@@ -33,6 +33,8 @@ interface AddWordModalProps {
   lang: 'zh' | 'en';
   existingWords?: Word[];
   initialTerm?: string;
+  categories?: string[];
+  onAddCategory?: (categoryName: string) => void;
 }
 
 interface DefinitionInput {
@@ -132,13 +134,18 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   onAddWords,
   lang,
   existingWords = [],
-  initialTerm = ''
+  initialTerm = '',
+  categories = [],
+  onAddCategory
 }) => {
   const t = TRANSLATIONS[lang];
   const [activeTab, setActiveTab] = useState<'single' | 'batch' | 'packs'>('single');
 
   // Single word state
   const [term, setTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('未分類');
+  const [isAddingNewCat, setIsAddingNewCat] = useState(false);
+  const [newCatInput, setNewCatInput] = useState('');
   const [definitions, setDefinitions] = useState<DefinitionInput[]>([
     { pos: 'n.', def: '', ex: '', selected: true }
   ]);
@@ -366,12 +373,16 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     }
     if (!validDefs.length) return;
 
+    const cleanCategory = selectedCategory.trim();
+    const finalCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
+
     const newWords: Partial<Word>[] = validDefs.map((d) => ({
       term: cleanTerm,
       pos: d.pos,
       def: d.def.trim(),
       defEn: (d.defEn || '').trim() || undefined,
       ex: d.ex.trim(),
+      category: finalCategory,
       level: 0,
       interval: 1,
       easeFactor: 2.5
@@ -553,12 +564,16 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     const selectedItems = parsedWordsList.filter((item) => item.selected && item.term.trim());
     if (!selectedItems.length) return;
 
+    const cleanCategory = selectedCategory.trim();
+    const finalCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
+
     const newWords: Partial<Word>[] = selectedItems.map((item) => ({
       term: item.term.trim(),
       pos: item.pos,
       def: item.def.trim(),
       defEn: item.defEn,
       ex: item.ex,
+      category: finalCategory,
       level: 0,
       interval: 1,
       easeFactor: 2.5
@@ -574,12 +589,20 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   const activePack = THEMATIC_PACKS.find((p) => p.id === selectedPackId) || THEMATIC_PACKS[0];
 
   const handleAddThematicPackWords = (wordsToAdd: typeof activePack.words) => {
+    const packCat =
+      activePack.id === 'business'
+        ? '商務職場'
+        : activePack.id === 'academic'
+        ? '學術寫作'
+        : '日常實用';
+
     const newWords: Partial<Word>[] = wordsToAdd.map((w) => ({
       term: w.term,
       pos: w.pos,
       def: w.def,
       defEn: w.defEn,
       ex: w.ex,
+      category: packCat,
       level: 0,
       interval: 1,
       easeFactor: 2.5
@@ -799,6 +822,75 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       +{sug}
                     </button>
                   ))}
+                </div>
+              )}
+            </div>
+
+            {/* Category Selector */}
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-700/40 border border-slate-200/80 dark:border-slate-700 space-y-1.5">
+              <label className="text-xs font-bold uppercase text-slate-500 dark:text-slate-400 block">
+                單字分類 (Category)
+              </label>
+              {!isAddingNewCat ? (
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <select
+                      value={selectedCategory}
+                      onChange={(e) => {
+                        if (e.target.value === '__NEW__') {
+                          setIsAddingNewCat(true);
+                        } else {
+                          setSelectedCategory(e.target.value);
+                        }
+                      }}
+                      className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
+                    >
+                      <option value="未分類">未分類 (預設)</option>
+                      {(categories || []).map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                      <option value="__NEW__">+ 新增自訂類別...</option>
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newCatInput}
+                    onChange={(e) => setNewCatInput(e.target.value)}
+                    placeholder="輸入新類別名稱..."
+                    maxLength={20}
+                    autoFocus
+                    className="flex-1 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 border border-indigo-500 text-xs font-bold text-slate-800 dark:text-white outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const clean = newCatInput.trim();
+                      if (clean && clean !== '未分類') {
+                        if (onAddCategory) onAddCategory(clean);
+                        setSelectedCategory(clean);
+                      }
+                      setIsAddingNewCat(false);
+                      setNewCatInput('');
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm"
+                  >
+                    確定
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingNewCat(false);
+                      setNewCatInput('');
+                    }}
+                    className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold"
+                  >
+                    取消
+                  </button>
                 </div>
               )}
             </div>
@@ -1083,6 +1175,25 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       </div>
                     </div>
                   ))}
+                </div>
+
+                {/* Batch Category Selector */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-700/40 border border-slate-200 dark:border-slate-700">
+                  <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                    批次收錄分類至：
+                  </span>
+                  <select
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
+                  >
+                    <option value="未分類">未分類 (預設)</option>
+                    {(categories || []).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <button

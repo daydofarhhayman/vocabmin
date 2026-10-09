@@ -46,6 +46,15 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   hideLookupTip: false
 };
 
+export const DEFAULT_CATEGORIES: string[] = [
+  '日常實用',
+  '商務職場',
+  '多益 TOEIC',
+  '托福 TOEFL',
+  '學術寫作',
+  '科技潮流'
+];
+
 export const DEFAULT_SETTINGS: AppSettings = {
   darkMode: false,
   lang: 'zh',
@@ -60,8 +69,29 @@ export const DEFAULT_SETTINGS: AppSettings = {
   accentColor: 'indigo',
   fontSize: 'normal',
   appNickname: 'VocabMin',
-  geminiApiKey: ''
+  geminiApiKey: '',
+  customCategories: DEFAULT_CATEGORIES
 };
+
+// Helper: Get union of all user categories from settings and existing words
+export function getAllWordCategories(words: Word[] = [], settings?: AppSettings): string[] {
+  const set = new Set<string>();
+  const custom = settings?.customCategories && Array.isArray(settings.customCategories)
+    ? settings.customCategories
+    : DEFAULT_CATEGORIES;
+
+  custom.forEach((c) => {
+    if (c && c.trim() && c.trim() !== '未分類') set.add(c.trim());
+  });
+
+  words.forEach((w) => {
+    if (w.category && w.category.trim() && w.category.trim() !== '未分類') {
+      set.add(w.category.trim());
+    }
+  });
+
+  return Array.from(set);
+}
 
 // Initialize Firebase with fallback tolerance
 let firebaseAuth: any = null;

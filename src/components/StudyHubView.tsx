@@ -17,13 +17,15 @@ import {
   Square,
   Flame,
   HelpCircle,
-  Layers
+  Layers,
+  Tag
 } from 'lucide-react';
 import { Word, AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { tts } from '../services/tts';
 import { calculateNextReview } from '../services/srs';
 import { getWordDisplayDef, getWordSecondaryDef } from '../utils/wordLang';
+import { getAllWordCategories } from '../services/storage';
 import confetti from 'canvas-confetti';
 
 export interface ActiveStudyQuestion {
@@ -99,6 +101,29 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   const [selectedLevels, setSelectedLevels] = useState<number[]>([0, 1]);
   const [reviewLimit, setReviewLimit] = useState<number>(20);
 
+  // 2.5 Category Filter ('all' = 全部, 'uncategorized' = 未分類, or custom category name)
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+
+  // Available categories union from settings and words
+  const availableCategories = useMemo(() => {
+    return getAllWordCategories(words, settings);
+  }, [words, settings]);
+
+  // Word counts per category
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    let uncategorized = 0;
+    words.forEach((w) => {
+      const cat = (w.category || '').trim();
+      if (!cat || cat === '未分類') {
+        uncategorized++;
+      } else {
+        counts[cat] = (counts[cat] || 0) + 1;
+      }
+    });
+    return { counts, uncategorized, total: words.length };
+  }, [words]);
+
   // 3. Session Active State
   const [isSessionActive, setIsSessionActive] = useState<boolean>(false);
   const [isSessionFinished, setIsSessionFinished] = useState<boolean>(false);
@@ -129,20 +154,34 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const autoNextTimerRef = useRef<any>(null);
 
-  // Count words in each proficiency level
+  // Count words in each proficiency level (respecting chosen category)
   const levelCounts = useMemo(() => {
     const counts = [0, 0, 0, 0];
     words.forEach((w) => {
+      // Category match
+      if (selectedCategory !== 'all') {
+        if (selectedCategory === 'uncategorized' && w.category && w.category !== '未分類') return;
+        if (selectedCategory !== 'uncategorized' && w.category !== selectedCategory) return;
+      }
       const lvl = Math.min(3, Math.max(0, w.level || 0));
       counts[lvl]++;
     });
     return counts;
-  }, [words]);
+  }, [words, selectedCategory]);
 
-  // Candidates based on selected levels
+  // Candidates based on selected levels and selected category
   const filteredCandidates = useMemo(() => {
-    return words.filter((w) => selectedLevels.includes(w.level || 0));
-  }, [words, selectedLevels]);
+    return words.filter((w) => {
+      // Level filter
+      const matchLevel = selectedLevels.includes(w.level || 0);
+      if (!matchLevel) return false;
+
+      // Category filter
+      if (selectedCategory === 'all') return true;
+      if (selectedCategory === 'uncategorized') return !w.category || w.category === '未分類';
+      return w.category === selectedCategory;
+    });
+  }, [words, selectedLevels, selectedCategory]);
 
   // Toggle level checkbox
   const handleToggleLevel = (lvl: number) => {
@@ -720,6 +759,66 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
             </div>
           </div>
 
+          {/* Section: 單字類別依據 (Review by Category) */}
+          <div className="space-y-3 border-t border-slate-100 dark:border-slate-700/70 pt-5">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Tag className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>依單字類別進行複習</span>
+              </label>
+              <span className="text-xs text-slate-400 font-medium">
+                可鎖定特定分類精準突破
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedCategory('all')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  selectedCategory === 'all'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
+                }`}
+              >
+                <span>🌟 全部單字</span>
+                <span className="text-[10px] opacity-80 font-mono tabular-nums">({categoryCounts.total})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedCategory('uncategorized')}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  selectedCategory === 'uncategorized'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
+                }`}
+              >
+                <span>未分類</span>
+                <span className="text-[10px] opacity-80 font-mono tabular-nums">({categoryCounts.uncategorized})</span>
+              </button>
+
+              {availableCategories.map((cat) => {
+                const count = categoryCounts.counts[cat] || 0;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                      selectedCategory === cat
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
+                    }`}
+                  >
+                    <span>🏷️ {cat}</span>
+                    <span className="text-[10px] opacity-80 font-mono tabular-nums">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Section: 自由勾選熟練度 (Proficiency Level Filter Checkboxes) */}
           <div className="space-y-3 border-t border-slate-100 dark:border-slate-700/70 pt-5">
             <div className="flex items-center justify-between">
@@ -872,6 +971,11 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
               >
                 當前: {getLevelBadge(currentQ.word.level || 0).label}
               </span>
+              {currentQ.word.category && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/40">
+                  🏷️ {currentQ.word.category}
+                </span>
+              )}
             </div>
 
             {/* Stopwatch Timer Display (Respects settings.showTimerInReview) */}
@@ -1179,6 +1283,11 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
               系統已根據您的作答反應時間，精準調校各單字的記憶間隔與熟練度評級。
             </p>
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/40">
+                🏷️ 複習類別：{selectedCategory === 'all' ? '全部單字' : selectedCategory === 'uncategorized' ? '未分類' : selectedCategory}
+              </span>
+            </div>
           </div>
 
           {/* Quick Stats Grid */}

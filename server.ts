@@ -1829,7 +1829,7 @@ function parseCambridgeMarkdown(word: string, markdown: string): any[] {
   let content = markdown;
   const enStart = markdown.indexOf('# Translation of');
   const zhStartMatch = markdown.match(/# \*\*?[^\n*#]+\*\*? 在英語-(中文|漢語)/i);
-  const zhStart = zhStartMatch ? zhStartMatch.index : -1;
+  const zhStart = typeof zhStartMatch?.index === 'number' ? zhStartMatch.index : -1;
 
   if (enStart >= 0 && (zhStart < 0 || enStart < zhStart)) {
     content = markdown.slice(enStart);

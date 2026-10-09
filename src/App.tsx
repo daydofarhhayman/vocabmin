@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { Word, WordGroup, DailyStats, AppSettings, ViewTab, POS, Article } from './types';
-import { storage, DEFAULT_SETTINGS } from './services/storage';
+import { storage, DEFAULT_SETTINGS, DEFAULT_CATEGORIES } from './services/storage';
 import { applySRSDecay } from './services/srs';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
@@ -70,6 +70,7 @@ export default function App() {
     setDetailWordGroup({
       term: selectedWord.term,
       entries,
+      category: entries.find((e) => e.category)?.category || selectedWord.category,
       minLevel,
       interval: avgInterval,
       nextReview: minNextReview,
@@ -320,6 +321,7 @@ export default function App() {
             def,
             defEn: (item.defEn || '').trim() || undefined,
             ex: (item.ex || '').trim(),
+            category: item.category ? item.category.trim() : undefined,
             level: item.level !== undefined ? item.level : 0,
             interval: item.interval || 1,
             easeFactor: item.easeFactor || 2.5,
@@ -426,6 +428,12 @@ export default function App() {
             def: item.def || matchedOld?.def || '',
             defEn: item.defEn !== undefined ? item.defEn : matchedOld?.defEn,
             ex: item.ex !== undefined ? item.ex : (matchedOld?.ex || ''),
+            category:
+              item.category !== undefined
+                ? item.category
+                  ? item.category.trim()
+                  : undefined
+                : matchedOld?.category,
             level: item.level !== undefined ? item.level : (matchedOld?.level ?? 0),
             interval: item.interval || matchedOld?.interval || 1,
             easeFactor: item.easeFactor || matchedOld?.easeFactor || 2.5,
@@ -443,6 +451,153 @@ export default function App() {
         return finalWords;
       });
       showToast('單字修改成功！');
+    },
+    [dailyStats, settings, user, showToast]
+  );
+
+  // Category Management Handlers
+  const handleAddCategory = useCallback(
+    (newCat: string) => {
+      const clean = newCat.trim();
+      if (!clean || clean === '未分類') return;
+      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      if (currentCats.includes(clean)) return;
+
+      const updated = [...currentCats, clean];
+      handleUpdateSettings({ customCategories: updated });
+      showToast(`已建立分類「${clean}」`);
+    },
+    [settings.customCategories, handleUpdateSettings, showToast]
+  );
+
+  const handleRenameCategory = useCallback(
+    (oldName: string, newName: string) => {
+      const cleanOld = oldName.trim();
+      const cleanNew = newName.trim();
+      if (!cleanOld || !cleanNew || cleanOld === cleanNew) return;
+
+      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const updatedCats = currentCats.map((c) => (c === cleanOld ? cleanNew : c));
+      handleUpdateSettings({ customCategories: updatedCats });
+
+      setWords((prev) => {
+        let changed = false;
+        const updatedWords = prev.map((w) => {
+          if (w.category === cleanOld) {
+            changed = true;
+            return { ...w, category: cleanNew };
+          }
+          return w;
+        });
+
+        if (changed) {
+          storage.saveLocalWords(updatedWords);
+          if (user) {
+            storage.syncToCloud(updatedWords, dailyStats, settings);
+          }
+        }
+        return updatedWords;
+      });
+
+      showToast(`已將分類「${cleanOld}」更名為「${cleanNew}」`);
+    },
+    [settings, dailyStats, user, handleUpdateSettings, showToast]
+  );
+
+  const handleDeleteCategory = useCallback(
+    (categoryName: string) => {
+      const clean = categoryName.trim();
+      if (!clean) return;
+
+      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const updatedCats = currentCats.filter((c) => c !== clean);
+      handleUpdateSettings({ customCategories: updatedCats });
+
+      setWords((prev) => {
+        let changed = false;
+        const updatedWords = prev.map((w) => {
+          if (w.category === clean) {
+            changed = true;
+            return { ...w, category: undefined };
+          }
+          return w;
+        });
+
+        if (changed) {
+          storage.saveLocalWords(updatedWords);
+          if (user) {
+            storage.syncToCloud(updatedWords, dailyStats, settings);
+          }
+        }
+        return updatedWords;
+      });
+
+      showToast(`已刪除分類「${clean}」，原單字已設為未分類`);
+    },
+    [settings, dailyStats, user, handleUpdateSettings, showToast]
+  );
+
+  const handleUpdateTermCategory = useCallback(
+    (term: string, newCategory?: string) => {
+      const cleanTerm = term.trim().toLowerCase();
+      const cleanCat = newCategory?.trim();
+      const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : cleanCat;
+
+      setWords((prev) => {
+        let changed = false;
+        const updatedWords = prev.map((w) => {
+          if (w.term.trim().toLowerCase() === cleanTerm) {
+            changed = true;
+            return { ...w, category: finalCat };
+          }
+          return w;
+        });
+
+        if (changed) {
+          storage.saveLocalWords(updatedWords);
+          if (user) {
+            storage.syncToCloud(updatedWords, dailyStats, settings);
+          }
+        }
+        return updatedWords;
+      });
+
+      showToast(finalCat ? `已將「${term}」歸類至「${finalCat}」` : `已取消「${term}」的分類`);
+    },
+    [dailyStats, settings, user, showToast]
+  );
+
+  const handleBatchUpdateTermsCategory = useCallback(
+    (terms: string[], newCategory?: string) => {
+      if (!terms.length) return;
+      const termsSet = new Set(terms.map((t) => t.trim().toLowerCase()));
+      const cleanCat = newCategory?.trim();
+      const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : cleanCat;
+
+      setWords((prev) => {
+        let changedCount = 0;
+        const updatedWords = prev.map((w) => {
+          if (termsSet.has(w.term.trim().toLowerCase())) {
+            changedCount++;
+            return { ...w, category: finalCat };
+          }
+          return w;
+        });
+
+        if (changedCount > 0) {
+          storage.saveLocalWords(updatedWords);
+          if (user) {
+            storage.syncToCloud(updatedWords, dailyStats, settings);
+          }
+        }
+        return updatedWords;
+      });
+
+      showToast(
+        finalCat
+          ? `已將 ${terms.length} 個單字批次歸類至「${finalCat}」`
+          : `已將 ${terms.length} 個單字設為未分類`
+      );
     },
     [dailyStats, settings, user, showToast]
   );
@@ -956,6 +1111,11 @@ export default function App() {
             onUpdateWordGroup={handleUpdateWordGroup}
             onUpdateSettings={handleUpdateSettings}
             onOpenCambridge={(term) => setCambridgeWord(term)}
+            onUpdateTermCategory={handleUpdateTermCategory}
+            onBatchUpdateTermsCategory={handleBatchUpdateTermsCategory}
+            onAddCategory={handleAddCategory}
+            onRenameCategory={handleRenameCategory}
+            onDeleteCategory={handleDeleteCategory}
           />
         )}
 
@@ -1070,6 +1230,8 @@ export default function App() {
             lang={settings.lang}
             existingWords={words}
             initialTerm={addModalInitialTerm}
+            categories={settings.customCategories || DEFAULT_CATEGORIES}
+            onAddCategory={handleAddCategory}
           />
         )}
 
@@ -1081,6 +1243,8 @@ export default function App() {
             allWords={words}
             onUpdateGroup={handleUpdateWordGroup}
             lang={settings.lang}
+            categories={settings.customCategories || DEFAULT_CATEGORIES}
+            onAddCategory={handleAddCategory}
           />
         )}
 
