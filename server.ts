@@ -675,15 +675,22 @@ You must strictly output JSON matching this schema:
      * "全庫單字標準化" / "補齊英文釋義" -> action: { type: 'batch_standardize', summary: '為現有單字補齊英文釋義並標準化' }
      * "修改單字 [term]" -> action: { type: 'update_word', summary: '修改單字「...」之釋義或例句', updateWord: { term: '...' } }
      * "將單字 [term] 分類為 [category]" / "幫我把 [term] 放到 [category] 分類" / "取消單字 [term] 的分類" -> action: { type: 'set_word_category', summary: '將單字「...」分類至「...」', setWordCategory: { term: '...', category: '...' } }
-     * "批次將 [term1, term2...] 分類為 [category]" / "把這幾個單字歸類至 [category]" -> action: { type: 'batch_set_category', summary: '批次將 N 個單字歸類至「...」', batchSetCategory: { terms: [...], category: '...' } }
+     * "批次將 [term1, term2...] 分類為 [category]" / "把這幾個單字歸類至 [category]" / "將除了 [catA] 之外的單字全部加入 [catB] 分類" -> action: { type: 'batch_set_category', summary: '批次將 N 個單字歸類至「...」', batchSetCategory: { terms: [...], category: '...' } }
      * "新增分類 [category]" / "建立新分類 [category]" -> action: { type: 'add_category', summary: '新增自訂分類「...」', addCategory: { name: '...' } }
      * "將分類 [old] 改名為 [new]" / "更名分類 [old] 為 [new]" -> action: { type: 'rename_category', summary: '將分類「...」更名為「...」', renameCategory: { oldName: '...', newName: '...' } }
      * "刪除分類 [category]" / "移除分類 [category]" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
-   - ⚠️ CRITICAL ZERO-HALLUCINATION PROTOCOL (絕對禁止假執行幻覺):
+   - ⚠️ CRITICAL ZERO-HALLUCINATION & MANDATORY ACTION BINDING PROTOCOL (絕對禁止假執行幻覺與物件遺漏):
      * You do NOT have direct execution access to alter, delete, or clear the database in the background.
-     * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
-     * When proposing an action, you MUST emit the "action" object, and your "reply" MUST politely state that you have generated a confirmation card and guide the user to click the button to confirm and execute it, e.g.:
-       "已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除。"
+     * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything without emitting an "action" (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
+     * When proposing ANY action, you MUST emit the "action" object in your JSON output. If your "reply" claims:
+       "已為您建立「...」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以執行此變更。"
+       YOU MUST ACTUALLY PROVIDE the "action" OBJECT IN THE JSON! An action card cannot appear on screen without the "action" object in JSON!
+     * ⚠️ CATEGORY OPERATIONS VS VOCABULARY GENERATION RULE:
+       When the user commands category adjustments (e.g., "將...加入...分類", "除了...分類以外全部加入...分類", "歸類至...", "設定分類"):
+       1. The word "加入" means ASSIGNING CATEGORIES TO EXISTING WORDS, NOT creating new vocabulary items!
+       2. The "words" array MUST BE EMPTY ("words": []). DO NOT populate vocabulary word cards in "words" when performing category operations!
+       3. You MUST populate "action": { type: "batch_set_category", summary: "...", batchSetCategory: { terms: [...], category: "..." } } (or "set_word_category").
+       4. If the user specifies an exclusion condition (e.g. "除了 Chemistry 以外全部加入 High Energy Physics"), inspect screenContext.wordsWithCategories or screenContext.allWordTerms to find all words that are NOT in the excluded category, and put all those terms into terms: [...]!
    - CRITICAL SAFETY: If the user is merely asking a question ABOUT these operations (e.g. "如何清空單字？", "什麼是去重？"), explain in "reply" and DO NOT generate an "action"!
    - NEVER confuse "單字" (words) with "文章" (articles)!
 
@@ -772,7 +779,7 @@ You must strictly output JSON matching this schema:
           ? `- 各分類收錄單字量統計: ${JSON.stringify(screenContext.categoryStats)}`
           : '',
         screenContext?.wordsWithCategories && Array.isArray(screenContext.wordsWithCategories) && screenContext.wordsWithCategories.length > 0
-          ? `- 現有單字之分類歸屬範例 (前 40 字): [${screenContext.wordsWithCategories.slice(0, 40).map((w: any) => `${w.term}: ${w.category || '未分類'}`).join('; ')}]`
+          ? `- 現有單字之分類歸屬完整清單: [${screenContext.wordsWithCategories.slice(0, 200).map((w: any) => `${w.term}: ${w.category || '未分類'}`).join('; ')}]`
           : '',
         screenContext?.allArticleTitles && Array.isArray(screenContext.allArticleTitles) && screenContext.allArticleTitles.length > 0
           ? `- 使用者現有文章清單 (全部 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.map((t: string) => `《${t}》`).join(', ')}]`

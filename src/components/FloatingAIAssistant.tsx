@@ -811,9 +811,24 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onSaveArticle?.(art);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
-    } else if (actionType === 'set_word_category' && action.setWordCategory?.term) {
-      const { term, category } = action.setWordCategory;
-      const targetCat = category?.trim();
+    } else if (
+      actionType === 'set_word_category' ||
+      actionType === 'setWordCategory'
+    ) {
+      const term = (
+        action.setWordCategory?.term ||
+        action.setWordCategory?.word ||
+        action.term ||
+        action.word ||
+        ''
+      ).trim();
+      const targetCat = (
+        action.setWordCategory?.category ||
+        action.setWordCategory?.targetCategory ||
+        action.category ||
+        action.targetCategory ||
+        ''
+      ).trim();
       const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
       if (onRequestConfirm) {
         onRequestConfirm({
@@ -840,15 +855,57 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onUpdateTermCategory?.(term, targetCat);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
-    } else if (actionType === 'batch_set_category' && action.batchSetCategory?.category) {
-      const { terms, category } = action.batchSetCategory;
-      const termList = Array.isArray(terms) ? terms : [];
-      const targetCat = category?.trim();
+    } else if (
+      actionType === 'batch_set_category' ||
+      actionType === 'batchSetCategory' ||
+      actionType === 'batch_category'
+    ) {
+      let targetCat = (
+        action.batchSetCategory?.category ||
+        action.batchSetCategory?.targetCategory ||
+        action.category ||
+        action.targetCategory ||
+        action.categoryName ||
+        action.name ||
+        ''
+      ).trim();
+
+      let termList: string[] = Array.isArray(action.batchSetCategory?.terms)
+        ? action.batchSetCategory.terms
+        : Array.isArray(action.batchSetCategory?.words)
+        ? action.batchSetCategory.words
+        : Array.isArray(action.terms)
+        ? action.terms
+        : Array.isArray(action.words)
+        ? action.words
+        : [];
+
+      if (!targetCat) {
+        const catMatch =
+          (action.summary || '').match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
+          (action.summary || '').match(/「([^」]+)」/);
+        if (catMatch) targetCat = catMatch[1].trim();
+      }
+
+      if (termList.length === 0) {
+        const msgObj = messages.find((m) => m.id === actionId);
+        const searchSource = `${action.summary || ''} ${msgObj?.content || ''}`;
+        const excludeMatch = searchSource.match(/(?:非|除了|排除)[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?分類/i);
+        if (excludeMatch) {
+          const excludedCat = excludeMatch[1].trim().toLowerCase();
+          termList = words
+            .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
+            .map((w) => w.term);
+        } else {
+          termList = words.map((w) => w.term);
+        }
+      }
+
       const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
       if (onRequestConfirm) {
         onRequestConfirm({
           title: '🏷️ 批次單字分類確認',
-          message: `確定要將以下 ${termList.length} 個單字批次分類至 ${catLabel} 嗎？\n[${termList.join(', ')}]`,
+          message: `確定要將以下 ${termList.length} 個單字批次分類至 ${catLabel} 嗎？\n\n${termList.slice(0, 15).join(', ')}${termList.length > 15 ? '...等' : ''}`,
           type: 'info',
           confirmText: '確認批次分類',
           onConfirm: () => {
@@ -870,8 +927,17 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onBatchUpdateTermsCategory?.(termList, targetCat);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
-    } else if (actionType === 'add_category' && action.addCategory?.name) {
-      const name = action.addCategory.name.trim();
+    } else if (
+      actionType === 'add_category' ||
+      actionType === 'addCategory'
+    ) {
+      const name = (
+        action.addCategory?.name ||
+        action.addCategory?.category ||
+        action.name ||
+        action.category ||
+        ''
+      ).trim();
       if (onRequestConfirm) {
         onRequestConfirm({
           title: '📁 新增單字分類確認',
@@ -897,8 +963,20 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onAddCategory?.(name);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
-    } else if (actionType === 'rename_category' && action.renameCategory?.oldName && action.renameCategory?.newName) {
-      const { oldName, newName } = action.renameCategory;
+    } else if (
+      actionType === 'rename_category' ||
+      actionType === 'renameCategory'
+    ) {
+      const oldName = (
+        action.renameCategory?.oldName ||
+        action.oldName ||
+        ''
+      ).trim();
+      const newName = (
+        action.renameCategory?.newName ||
+        action.newName ||
+        ''
+      ).trim();
       if (onRequestConfirm) {
         onRequestConfirm({
           title: '✏️ 更名單字分類確認',
@@ -924,8 +1002,17 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onRenameCategory?.(oldName, newName);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
-    } else if (actionType === 'delete_category' && action.deleteCategory?.name) {
-      const name = action.deleteCategory.name.trim();
+    } else if (
+      actionType === 'delete_category' ||
+      actionType === 'deleteCategory'
+    ) {
+      const name = (
+        action.deleteCategory?.name ||
+        action.deleteCategory?.category ||
+        action.name ||
+        action.category ||
+        ''
+      ).trim();
       if (onRequestConfirm) {
         onRequestConfirm({
           title: '🗑️ 刪除單字分類確認',
@@ -951,10 +1038,26 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         onDeleteCategory?.(name);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
+    } else {
+      const fallbackSummary = action.summary || '確定要執行此項系統操作嗎？';
+      if (onRequestConfirm) {
+        onRequestConfirm({
+          title: '⚡ 系統操作確認',
+          message: fallbackSummary,
+          type: 'warning',
+          confirmText: '確定執行',
+          onConfirm: () => {
+            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+          }
+        });
+      } else {
+        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
+      }
     }
   }, [
-    articles.length,
-    words.length,
+    articles,
+    words,
+    messages,
     currentTab,
     executedActions,
     onRequestConfirm,
@@ -1194,6 +1297,156 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         if (claimsClearWords || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
           botContent = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${words.length} 個單字）。`;
         }
+      }
+
+      // Check for batch set category intent or claim
+      const claimsBatchCategory =
+        !botAction &&
+        ((/(?:已為您|已成功|已經|已幫您).*(?:建立|整理).*(?:批次歸類|歸類至|加入.*分類|移至.*分類|設定.*分類|操作確認卡片)/i.test(botContent) ||
+          /(?:建立|產生).*(?:操作確認卡片)/i.test(botContent)));
+
+      const isUserAskingBatchCategory =
+        !isQuestionOrHowTo &&
+        ((/(?:批次|全部|所有|除了).*(?:歸類|加入|移至|放到|設為).*(?:分類)/i.test(trimmedLower) ||
+          /(?:歸類至|加入.*分類|移到.*分類|放到.*分類|設為.*分類).*(?:分類)/i.test(trimmedLower)));
+
+      if (botAction?.type === 'batch_set_category' || (!botAction && (claimsBatchCategory || isUserAskingBatchCategory))) {
+        if (!botAction) {
+          const catMatch =
+            botContent.match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
+            trimmedLower.match(/(?:加入|歸類至|移至|設為|放到)\s*([a-zA-Z0-9\u4e00-\u9fa5\s_-]+?)\s*分類/i);
+          const targetCategory = catMatch ? catMatch[1].trim() : '';
+
+          const excludeMatch =
+            trimmedLower.match(/(?:除了|排除)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類.*(?:以外|之外|的單字)/i) ||
+            botContent.match(/(?:除了|排除)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類.*(?:以外|之外|的單字)/i);
+          const excludedCat = excludeMatch ? excludeMatch[1].trim().toLowerCase() : null;
+
+          let targetTerms: string[] = [];
+          if (excludedCat) {
+            targetTerms = words
+              .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
+              .map((w) => w.term);
+          } else {
+            targetTerms = words
+              .filter((w) =>
+                trimmedLower.includes(w.term.toLowerCase()) ||
+                botContent.includes(w.term)
+              )
+              .map((w) => w.term);
+            if (targetTerms.length === 0 && /(?:所有|全部|整庫|全庫)/.test(trimmedLower)) {
+              targetTerms = words.map((w) => w.term);
+            }
+          }
+
+          if (targetCategory && targetTerms.length > 0) {
+            botAction = {
+              type: 'batch_set_category',
+              summary: `批次將 ${targetTerms.length} 個單字歸類至「${targetCategory}」`,
+              batchSetCategory: {
+                terms: targetTerms,
+                category: targetCategory
+              }
+            };
+            if (!botContent.includes('操作確認卡片')) {
+              botContent = `已為您建立「批次分類」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行此變更（共 ${targetTerms.length} 個單字歸類至「${targetCategory}」）。`;
+            }
+          }
+        }
+      }
+
+      // Normalize botAction for batch_set_category ensuring category, terms, and summary exist
+      if (
+        botAction &&
+        (botAction.type === 'batch_set_category' ||
+          botAction.type === 'batchSetCategory' ||
+          botAction.type === 'batch_category')
+      ) {
+        let cat = (
+          botAction.batchSetCategory?.category ||
+          botAction.batchSetCategory?.targetCategory ||
+          botAction.category ||
+          botAction.targetCategory ||
+          botAction.categoryName ||
+          botAction.name ||
+          ''
+        ).trim();
+
+        let termsList: string[] = Array.isArray(botAction.batchSetCategory?.terms)
+          ? botAction.batchSetCategory.terms
+          : Array.isArray(botAction.batchSetCategory?.words)
+          ? botAction.batchSetCategory.words
+          : Array.isArray(botAction.terms)
+          ? botAction.terms
+          : Array.isArray(botAction.words)
+          ? botAction.words
+          : [];
+
+        if (!cat) {
+          const catMatch =
+            (botAction.summary || '').match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
+            botContent.match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
+            (botAction.summary || '').match(/「([^」]+)」/) ||
+            botContent.match(/「([^」]+)」/);
+          if (catMatch) cat = catMatch[1].trim();
+        }
+
+        if (termsList.length === 0) {
+          const searchSource = `${botAction.summary || ''} ${botContent || ''} ${trimmedLower}`;
+          const excludeMatch = searchSource.match(/(?:非|除了|排除)[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?分類/i);
+          if (excludeMatch) {
+            const excludedCat = excludeMatch[1].trim().toLowerCase();
+            termsList = words
+              .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
+              .map((w) => w.term);
+          } else {
+            termsList = words.map((w) => w.term);
+          }
+        }
+
+        botAction.type = 'batch_set_category';
+        botAction.batchSetCategory = {
+          terms: termsList,
+          category: cat
+        };
+        botAction.category = cat;
+        botAction.terms = termsList;
+        if (!botAction.summary) {
+          botAction.summary = `批次將 ${termsList.length} 個單字歸類至「${cat || '指定分類'}」`;
+        }
+      }
+
+      // Check for add category intent
+      const isUserAskingAddCat =
+        !isQuestionOrHowTo &&
+        trimmedLower.match(/(?:新增|建立|創建|添加)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?$/i);
+      if (!botAction && isUserAskingAddCat) {
+        const catName = isUserAskingAddCat[1].trim();
+        botAction = {
+          type: 'add_category',
+          summary: `新增自訂分類「${catName}」`,
+          addCategory: { name: catName }
+        };
+        botContent = `已為您建立「新增自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以新增分類「${catName}」。`;
+      }
+
+      // Check for delete category intent
+      const isUserAskingDeleteCat =
+        !isQuestionOrHowTo &&
+        trimmedLower.match(/(?:刪除|移除)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?$/i);
+      if (!botAction && isUserAskingDeleteCat) {
+        const catName = isUserAskingDeleteCat[1].trim();
+        botAction = {
+          type: 'delete_category',
+          summary: `刪除自訂分類「${catName}」`,
+          deleteCategory: { name: catName }
+        };
+        botContent = `已為您建立「刪除自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」。`;
+      }
+
+      // Suppress accidental vocabulary word cards whenever a database/category operation is active
+      if (botAction && botAction.type !== 'add_words') {
+        data.words = undefined;
       }
 
       const articleData = data.article || botAction?.saveArticle;
