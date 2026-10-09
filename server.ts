@@ -1882,10 +1882,164 @@ function cleanCambridgeMd(str: string): string {
     .trim();
 }
 
+// Irregular inflections dictionary for high-precision lemmatization & inflection detection
+const IRREGULAR_INFLECTIONS: Record<string, { base: string; type: string }> = {
+  went: { base: 'go', type: '動詞過去式 (Past Tense)' },
+  gone: { base: 'go', type: '動詞過去分詞 (Past Participle)' },
+  ran: { base: 'run', type: '動詞過去式 (Past Tense)' },
+  swam: { base: 'swim', type: '動詞過去式 (Past Tense)' },
+  ate: { base: 'eat', type: '動詞過去式 (Past Tense)' },
+  eaten: { base: 'eat', type: '動詞過去分詞 (Past Participle)' },
+  wrote: { base: 'write', type: '動詞過去式 (Past Tense)' },
+  written: { base: 'write', type: '動詞過去分詞 (Past Participle)' },
+  spoke: { base: 'speak', type: '動詞過去式 (Past Tense)' },
+  spoken: { base: 'speak', type: '動詞過去分詞 (Past Participle)' },
+  flew: { base: 'fly', type: '動詞過去式 (Past Tense)' },
+  flown: { base: 'fly', type: '動詞過去分詞 (Past Participle)' },
+  drove: { base: 'drive', type: '動詞過去式 (Past Tense)' },
+  driven: { base: 'drive', type: '動詞過去分詞 (Past Participle)' },
+  took: { base: 'take', type: '動詞過去式 (Past Tense)' },
+  taken: { base: 'take', type: '動詞過去分詞 (Past Participle)' },
+  saw: { base: 'see', type: '動詞過去式 (Past Tense)' },
+  seen: { base: 'see', type: '動詞過去分詞 (Past Participle)' },
+  bought: { base: 'buy', type: '動詞過去式 / 過去分詞' },
+  brought: { base: 'bring', type: '動詞過去式 / 過去分詞' },
+  caught: { base: 'catch', type: '動詞過去式 / 過去分詞' },
+  taught: { base: 'teach', type: '動詞過去式 / 過去分詞' },
+  thought: { base: 'think', type: '動詞過去式 / 過去分詞' },
+  built: { base: 'build', type: '動詞過去式 / 過去分詞' },
+  found: { base: 'find', type: '動詞過去式 / 過去分詞' },
+  gave: { base: 'give', type: '動詞過去式 (Past Tense)' },
+  given: { base: 'give', type: '動詞過去分詞 (Past Participle)' },
+  knew: { base: 'know', type: '動詞過去式 (Past Tense)' },
+  known: { base: 'know', type: '動詞過去分詞 (Past Participle)' },
+  chose: { base: 'choose', type: '動詞過去式 (Past Tense)' },
+  chosen: { base: 'choose', type: '動詞過去分詞 (Past Participle)' },
+  shook: { base: 'shake', type: '動詞過去式 (Past Tense)' },
+  shaken: { base: 'shake', type: '動詞過去分詞 (Past Participle)' },
+  stole: { base: 'steal', type: '動詞過去式 (Past Tense)' },
+  stolen: { base: 'steal', type: '動詞過去分詞 (Past Participle)' },
+  wore: { base: 'wear', type: '動詞過去式 (Past Tense)' },
+  worn: { base: 'wear', type: '動詞過去分詞 (Past Participle)' },
+  won: { base: 'win', type: '動詞過去式 / 過去分詞' },
+  lost: { base: 'lose', type: '動詞過去式 / 過去分詞' },
+  paid: { base: 'pay', type: '動詞過去式 / 過去分詞' },
+  met: { base: 'meet', type: '動詞過去式 / 過去分詞' },
+  left: { base: 'leave', type: '動詞過去式 / 過去分詞' },
+  felt: { base: 'feel', type: '動詞過去式 / 過去分詞' },
+  children: { base: 'child', type: '名詞複數 (Plural)' },
+  men: { base: 'man', type: '名詞複數 (Plural)' },
+  women: { base: 'woman', type: '名詞複數 (Plural)' },
+  teeth: { base: 'tooth', type: '名詞複數 (Plural)' },
+  feet: { base: 'foot', type: '名詞複數 (Plural)' },
+  mice: { base: 'mouse', type: '名詞複數 (Plural)' },
+  people: { base: 'person', type: '名詞複數 (Plural)' },
+  better: { base: 'good', type: '形容詞/副詞比較級 (Comparative)' },
+  best: { base: 'good', type: '形容詞/副詞最高級 (Superlative)' },
+  worse: { base: 'bad', type: '形容詞/副詞比較級 (Comparative)' },
+  worst: { base: 'bad', type: '形容詞/副詞最高級 (Superlative)' },
+};
+
+// Morphological rule analysis for common regular English inflections
+function detectRuleInflection(w: string): { base: string; type: string } | null {
+  const lower = w.toLowerCase().trim();
+  if (IRREGULAR_INFLECTIONS[lower]) {
+    return IRREGULAR_INFLECTIONS[lower];
+  }
+  // -ies -> -y (epiphanies -> epiphany, cherries -> cherry, studies -> study)
+  if (lower.length > 4 && lower.endsWith('ies')) {
+    return { base: lower.slice(0, -3) + 'y', type: '名詞複數 / 動詞第三人稱單數' };
+  }
+  // -ied -> -y (studied -> study, worried -> worry, applied -> apply)
+  if (lower.length > 4 && lower.endsWith('ied')) {
+    return { base: lower.slice(0, -3) + 'y', type: '動詞過去式 / 過去分詞' };
+  }
+  // -ing (running -> run, swimming -> swim, studying -> study)
+  if (lower.length > 4 && lower.endsWith('ing')) {
+    const stem = lower.slice(0, -3);
+    // Double consonant check: running -> run, swimming -> swim, stopping -> stop
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      return { base: stem.slice(0, -1), type: '現在分詞 / 動名詞' };
+    }
+    return { base: stem, type: '現在分詞 / 動名詞' };
+  }
+  // -ed (stopped -> stop, walked -> walk)
+  if (lower.length > 4 && lower.endsWith('ed')) {
+    const stem = lower.slice(0, -2);
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      return { base: stem.slice(0, -1), type: '動詞過去式 / 過去分詞' };
+    }
+    return { base: stem, type: '動詞過去式 / 過去分詞' };
+  }
+  // -es (watches -> watch, boxes -> box, dishes -> dish)
+  if (lower.length > 4 && lower.endsWith('es')) {
+    return { base: lower.slice(0, -2), type: '名詞複數 / 動詞第三人稱單數' };
+  }
+  // -er comparative (happier -> happy, faster -> fast)
+  if (lower.length > 4 && lower.endsWith('er')) {
+    if (lower.endsWith('ier')) {
+      return { base: lower.slice(0, -3) + 'y', type: '形容詞/副詞比較級 (Comparative)' };
+    }
+    return { base: lower.slice(0, -2), type: '形容詞/副詞比較級 (Comparative)' };
+  }
+  // -est superlative (happiest -> happy, fastest -> fast)
+  if (lower.length > 4 && lower.endsWith('est')) {
+    if (lower.endsWith('iest')) {
+      return { base: lower.slice(0, -4) + 'y', type: '形容詞/副詞最高級 (Superlative)' };
+    }
+    return { base: lower.slice(0, -3), type: '形容詞/副詞最高級 (Superlative)' };
+  }
+  return null;
+}
+
+export interface CambridgeParsedResult {
+  meanings: any[];
+  headerWord?: string;
+  isInflected: boolean;
+  baseForm?: string;
+  inflectionType?: string;
+}
+
 // Robust parser for Cambridge Dictionary Traditional Chinese markdown (supports both EN & ZH-TW page layouts)
-function parseCambridgeMarkdown(word: string, markdown: string): any[] {
+function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsedResult {
   const cleanWord = word.trim().toLowerCase();
   const meanings: any[] = [];
+
+  // Extract Cambridge entry header word (e.g. Translation of **epiphany**)
+  const enTitleMatch = markdown.match(/# Translation of \*\*([^*]+)\*\*/i);
+  const zhTitleMatch = markdown.match(/# \*\*([^*]+)\*\* 在英語-(?:中文|漢語)/i);
+  const headerWord = (enTitleMatch?.[1] || zhTitleMatch?.[1] || word).trim().toLowerCase();
+
+  // Check for Cambridge inflection subtitle
+  // e.g. "past simple and past participle of study", "plural of epiphany", "comparative of happy"
+  const inflMatch = markdown.match(
+    /(past simple|past participle|present participle|plural|comparative|superlative)(?:\s+and\s+past\s+participle)?\s+of\s+\[?\*?\*?([a-zA-Z]+)/i
+  );
+  let inflectionType: string | undefined;
+  let baseForm: string | undefined;
+
+  if (inflMatch) {
+    const rawInflType = inflMatch[1].toLowerCase();
+    baseForm = inflMatch[2].toLowerCase();
+    if (rawInflType.includes('past')) inflectionType = '動詞過去式 / 過去分詞';
+    else if (rawInflType.includes('present')) inflectionType = '動詞現在分詞 / 動名詞';
+    else if (rawInflType.includes('plural')) inflectionType = '名詞複數 (Plural)';
+    else if (rawInflType.includes('comparative')) inflectionType = '形容詞/副詞比較級 (Comparative)';
+    else if (rawInflType.includes('superlative')) inflectionType = '形容詞/副詞最高級 (Superlative)';
+    else inflectionType = '單字變形';
+  } else if (headerWord && headerWord !== cleanWord) {
+    // Cambridge redirected inflection query to the base lemma (e.g. epiphanies -> epiphany)
+    baseForm = headerWord;
+    const ruleMatch = detectRuleInflection(cleanWord);
+    inflectionType = ruleMatch?.type || '單字變形';
+  } else {
+    // Check local inflection rule table
+    const ruleMatch = detectRuleInflection(cleanWord);
+    if (ruleMatch) {
+      baseForm = ruleMatch.base;
+      inflectionType = ruleMatch.type;
+    }
+  }
 
   // Match English or Traditional Chinese entry header
   let content = markdown;
@@ -2035,14 +2189,20 @@ function parseCambridgeMarkdown(word: string, markdown: string): any[] {
     }
   }
 
-  return meanings.slice(0, 8);
+  return {
+    meanings: meanings.slice(0, 8),
+    headerWord,
+    isInflected: !!(baseForm && baseForm !== cleanWord),
+    baseForm: baseForm && baseForm !== cleanWord ? baseForm : undefined,
+    inflectionType
+  };
 }
 
 // Memory cache for Cambridge Dictionary lookups
-const cambridgeMeaningsCache = new Map<string, any[]>();
+const cambridgeMeaningsCache = new Map<string, CambridgeParsedResult>();
 
 // Fetch authentic definitions from Cambridge Dictionary with quick timeout fallback
-async function fetchCambridgeMeanings(word: string): Promise<any[] | null> {
+async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResult | null> {
   const cleanWord = word.trim().toLowerCase();
   if (!cleanWord || !/^[a-zA-Z\s'-]+$/.test(cleanWord)) return null;
 
@@ -2072,10 +2232,10 @@ async function fetchCambridgeMeanings(word: string): Promise<any[] | null> {
 
     if (!hasCambridgeHeader) return null;
 
-    const meanings = parseCambridgeMarkdown(cleanWord, markdown);
-    if (meanings && meanings.length > 0) {
-      cambridgeMeaningsCache.set(cleanWord, meanings);
-      return meanings;
+    const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
+    if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
+      cambridgeMeaningsCache.set(cleanWord, parsedResult);
+      return parsedResult;
     }
   } catch (err: any) {
     console.warn(`Cambridge lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
@@ -2083,11 +2243,23 @@ async function fetchCambridgeMeanings(word: string): Promise<any[] | null> {
   return null;
 }
 
-// Cache for all meanings of words (polysemy / 一詞多義)
-const wordAllMeaningsCache = new Map<string, { meanings: any[]; source: string; sourceLabel: string }>();
+export interface WordAllMeaningsPayload {
+  term: string;
+  status: 'valid' | 'inflected' | 'typo' | 'invalid';
+  baseForm?: string;
+  inflectionType?: string;
+  suggestions?: string[];
+  meanings: any[];
+  source: 'cambridge' | 'ai' | 'dictionary' | 'validator' | 'fallback';
+  sourceLabel: string;
+  message?: string;
+}
 
-// API: Polysemous word lookup - Returns all common definitions & parts of speech for a word
-// Priority 1: Cambridge Dictionary (劍橋字典) -> Priority 2: Gemini AI -> Priority 3: Bilingual Dict Fallback
+// Cache for all meanings of words (polysemy / 一詞多義 & validation status)
+const wordAllMeaningsCache = new Map<string, WordAllMeaningsPayload>();
+
+// API: Polysemous word lookup with 4-layer validation & inflection recognition
+// Priority 1: Cambridge Dictionary (劍橋權威字典) -> Priority 2: Gemini AI (嚴格防偽驗證) -> Priority 3: Datamuse & Google Dictionary Fallback
 app.post('/api/ai/word-all-meanings', async (req, res) => {
   const word = req.body.word || req.body.term;
   const cleanWord = (word || '').trim();
@@ -2101,61 +2273,97 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
   if (!forceRefresh && wordAllMeaningsCache.has(cacheKey)) {
     const cached = wordAllMeaningsCache.get(cacheKey)!;
     return res.json({
+      ...cached,
       term: cleanWord,
-      meanings: cached.meanings,
-      source: cached.source,
-      sourceLabel: cached.sourceLabel,
       fromCache: true
     });
   }
 
-  // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先從劍橋字典中抓資料)
+  // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先從劍橋字典中抓資料與變形資訊)
   try {
-    const cambridgeResults = await fetchCambridgeMeanings(cleanWord);
-    if (cambridgeResults && cambridgeResults.length > 0) {
-      const payload = {
-        meanings: cambridgeResults,
+    const cambridgeParsed = await fetchCambridgeMeanings(cleanWord);
+    if (cambridgeParsed && cambridgeParsed.meanings.length > 0) {
+      const isInflected = cambridgeParsed.isInflected && !!cambridgeParsed.baseForm;
+      const payload: WordAllMeaningsPayload = {
+        term: cleanWord,
+        status: isInflected ? 'inflected' : 'valid',
+        baseForm: isInflected ? cambridgeParsed.baseForm : undefined,
+        inflectionType: isInflected ? cambridgeParsed.inflectionType : undefined,
+        suggestions: [],
+        meanings: cambridgeParsed.meanings,
         source: 'cambridge',
-        sourceLabel: '劍橋英漢辭典 (Cambridge Dictionary)'
+        sourceLabel: isInflected
+          ? `劍橋英漢辭典 (偵測為「${cambridgeParsed.baseForm}」之變形)`
+          : '劍橋英漢辭典 (Cambridge Dictionary)'
       };
       wordAllMeaningsCache.set(cacheKey, payload);
       return res.json({
-        term: cleanWord,
-        meanings: cambridgeResults,
-        source: 'cambridge',
-        sourceLabel: '劍橋英漢辭典 (Cambridge Dictionary)',
+        ...payload,
         fromCache: false
       });
     }
   } catch (cambridgeErr: any) {
-    console.warn('Cambridge lookup error, falling back to AI:', cambridgeErr?.message || cambridgeErr);
+    console.warn('Cambridge lookup error, falling back to AI/validator:', cambridgeErr?.message || cambridgeErr);
   }
 
-  // 2. SECOND PRIORITY: AI Generation (沒有劍橋收錄才使用 AI 生成)
+  // 2. SECOND PRIORITY: Gemini AI with Strict Anti-Hallucination & Spell Interception (劍橋無收錄才使用 AI)
   const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
 
   if (ai) {
     try {
-      const prompt = `You are an expert bilingual lexicographer (Traditional Chinese / English).
-Analyze the English word: "${cleanWord}".
-Identify its distinct, common dictionary definitions and parts of speech (一詞多義).
-Extract up to 4-5 most frequent and useful distinct meanings.
+      const prompt = `You are an expert bilingual lexicographer, lemmatizer, and spelling checker (Traditional Chinese / English).
+Carefully evaluate the user input: "${cleanWord}".
 
-Return a JSON object with:
-- "term": "${cleanWord}"
-- "meanings": array of distinct definitions:
-  - "pos": "n." | "v." | "adj." | "adv." | "phr." | "other"
-  - "def": accurate, natural Traditional Chinese definition (繁體中文解釋)
-  - "defEn": authentic, concise English definition (英英釋義)
-  - "ex": short, natural English example sentence (8-14 words max)`;
+Strictly categorize this input into one of 4 states:
+1. "valid": A real, correct, recognized English word (including standard slang, idioms, and established technical terms).
+2. "inflected": A grammatically valid inflected form of a base English lemma (e.g., "running" is an inflection of "run", "epiphanies" of "epiphany", "studied" of "study", "democratized" of "democratize").
+3. "typo": A misspelled word that is NOT a valid English word, but closely resembles 1-4 real English words (e.g., "appte" was likely meant to be "apple", "apply", or "apt"; "definately" was meant to be "definitely").
+4. "invalid": Complete nonsense, meaningless gibberish, random letter combinations, keyboard smash, or non-existent words (e.g., "denomonananana", "asdfghjkl", "qwertyui", "blablablazzz").
+
+CRITICAL INTEGRITY & ANTI-HALLUCINATION RULES:
+- If status is "invalid":
+  * "meanings" MUST BE an empty array [].
+  * 🚨 ABSOLUTELY FORBIDDEN: DO NOT invent fake definitions, fake slang, or pretend it is an abbreviation!
+  * "suggestions" MUST BE an empty array [].
+- If status is "typo":
+  * "meanings" MUST BE an empty array [].
+  * "suggestions": Provide 2-4 real English words the user most likely meant to type.
+- If status is "inflected":
+  * "baseForm": Provide the base lemma (原形單字) in lowercase (e.g., "epiphanies" -> "epiphany", "studied" -> "study").
+  * "inflectionType": Specify the grammatical inflection in Traditional Chinese (繁體中文, e.g. "動詞過去式", "名詞複數", "現在分詞 / 動名詞", "形容詞比較級").
+  * "meanings": Provide accurate Traditional Chinese and English definitions for this base word or inflected usage.
+  * "suggestions": MUST BE an empty array [].
+- If status is "valid":
+  * "meanings": Extract 1-5 distinct, common definitions with Traditional Chinese "def", English "defEn", part of speech "pos", and natural example "ex".
+  * "suggestions": MUST BE an empty array [].
+
+Return a JSON object conforming to the schema.`;
 
       const config = {
-        temperature: 0.2,
+        temperature: 0.1, // low temperature for maximum precision
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             term: { type: Type.STRING },
+            status: {
+              type: Type.STRING,
+              enum: ['valid', 'inflected', 'typo', 'invalid'],
+              description: 'Word validation and morphological status'
+            },
+            baseForm: {
+              type: Type.STRING,
+              description: 'Base lemma in lowercase if status is inflected'
+            },
+            inflectionType: {
+              type: Type.STRING,
+              description: 'Inflection type in Traditional Chinese if status is inflected'
+            },
+            suggestions: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'List of 2-4 real English words if status is typo'
+            },
             meanings: {
               type: Type.ARRAY,
               items: {
@@ -2170,43 +2378,150 @@ Return a JSON object with:
               }
             }
           },
-          required: ['term', 'meanings']
+          required: ['term', 'status', 'meanings']
         }
       };
 
       const response = await generateWithModelFallback(ai, config, prompt);
       const parsed = JSON.parse(response.text || '{}');
+      const status = parsed.status || 'valid';
+
+      if (status === 'invalid') {
+        const payload: WordAllMeaningsPayload = {
+          term: cleanWord,
+          status: 'invalid',
+          suggestions: [],
+          meanings: [],
+          source: 'ai',
+          sourceLabel: '查無此單字',
+          message: `查無「${cleanWord}」之英文單字，可能包含拼寫錯誤或無意義字母組合。`
+        };
+        wordAllMeaningsCache.set(cacheKey, payload);
+        return res.json({ ...payload, fromCache: false });
+      }
+
+      if (status === 'typo') {
+        const suggestions = Array.isArray(parsed.suggestions)
+          ? parsed.suggestions.filter((s: string) => s && s.toLowerCase() !== cleanWord.toLowerCase()).slice(0, 4)
+          : [];
+        const payload: WordAllMeaningsPayload = {
+          term: cleanWord,
+          status: 'typo',
+          suggestions,
+          meanings: [],
+          source: 'ai',
+          sourceLabel: '拼寫建議 (Did you mean)'
+        };
+        wordAllMeaningsCache.set(cacheKey, payload);
+        return res.json({ ...payload, fromCache: false });
+      }
+
+      if (status === 'inflected') {
+        const validMeanings = Array.isArray(parsed.meanings)
+          ? parsed.meanings.filter(
+              (m: any) => m.def && m.def.toLowerCase() !== cleanWord.toLowerCase()
+            )
+          : [];
+        const payload: WordAllMeaningsPayload = {
+          term: cleanWord,
+          status: 'inflected',
+          baseForm: (parsed.baseForm || '').toLowerCase().trim() || cleanWord,
+          inflectionType: parsed.inflectionType || '單字變形',
+          suggestions: [],
+          meanings: validMeanings,
+          source: 'ai',
+          sourceLabel: 'Gemini AI 變形解析 (劍橋無收錄)'
+        };
+        wordAllMeaningsCache.set(cacheKey, payload);
+        return res.json({ ...payload, fromCache: false });
+      }
+
+      // Valid word
       if (Array.isArray(parsed.meanings) && parsed.meanings.length > 0) {
         const validMeanings = parsed.meanings.filter(
           (m: any) => m.def && m.def.toLowerCase() !== cleanWord.toLowerCase()
         );
         if (validMeanings.length > 0) {
-          const payload = {
+          const payload: WordAllMeaningsPayload = {
+            term: cleanWord,
+            status: 'valid',
+            suggestions: [],
             meanings: validMeanings,
             source: 'ai',
             sourceLabel: 'Gemini AI 智能解析 (劍橋無收錄)'
           };
           wordAllMeaningsCache.set(cacheKey, payload);
-          return res.json({
-            term: cleanWord,
-            meanings: validMeanings,
-            source: 'ai',
-            sourceLabel: 'Gemini AI 智能解析 (劍橋無收錄)',
-            fromCache: false
-          });
+          return res.json({ ...payload, fromCache: false });
         }
       }
     } catch (err: any) {
-      console.warn('Word all meanings AI error, falling back to dictionary:', err?.message || err);
+      console.warn('Word all meanings AI error, falling back to dictionary/spellcheck:', err?.message || err);
     }
   }
 
-  // Fallback: Bilingual dictionary lookup for polysemous definitions
+  // 3. THIRD PRIORITY: Spell & Dictionary Verification Fallback (無需 AI Key 亦可精準防禦拼寫與非單字)
   try {
+    // 3a. Check Datamuse API for real English spelling matches
+    let datamuseData: any[] = [];
+    try {
+      const datamuseRes = await fetch(
+        `https://api.datamuse.com/words?sp=${encodeURIComponent(cleanWord)}&max=6`,
+        { signal: AbortSignal.timeout(3500) }
+      );
+      if (datamuseRes.ok) {
+        datamuseData = await datamuseRes.json();
+      }
+    } catch {}
+
+    const isExactWord =
+      Array.isArray(datamuseData) &&
+      datamuseData.some((d: any) => (d.word || '').toLowerCase() === cleanWord.toLowerCase());
+
+    if (!isExactWord) {
+      const candidateWords = Array.isArray(datamuseData)
+        ? datamuseData
+            .map((d: any) => d.word)
+            .filter((w: string) => w.toLowerCase() !== cleanWord.toLowerCase() && /^[a-zA-Z]+$/.test(w))
+            .slice(0, 4)
+        : [];
+
+      if (candidateWords.length > 0) {
+        // Typo detected via Datamuse spellcheck!
+        const payload: WordAllMeaningsPayload = {
+          term: cleanWord,
+          status: 'typo',
+          suggestions: candidateWords,
+          meanings: [],
+          source: 'validator',
+          sourceLabel: '拼寫建議 (Did you mean)'
+        };
+        wordAllMeaningsCache.set(cacheKey, payload);
+        return res.json({ ...payload, fromCache: false });
+      } else {
+        // Pure gibberish / non-word detected (e.g. denomonananana)!
+        const payload: WordAllMeaningsPayload = {
+          term: cleanWord,
+          status: 'invalid',
+          suggestions: [],
+          meanings: [],
+          source: 'validator',
+          sourceLabel: '查無此單字',
+          message: `查無「${cleanWord}」之英文單字，請檢查拼寫是否正確。`
+        };
+        wordAllMeaningsCache.set(cacheKey, payload);
+        return res.json({ ...payload, fromCache: false });
+      }
+    }
+
+    // 3b. Exact word confirmed by Datamuse, check morphological rule
+    const ruleInflection = detectRuleInflection(cleanWord);
+
+    // 3c. Query Google Dictionary for bilingual meanings
     const fallbackMeanings: any[] = [];
     const transUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&dt=bd&q=${encodeURIComponent(cleanWord)}`;
     const resTrans = await fetch(transUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(4500)
     });
 
     if (resTrans.ok) {
@@ -2237,48 +2552,66 @@ Return a JSON object with:
         }
       }
 
-      // If no dictionary table, take primary translation
+      // If no dictionary table, take primary translation only if it contains Chinese characters
       if (fallbackMeanings.length === 0 && data[0]?.[0]?.[0]) {
-        fallbackMeanings.push({
-          pos: 'n.',
-          def: String(data[0][0][0]).trim(),
-          defEn: `English definition of ${cleanWord}`,
-          ex: `The term ${cleanWord} is frequently used.`
-        });
+        const primaryTrans = String(data[0][0][0]).trim();
+        if (/[\u4e00-\u9fa5]/.test(primaryTrans)) {
+          fallbackMeanings.push({
+            pos: 'n.',
+            def: primaryTrans,
+            defEn: `English definition of ${cleanWord}`,
+            ex: `The term ${cleanWord} is frequently used.`
+          });
+        }
       }
     }
 
-    const payload = {
-      meanings: fallbackMeanings,
-      source: 'dictionary',
-      sourceLabel: '雙語辭典備援 (Google Dictionary)'
-    };
-    wordAllMeaningsCache.set(cacheKey, payload);
-    return res.json({
+    if (fallbackMeanings.length > 0) {
+      const payload: WordAllMeaningsPayload = {
+        term: cleanWord,
+        status: ruleInflection ? 'inflected' : 'valid',
+        baseForm: ruleInflection?.base,
+        inflectionType: ruleInflection?.type,
+        suggestions: [],
+        meanings: fallbackMeanings,
+        source: 'dictionary',
+        sourceLabel: '雙語辭典備援 (Google Dictionary)'
+      };
+      wordAllMeaningsCache.set(cacheKey, payload);
+      return res.json({
+        ...payload,
+        fromCache: false
+      });
+    }
+
+    // Never return fake/raw string as definition
+    const payload: WordAllMeaningsPayload = {
       term: cleanWord,
-      meanings: fallbackMeanings,
-      source: 'dictionary',
-      sourceLabel: '雙語辭典備援 (Google Dictionary)',
+      status: 'invalid',
+      suggestions: [],
+      meanings: [],
+      source: 'fallback',
+      sourceLabel: '查無此單字',
+      message: `查無「${cleanWord}」之有效繁體中文釋義。`
+    };
+    return res.json({
+      ...payload,
       fromCache: false
     });
   } catch (err: any) {
     console.error('All meanings fallback failed:', err);
     return res.json({
       term: cleanWord,
-      meanings: [
-        {
-          pos: 'n.',
-          def: cleanWord,
-          defEn: `Definition for ${cleanWord}`,
-          ex: `Learning ${cleanWord} in context.`
-        }
-      ],
+      status: 'invalid',
+      suggestions: [],
+      meanings: [],
       source: 'fallback',
-      sourceLabel: '基本備援',
+      sourceLabel: '查無此單字',
       fromCache: false
     });
   }
 });
+
 
 // API: Article Sentence Grammar & Structure Analysis
 app.post('/api/ai/analyze-sentence', async (req, res) => {

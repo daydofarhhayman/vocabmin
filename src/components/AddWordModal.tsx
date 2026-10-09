@@ -154,6 +154,12 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   const [candidateSuggestions, setCandidateSuggestions] = useState<string[]>([]);
   const [detectedClipboard, setDetectedClipboard] = useState<string | null>(null);
 
+  // Inflection lemmatization & typo interception states
+  const [inflectionInfo, setInflectionInfo] = useState<{ baseForm: string; type: string } | null>(null);
+  const [typoSuggestions, setTypoSuggestions] = useState<string[]>([]);
+  const [isInvalidWord, setIsInvalidWord] = useState(false);
+  const [invalidWordMessage, setInvalidWordMessage] = useState<string | null>(null);
+
   // Batch import state
   const [batchText, setBatchText] = useState('');
   const [isBatchParsing, setIsBatchParsing] = useState(false);
@@ -253,6 +259,10 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     setIsAllMeaningsLoading(true);
     setLookupSource(null);
     setLookupSourceLabel(null);
+    setInflectionInfo(null);
+    setTypoSuggestions([]);
+    setIsInvalidWord(false);
+    setInvalidWordMessage(null);
 
     try {
       const res = await fetch('/api/ai/word-all-meanings', {
@@ -270,6 +280,42 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
       if (!res.ok) throw new Error('Query failed');
       const data = await res.json();
 
+      // 1. Invalid Word (無意義亂碼 / 查無此英文單字)
+      if (data.status === 'invalid') {
+        setIsInvalidWord(true);
+        setInvalidWordMessage(data.message || `查無「${cleanTerm}」之英文單字，可能包含拼寫錯誤或無意義字母組合。`);
+        setTypoSuggestions([]);
+        setInflectionInfo(null);
+        setLookupSource(null);
+        setLookupSourceLabel(null);
+        setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
+        return;
+      }
+
+      // 2. Typo Interception (拼寫錯誤 / 您是不是要找)
+      if (data.status === 'typo') {
+        const sugs = Array.isArray(data.suggestions) ? data.suggestions : [];
+        setTypoSuggestions(sugs);
+        setIsInvalidWord(false);
+        setInvalidWordMessage(null);
+        setInflectionInfo(null);
+        setLookupSource(null);
+        setLookupSourceLabel(null);
+        setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
+        return;
+      }
+
+      // 3. Inflection Recognition (單字變形識別)
+      if (data.status === 'inflected' && data.baseForm && data.baseForm.toLowerCase() !== cleanTerm.toLowerCase()) {
+        setInflectionInfo({
+          baseForm: data.baseForm,
+          type: data.inflectionType || '單字變形'
+        });
+      } else {
+        setInflectionInfo(null);
+      }
+
+      // 4. Populate Valid Definitions
       if (Array.isArray(data.meanings) && data.meanings.length > 0) {
         setLookupSource(data.source || 'cambridge');
         setLookupSourceLabel(
@@ -301,6 +347,10 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
             };
           })
         );
+      } else {
+        setIsInvalidWord(true);
+        setInvalidWordMessage(`查無「${cleanTerm}」之有效繁體中文釋義。`);
+        setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
       }
     } catch (err) {
       console.warn('Lookup all meanings error:', err);
@@ -315,12 +365,40 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   const handleSelectSuggestion = (suggestedWord: string) => {
     setTerm(suggestedWord);
     setCandidateSuggestions([]);
+    setIsInvalidWord(false);
+    setInvalidWordMessage(null);
+    setTypoSuggestions([]);
+    setInflectionInfo(null);
     handleLookupAllMeanings(suggestedWord);
+  };
+
+  // Apply "Did You Mean" typo suggestion
+  const handleApplyTypoCorrection = (correctedWord: string) => {
+    setTerm(correctedWord);
+    setTypoSuggestions([]);
+    setIsInvalidWord(false);
+    setInvalidWordMessage(null);
+    setInflectionInfo(null);
+    handleLookupAllMeanings(correctedWord);
+  };
+
+  // Switch to base lemma for inflected forms
+  const handleSwitchToBaseForm = (baseWord: string) => {
+    setTerm(baseWord);
+    setInflectionInfo(null);
+    setTypoSuggestions([]);
+    setIsInvalidWord(false);
+    setInvalidWordMessage(null);
+    handleLookupAllMeanings(baseWord);
   };
 
   const handleApplyClipboard = () => {
     if (!detectedClipboard) return;
     setTerm(detectedClipboard);
+    setIsInvalidWord(false);
+    setInvalidWordMessage(null);
+    setTypoSuggestions([]);
+    setInflectionInfo(null);
     handleLookupAllMeanings(detectedClipboard);
     setDetectedClipboard(null);
   };
@@ -726,7 +804,13 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   required
                   autoFocus
                   value={term}
-                  onChange={(e) => setTerm(e.target.value)}
+                  onChange={(e) => {
+                    setTerm(e.target.value);
+                    setIsInvalidWord(false);
+                    setInvalidWordMessage(null);
+                    setTypoSuggestions([]);
+                    setInflectionInfo(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       if (term.trim() && (!definitions.length || !definitions[0].def.trim())) {
@@ -749,6 +833,81 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   </button>
                 )}
               </div>
+
+              {/* Inflected Form Banner (變形識別 + 一鍵切換至原形) */}
+              {inflectionInfo && (
+                <div className="mt-2.5 p-3.5 rounded-2xl bg-indigo-50/90 dark:bg-indigo-950/50 border border-indigo-200/90 dark:border-indigo-800 text-xs text-indigo-950 dark:text-indigo-200 flex items-center justify-between gap-3 animate-enter shadow-sm">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xl flex-shrink-0">💡</span>
+                    <div>
+                      <div className="font-bold flex items-center gap-1.5 flex-wrap">
+                        <span>偵測為單字變形：</span>
+                        <span className="font-black underline decoration-indigo-400">{term.trim()}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-700">
+                          {inflectionInfo.type}
+                        </span>
+                      </div>
+                      <p className="text-[11px] opacity-80 mt-0.5">
+                        建議收錄原形「<strong>{inflectionInfo.baseForm}</strong>」以利系統化學習，亦可直接收錄此變形。
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchToBaseForm(inflectionInfo.baseForm)}
+                    className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm transition active:scale-95 flex items-center gap-1.5 flex-shrink-0 cursor-pointer"
+                    title={`點擊立即將輸入框改為「${inflectionInfo.baseForm}」並重新載入原形多種釋義`}
+                  >
+                    <span>切換為原形</span>
+                    <span className="font-mono underline">{inflectionInfo.baseForm}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Typo Interception Banner & "Did You Mean" Suggestion Chips (錯字攔截 + 您是不是要找) */}
+              {typoSuggestions.length > 0 && (
+                <div className="mt-2.5 p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/90 dark:border-amber-800 text-xs text-amber-950 dark:text-amber-200 space-y-2 animate-enter shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg flex-shrink-0">🤔</span>
+                    <div>
+                      <span className="font-bold">
+                        字典中查無「{term.trim()}」，您是不是要找以下單字？
+                      </span>
+                      <p className="text-[11px] opacity-80 mt-0.5">
+                        偵測到疑似拼寫錯誤，點擊下方建議詞即可一鍵替換並查詢釋義：
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                    {typoSuggestions.map((sug) => (
+                      <button
+                        key={sug}
+                        type="button"
+                        onClick={() => handleApplyTypoCorrection(sug)}
+                        className="px-3 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 dark:bg-amber-900/60 dark:hover:bg-amber-800 text-amber-900 dark:text-amber-100 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-sm border border-amber-300/80 dark:border-amber-700 cursor-pointer"
+                      >
+                        <span>✨</span>
+                        <span>{sug}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Invalid Word Alert Box (無意義亂碼 / 非英文單字攔截) */}
+              {isInvalidWord && (
+                <div className="mt-2.5 p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200/90 dark:border-rose-800 text-xs text-rose-900 dark:text-rose-200 flex items-start gap-2.5 animate-enter shadow-sm">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">
+                      查無「{term.trim()}」之有效英文單字
+                    </span>
+                    <p className="text-[11px] opacity-80 mt-0.5">
+                      {invalidWordMessage || '此輸入可能包含非標準拼寫、隨機字母組合或無意義字元。系統已為您攔截假釋義生成，請檢查拼寫後重新輸入。'}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Lookup Source Banner */}
               {lookupSource && (

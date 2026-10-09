@@ -48,6 +48,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
   const [definitions, setDefinitions] = useState<DefinitionRow[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAiFetchMeaningsLoading, setIsAiFetchMeaningsLoading] = useState(false);
+  const [editFeedback, setEditFeedback] = useState<string | null>(null);
 
   // AI auto standardize / polish definition #0 without deleting other definitions
   const handleAiPolish = async () => {
@@ -58,6 +59,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     const apiKey = currentSettings?.geminiApiKey;
 
     setIsAiLoading(true);
+    setEditFeedback(null);
     try {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
@@ -117,6 +119,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     const apiKey = currentSettings?.geminiApiKey;
 
     setIsAiFetchMeaningsLoading(true);
+    setEditFeedback(null);
     try {
       const res = await fetch('/api/ai/word-all-meanings', {
         method: 'POST',
@@ -132,6 +135,19 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
 
       if (!res.ok) throw new Error('Failed to fetch meanings');
       const data = await res.json();
+
+      if (data.status === 'invalid') {
+        setEditFeedback(data.message || `查無「${cleanTerm}」之英文單字，可能包含拼寫錯誤。`);
+        return;
+      }
+
+      if (data.status === 'typo') {
+        const sugs = Array.isArray(data.suggestions) && data.suggestions.length > 0
+          ? `，您是不是要找：${data.suggestions.join(', ')}`
+          : '';
+        setEditFeedback(`字典中查無此字（疑似拼寫錯誤）${sugs}`);
+        return;
+      }
 
       if (Array.isArray(data.meanings) && data.meanings.length > 0) {
         setDefinitions((prev) => {
@@ -155,6 +171,8 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
 
           return newRows;
         });
+      } else {
+        setEditFeedback(`查無「${cleanTerm}」之繁體中文釋義。`);
       }
     } catch (err) {
       console.error('Fetch all meanings error:', err);
@@ -333,9 +351,17 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
               type="text"
               required
               value={term}
-              onChange={(e) => setTerm(e.target.value)}
+              onChange={(e) => {
+                setTerm(e.target.value);
+                setEditFeedback(null);
+              }}
               className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 font-bold text-base outline-none focus:ring-2 focus:ring-teal-500/20"
             />
+            {editFeedback && (
+              <div className="mt-2 text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 p-2.5 rounded-xl border border-amber-200 dark:border-amber-800 animate-enter">
+                {editFeedback}
+              </div>
+            )}
           </div>
 
           {/* Category Selector */}

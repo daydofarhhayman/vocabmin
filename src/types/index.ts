@@ -181,3 +181,23 @@ export interface QuizResult {
   correctCount: number;
   wrongWords: Word[];
 }
+
+export type WordValidationStatus = 'valid' | 'inflected' | 'typo' | 'invalid';
+
+export interface WordAllMeaningsResult {
+  term: string;
+  status: WordValidationStatus;
+  baseForm?: string;
+  inflectionType?: string;
+  suggestions?: string[];
+  meanings: Array<{
+    pos: string;
+    def: string;
+    defEn?: string;
+    ex?: string;
+  }>;
+  source: 'cambridge' | 'ai' | 'dictionary' | 'validator' | 'fallback';
+  sourceLabel: string;
+  fromCache?: boolean;
+  message?: string;
+}
