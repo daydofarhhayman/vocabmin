@@ -62,7 +62,29 @@ export const WordListView: React.FC<WordListViewProps> = ({
   const [posFilter, setPosFilter] = useState<string>('ALL');
   const [levelFilter, setLevelFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
-  const [sortBy, setSortBy] = useState<'time' | 'alpha' | 'level' | 'due'>('time');
+  const [sortBy, setSortBy] = useState<
+    'time' | 'alpha' | 'category' | 'category-desc' | 'category-uncat' | 'level' | 'level-asc' | 'due'
+  >(() => {
+    try {
+      const saved = localStorage.getItem('vocabmin_list_sort');
+      if (
+        saved &&
+        [
+          'time',
+          'alpha',
+          'category',
+          'category-desc',
+          'category-uncat',
+          'level',
+          'level-asc',
+          'due'
+        ].includes(saved)
+      ) {
+        return saved as any;
+      }
+    } catch {}
+    return 'time';
+  });
   const [pageSize, setPageSize] = useState<number>(48);
   const [currentPage, setCurrentPage] = useState<number>(1);
 
@@ -173,8 +195,41 @@ export const WordListView: React.FC<WordListViewProps> = ({
         return a.term.localeCompare(b.term);
       } else if (sortBy === 'level') {
         return b.minLevel - a.minLevel;
+      } else if (sortBy === 'level-asc') {
+        return a.minLevel - b.minLevel;
       } else if (sortBy === 'due') {
         return a.nextReview - b.nextReview;
+      } else if (sortBy === 'category' || sortBy === 'category-desc' || sortBy === 'category-uncat') {
+        const catA = (a.category || '').trim();
+        const catB = (b.category || '').trim();
+        const isUncatA = !catA || catA === '未分類';
+        const isUncatB = !catB || catB === '未分類';
+
+        if (sortBy === 'category-uncat') {
+          // Uncategorized first
+          if (isUncatA && !isUncatB) return -1;
+          if (!isUncatA && isUncatB) return 1;
+          if (isUncatA && isUncatB) return a.term.localeCompare(b.term);
+          const comp = catA.localeCompare(catB, 'zh-Hant', { numeric: true });
+          if (comp !== 0) return comp;
+          return a.term.localeCompare(b.term);
+        } else if (sortBy === 'category-desc') {
+          // Categorized Z-A, unclassified at the end
+          if (isUncatA && !isUncatB) return 1;
+          if (!isUncatA && isUncatB) return -1;
+          if (isUncatA && isUncatB) return a.term.localeCompare(b.term);
+          const comp = catB.localeCompare(catA, 'zh-Hant', { numeric: true });
+          if (comp !== 0) return comp;
+          return a.term.localeCompare(b.term);
+        } else {
+          // sortBy === 'category' (A-Z, unclassified at the end)
+          if (isUncatA && !isUncatB) return 1;
+          if (!isUncatA && isUncatB) return -1;
+          if (isUncatA && isUncatB) return a.term.localeCompare(b.term);
+          const comp = catA.localeCompare(catB, 'zh-Hant', { numeric: true });
+          if (comp !== 0) return comp;
+          return a.term.localeCompare(b.term);
+        }
       } else {
         // time (newest first)
         const timeA = Math.max(...a.entries.map((e) => e.timestamp || 0));
@@ -338,12 +393,23 @@ export const WordListView: React.FC<WordListViewProps> = ({
             {/* Sort By */}
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
+              onChange={(e) => {
+                const val = e.target.value as any;
+                setSortBy(val);
+                try {
+                  localStorage.setItem('vocabmin_list_sort', val);
+                } catch {}
+                setCurrentPage(1);
+              }}
               className="px-2.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-700/60 text-xs font-bold border-none outline-none cursor-pointer text-slate-700 dark:text-slate-200"
             >
               <option value="time">最新加入</option>
               <option value="alpha">字母 A-Z</option>
+              <option value="category">依分類排序 (A-Z)</option>
+              <option value="category-desc">依分類排序 (Z-A)</option>
+              <option value="category-uncat">依分類排序 (未分類優先)</option>
               <option value="level">熟練度高至低</option>
+              <option value="level-asc">熟練度低至高</option>
               <option value="due">到期複習優先</option>
             </select>
 
@@ -469,32 +535,210 @@ export const WordListView: React.FC<WordListViewProps> = ({
         ) : settings.listViewMode === 'grid' ? (
           /* GRID VIEW */
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-            {paginatedGroups.map((group) => {
+            {paginatedGroups.map((group, index) => {
               const now = Date.now();
               const isDue = group.nextReview <= now;
               const isSelected = selectedTerms.has(group.term);
 
+              const isCategorySorting = sortBy.startsWith('category') && categoryFilter === 'ALL';
+              const currentCat = group.category && group.category.trim() && group.category.trim() !== '未分類'
+                ? group.category.trim()
+                : '未分類';
+              const prevGroup = index > 0 ? paginatedGroups[index - 1] : null;
+              const prevCat = prevGroup
+                ? (prevGroup.category && prevGroup.category.trim() && prevGroup.category.trim() !== '未分類'
+                    ? prevGroup.category.trim()
+                    : '未分類')
+                : null;
+              const showCategoryHeader = isCategorySorting && (index === 0 || currentCat !== prevCat);
+              const countForThisCat = currentCat === '未分類'
+                ? categoryCounts.uncategorized
+                : (categoryCounts.counts[currentCat] || 0);
+
               return (
-                <div
-                  key={group.term}
-                  onClick={() => {
-                    if (isMultiSelectMode) {
-                      toggleTermSelect(group.term);
-                    } else {
-                      setSelectedGroup(group);
-                    }
-                  }}
-                  className={`group relative bg-white dark:bg-slate-800 rounded-2xl p-4 border transition-all duration-150 flex flex-col justify-between cursor-pointer select-none text-left min-h-[110px] ${
-                    isSelected
-                      ? 'border-indigo-600 ring-2 ring-indigo-500/30 bg-indigo-50/20 dark:bg-indigo-950/20'
-                      : 'border-slate-200/80 dark:border-slate-700/80 hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-600/60 shadow-xs'
-                  }`}
-                >
-                  {/* Top row: Word level indicator, Category badge & Audio speaker */}
-                  <div className="flex items-center justify-between gap-1 mb-1.5">
-                    <div className="flex items-center gap-1.5">
+                <React.Fragment key={group.term}>
+                  {showCategoryHeader && (
+                    <div className="col-span-full pt-4 pb-2 first:pt-1 flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 mb-1">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs ${
+                            currentCat === '未分類'
+                              ? 'bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400'
+                              : 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-800/50'
+                          }`}
+                        >
+                          <Tag className="w-3.5 h-3.5" />
+                        </div>
+                        <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                          {currentCat}
+                        </span>
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400 tabular-nums">
+                          {countForThisCat} 個單字
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    onClick={() => {
+                      if (isMultiSelectMode) {
+                        toggleTermSelect(group.term);
+                      } else {
+                        setSelectedGroup(group);
+                      }
+                    }}
+                    className={`group relative bg-white dark:bg-slate-800 rounded-2xl p-4 border transition-all duration-150 flex flex-col justify-between cursor-pointer select-none text-left min-h-[110px] ${
+                      isSelected
+                        ? 'border-indigo-600 ring-2 ring-indigo-500/30 bg-indigo-50/20 dark:bg-indigo-950/20'
+                        : 'border-slate-200/80 dark:border-slate-700/80 hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-600/60 shadow-xs'
+                    }`}
+                  >
+                    {/* Top row: Word level indicator, Category badge & Audio speaker */}
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        {isMultiSelectMode ? (
+                          <span className="text-indigo-600 dark:text-indigo-400">
+                            {isSelected ? (
+                              <CheckSquare className="w-4 h-4" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-300 dark:text-slate-600" />
+                            )}
+                          </span>
+                        ) : (
+                          <span
+                            className={`w-2 h-2 rounded-full ${getLevelDot(group.minLevel)}`}
+                            title={`熟練度 Lvl ${group.minLevel}`}
+                          />
+                        )}
+
+                        {group.entries.length > 1 && (
+                          <span className="text-[10px] font-bold font-mono px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400">
+                            {group.entries.length} 義
+                          </span>
+                        )}
+                        {isDue && (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"
+                            title="待複習"
+                          />
+                        )}
+                      </div>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          tts.speak(group.term);
+                        }}
+                        className="p-1 text-slate-300 hover:text-indigo-600 dark:text-slate-500 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition"
+                        title="發音朗讀"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Main: English Word & Category pill */}
+                    <div className="my-auto py-1">
+                      <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-white capitalize tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
+                        {group.term}
+                      </h3>
+
+                      {/* Category pill if assigned or if sorting by category */}
+                      {group.category ? (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 inline-flex items-center gap-1 w-fit max-w-[120px] truncate mt-0.5">
+                          <Tag className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">{group.category}</span>
+                        </span>
+                      ) : isCategorySorting ? (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700/60 text-slate-400 dark:text-slate-500 border border-slate-200/60 dark:border-slate-700/60 inline-flex items-center gap-1 w-fit max-w-[120px] truncate mt-0.5">
+                          <Tag className="w-2.5 h-2.5 shrink-0 opacity-60" />
+                          <span>未分類</span>
+                        </span>
+                      ) : null}
+
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-1">
+                        <span className="font-semibold text-slate-400 dark:text-slate-500 text-[10px] mr-1">
+                          [{group.entries[0]?.pos}]
+                        </span>
+                        {group.entries[0]?.def}
+                      </p>
+                    </div>
+
+                    {/* Bottom hint */}
+                    <div className="pt-2 border-t border-slate-100/80 dark:border-slate-700/50 flex items-center justify-between text-[11px] text-slate-400 group-hover:text-indigo-500 dark:group-hover:text-indigo-400 transition-colors">
+                      <span className="text-[10px] font-medium tracking-wide">
+                        {isMultiSelectMode ? (isSelected ? '已選取' : '點擊選取') : '點擊查看詳情'}
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+                    </div>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        ) : (
+          /* LIST VIEW */
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-slate-700/60">
+            {paginatedGroups.map((group, index) => {
+              const now = Date.now();
+              const isDue = group.nextReview <= now;
+              const isSelected = selectedTerms.has(group.term);
+
+              const isCategorySorting = sortBy.startsWith('category') && categoryFilter === 'ALL';
+              const currentCat = group.category && group.category.trim() && group.category.trim() !== '未分類'
+                ? group.category.trim()
+                : '未分類';
+              const prevGroup = index > 0 ? paginatedGroups[index - 1] : null;
+              const prevCat = prevGroup
+                ? (prevGroup.category && prevGroup.category.trim() && prevGroup.category.trim() !== '未分類'
+                    ? prevGroup.category.trim()
+                    : '未分類')
+                : null;
+              const showCategoryHeader = isCategorySorting && (index === 0 || currentCat !== prevCat);
+              const countForThisCat = currentCat === '未分類'
+                ? categoryCounts.uncategorized
+                : (categoryCounts.counts[currentCat] || 0);
+
+              return (
+                <React.Fragment key={group.term}>
+                  {showCategoryHeader && (
+                    <div className="px-4 py-2.5 bg-slate-50/90 dark:bg-slate-750/90 flex items-center justify-between border-y border-slate-100 dark:border-slate-700/80 text-slate-700 dark:text-slate-200">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-5 h-5 rounded-md flex items-center justify-center text-xs ${
+                            currentCat === '未分類'
+                              ? 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400'
+                              : 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400'
+                          }`}
+                        >
+                          <Tag className="w-3 h-3" />
+                        </div>
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                          {currentCat}
+                        </span>
+                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-200/60 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400 tabular-nums">
+                          {countForThisCat} 個單字
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    onClick={() => {
+                      if (isMultiSelectMode) {
+                        toggleTermSelect(group.term);
+                      } else {
+                        setSelectedGroup(group);
+                      }
+                    }}
+                    className={`group px-4 py-3 sm:py-3.5 flex items-center justify-between gap-3 transition cursor-pointer select-none ${
+                      isSelected
+                        ? 'bg-indigo-50/40 dark:bg-indigo-950/40'
+                        : 'hover:bg-slate-50/80 dark:hover:bg-slate-700/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
                       {isMultiSelectMode ? (
-                        <span className="text-indigo-600 dark:text-indigo-400">
+                        <span className="text-indigo-600 dark:text-indigo-400 shrink-0">
                           {isSelected ? (
                             <CheckSquare className="w-4 h-4" />
                           ) : (
@@ -503,172 +747,80 @@ export const WordListView: React.FC<WordListViewProps> = ({
                         </span>
                       ) : (
                         <span
-                          className={`w-2 h-2 rounded-full ${getLevelDot(group.minLevel)}`}
+                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${getLevelDot(group.minLevel)}`}
                           title={`熟練度 Lvl ${group.minLevel}`}
                         />
                       )}
 
-                      {group.entries.length > 1 && (
-                        <span className="text-[10px] font-bold font-mono px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400">
-                          {group.entries.length} 義
+                      <span className="text-base font-bold text-slate-800 dark:text-white capitalize tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
+                        {group.term}
+                      </span>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          tts.speak(group.term);
+                        }}
+                        className="p-1 text-slate-300 hover:text-indigo-600 dark:text-slate-500 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition shrink-0"
+                        title="發音朗讀"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+
+                      {/* Category pill in List View */}
+                      {group.category ? (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 inline-flex items-center gap-1 shrink-0">
+                          <Tag className="w-2.5 h-2.5 shrink-0" />
+                          <span>{group.category}</span>
                         </span>
-                      )}
-                      {isDue && (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"
-                          title="待複習"
-                        />
-                      )}
-                    </div>
+                      ) : isCategorySorting ? (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700/60 text-slate-400 dark:text-slate-500 border border-slate-200/60 dark:border-slate-700/60 inline-flex items-center gap-1 shrink-0">
+                          <Tag className="w-2.5 h-2.5 shrink-0 opacity-60" />
+                          <span>未分類</span>
+                        </span>
+                      ) : null}
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        tts.speak(group.term);
-                      }}
-                      className="p-1 text-slate-300 hover:text-indigo-600 dark:text-slate-500 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition"
-                      title="發音朗讀"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  {/* Main: English Word & Category pill */}
-                  <div className="my-auto py-1">
-                    <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-white capitalize tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
-                      {group.term}
-                    </h3>
-
-                    {/* Category pill if assigned */}
-                    {group.category && (
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 inline-flex items-center gap-1 w-fit max-w-[120px] truncate mt-0.5">
-                        <Tag className="w-2.5 h-2.5 shrink-0" />
-                        <span className="truncate">{group.category}</span>
-                      </span>
-                    )}
-
-                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-1">
-                      <span className="font-semibold text-slate-400 dark:text-slate-500 text-[10px] mr-1">
-                        [{group.entries[0]?.pos}]
-                      </span>
-                      {group.entries[0]?.def}
-                    </p>
-                  </div>
-
-                  {/* Bottom hint */}
-                  <div className="pt-2 border-t border-slate-100/80 dark:border-slate-700/50 flex items-center justify-between text-[11px] text-slate-400 group-hover:text-indigo-500 dark:group-hover:text-indigo-400 transition-colors">
-                    <span className="text-[10px] font-medium tracking-wide">
-                      {isMultiSelectMode ? (isSelected ? '已選取' : '點擊選取') : '點擊查看詳情'}
-                    </span>
-                    <ChevronRight className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          /* LIST VIEW */
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-slate-700/60">
-            {paginatedGroups.map((group) => {
-              const now = Date.now();
-              const isDue = group.nextReview <= now;
-              const isSelected = selectedTerms.has(group.term);
-
-              return (
-                <div
-                  key={group.term}
-                  onClick={() => {
-                    if (isMultiSelectMode) {
-                      toggleTermSelect(group.term);
-                    } else {
-                      setSelectedGroup(group);
-                    }
-                  }}
-                  className={`group px-4 py-3 sm:py-3.5 flex items-center justify-between gap-3 transition cursor-pointer select-none ${
-                    isSelected
-                      ? 'bg-indigo-50/40 dark:bg-indigo-950/40'
-                      : 'hover:bg-slate-50/80 dark:hover:bg-slate-700/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {isMultiSelectMode ? (
-                      <span className="text-indigo-600 dark:text-indigo-400 shrink-0">
-                        {isSelected ? (
-                          <CheckSquare className="w-4 h-4" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-300 dark:text-slate-600" />
-                        )}
-                      </span>
-                    ) : (
-                      <span
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${getLevelDot(group.minLevel)}`}
-                        title={`熟練度 Lvl ${group.minLevel}`}
-                      />
-                    )}
-
-                    <span className="text-base font-bold text-slate-800 dark:text-white capitalize tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
-                      {group.term}
-                    </span>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        tts.speak(group.term);
-                      }}
-                      className="p-1 text-slate-300 hover:text-indigo-600 dark:text-slate-500 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition shrink-0"
-                      title="發音朗讀"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
-
-                    {/* Category pill in List View */}
-                    {group.category && (
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 inline-flex items-center gap-1 shrink-0">
-                        <Tag className="w-2.5 h-2.5 shrink-0" />
-                        <span>{group.category}</span>
-                      </span>
-                    )}
-
-                    {/* Definition preview in List View */}
-                    <div className="hidden sm:flex items-center gap-1.5 min-w-0 max-w-md truncate text-xs text-slate-500 dark:text-slate-400">
-                      {group.entries.slice(0, 2).map((e, idx) => (
-                        <span key={idx} className="truncate">
-                          <span className="font-bold text-slate-400 dark:text-slate-500 font-mono text-[10px] mr-1">
-                            [{e.pos}]
+                      {/* Definition preview in List View */}
+                      <div className="hidden sm:flex items-center gap-1.5 min-w-0 max-w-md truncate text-xs text-slate-500 dark:text-slate-400">
+                        {group.entries.slice(0, 2).map((e, idx) => (
+                          <span key={idx} className="truncate">
+                            <span className="font-bold text-slate-400 dark:text-slate-500 font-mono text-[10px] mr-1">
+                              [{e.pos}]
+                            </span>
+                            <span>{e.def}</span>
+                            {idx === 0 && group.entries.length > 1 && (
+                              <span className="mx-1.5 opacity-40">|</span>
+                            )}
                           </span>
-                          <span>{e.def}</span>
-                          {idx === 0 && group.entries.length > 1 && (
-                            <span className="mx-1.5 opacity-40">|</span>
-                          )}
+                        ))}
+                        {group.entries.length > 2 && (
+                          <span className="text-[10px] text-slate-400 shrink-0 font-medium">
+                            +{group.entries.length - 2}
+                          </span>
+                        )}
+                      </div>
+
+                      {group.entries.length > 1 && (
+                        <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400 shrink-0">
+                          {group.entries.length} 釋義
                         </span>
-                      ))}
-                      {group.entries.length > 2 && (
-                        <span className="text-[10px] text-slate-400 shrink-0 font-medium">
-                          +{group.entries.length - 2}
+                      )}
+
+                      {isDue && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 border border-rose-200/60 dark:border-rose-800/40 shrink-0">
+                          待複習
                         </span>
                       )}
                     </div>
 
-                    {group.entries.length > 1 && (
-                      <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700/80 text-slate-500 dark:text-slate-400 shrink-0">
-                        {group.entries.length} 釋義
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400 group-hover:text-indigo-500 dark:group-hover:text-indigo-400 transition-colors shrink-0">
+                      <span className="text-[11px] font-medium hidden sm:inline">
+                        {isMultiSelectMode ? (isSelected ? '已選取' : '選取') : '查看詳情'}
                       </span>
-                    )}
-
-                    {isDue && (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 border border-rose-200/60 dark:border-rose-800/40 shrink-0">
-                        待複習
-                      </span>
-                    )}
+                      <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
                   </div>
-
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400 group-hover:text-indigo-500 dark:group-hover:text-indigo-400 transition-colors shrink-0">
-                    <span className="text-[11px] font-medium hidden sm:inline">
-                      {isMultiSelectMode ? (isSelected ? '已選取' : '選取') : '查看詳情'}
-                    </span>
-                    <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
-                  </div>
-                </div>
+                </React.Fragment>
               );
             })}
           </div>
