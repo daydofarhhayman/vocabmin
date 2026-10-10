@@ -24,7 +24,12 @@ import { Word, AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { tts } from '../services/tts';
 import { calculateNextReview } from '../services/srs';
-import { getWordDisplayDef, getWordSecondaryDef } from '../utils/wordLang';
+import {
+  getWordDisplayDef,
+  getWordSecondaryDef,
+  generateSafeQuizOptions,
+  checkPolysemyAnswerMatch
+} from '../utils/wordLang';
 import { getAllWordCategories } from '../services/storage';
 import confetti from 'canvas-confetti';
 
@@ -73,6 +78,8 @@ interface ReviewQuestion {
   // For multiple-choice
   options: string[];
   correctOptionIndex: number;
+  acceptableOptionIndices?: number[];
+  sameTermEntries?: Word[];
   // For fill-in-the-blank (cloze)
   fullSentence: string;
   clozeSentence: string;
@@ -149,6 +156,7 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
     prevLevel: number;
     newLevel: number;
     speedTag: string;
+    secondaryMatch?: Word | null;
   } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -273,21 +281,16 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
 
     // Construct questions
     const generatedQuestions: ReviewQuestion[] = chosen.map((w) => {
-      // Other words for distractors in multiple-choice
-      const others = words.filter((item) => item.id !== w.id && item.term !== w.term);
-      const shuffledOthers = [...others].sort(() => Math.random() - 0.5).slice(0, 3);
-      const targetDef = getWordDisplayDef(w, settings.lang);
-      const distractors = shuffledOthers.map((o) => getWordDisplayDef(o, settings.lang));
-      const allOptions = [...distractors, targetDef].sort(() => Math.random() - 0.5);
-      const correctOptionIndex = allOptions.indexOf(targetDef);
-
+      const safeOpts = generateSafeQuizOptions(w, words, settings.lang);
       const clozeData = generateClozeData(w);
 
       return {
         word: w,
         mode: reviewMode,
-        options: allOptions,
-        correctOptionIndex,
+        options: safeOpts.options,
+        correctOptionIndex: safeOpts.correctOptionIndex,
+        acceptableOptionIndices: safeOpts.acceptableOptionIndices,
+        sameTermEntries: safeOpts.sameTermEntries,
         fullSentence: clozeData.fullSentence,
         clozeSentence: clozeData.clozeSentence,
         firstLetter: clozeData.firstLetter,
@@ -378,7 +381,7 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
 
   // Core Evaluation & Adaptive Mastery Calculation based on Response Time
   const evaluateAnswer = useCallback(
-    (isCorrect: boolean, userAnswer: string) => {
+    (isCorrect: boolean, userAnswer: string, secondaryMatch?: Word | null) => {
       if (!currentQ || isAnswered) return;
 
       const finishTime = performance.now();
@@ -395,6 +398,10 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
         // Wrong answer: Reset / downgrade to Level 0 (Again)
         rating = 0;
         speedTag = '❌ 答錯 · 需重新排入複習';
+      } else if (secondaryMatch && secondaryMatch.id !== currentWord.id) {
+        // Correct through secondary polysemous meaning in library!
+        rating = 2; // Count as Good recall
+        speedTag = `💡 正確！認可本單字另一收錄釋義 [${secondaryMatch.pos}] ${secondaryMatch.def}`;
       } else {
         // Correct answer: Derive rating from timeSpent
         if (reviewMode === 'choice') {
@@ -437,6 +444,12 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
       // Persist to real app state
       onUpdateWordReview(currentWord.id, srsResult);
 
+      // Also boost the secondary polysemous entry so it reflects user mastery!
+      if (secondaryMatch && secondaryMatch.id !== currentWord.id) {
+        const secSrs = calculateNextReview(secondaryMatch, rating);
+        onUpdateWordReview(secondaryMatch.id, secSrs);
+      }
+
       // Play audio on correct answer
       if (isCorrect) {
         tts.speak(currentWord.term);
@@ -448,7 +461,8 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
         rating,
         prevLevel,
         newLevel,
-        speedTag
+        speedTag,
+        secondaryMatch
       };
 
       setLastFeedback(feedback);
@@ -479,8 +493,22 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   const handleSelectOption = (index: number) => {
     if (isAnswered || !currentQ) return;
     setSelectedOption(index);
-    const isCorrect = index === currentQ.correctOptionIndex;
-    evaluateAnswer(isCorrect, currentQ.options[index]);
+    const chosenText = currentQ.options[index];
+
+    const isPrimaryCorrect = index === currentQ.correctOptionIndex;
+    const isAcceptable = (currentQ.acceptableOptionIndices || []).includes(index);
+
+    let isCorrect = isPrimaryCorrect || isAcceptable;
+    let secondaryMatch: Word | null = null;
+
+    if (!isPrimaryCorrect) {
+      secondaryMatch = checkPolysemyAnswerMatch(currentQ.word, chosenText, words, settings.lang);
+      if (secondaryMatch) {
+        isCorrect = true;
+      }
+    }
+
+    evaluateAnswer(isCorrect, chosenText, secondaryMatch);
   };
 
   // Handle Cloze Submit
@@ -573,19 +601,16 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
     if (wrong.length === 0) return;
 
     const generatedQuestions: ReviewQuestion[] = wrong.map((w) => {
-      const others = words.filter((item) => item.id !== w.id && item.term !== w.term);
-      const shuffledOthers = [...others].sort(() => Math.random() - 0.5).slice(0, 3);
-      const targetDef = getWordDisplayDef(w, settings.lang);
-      const distractors = shuffledOthers.map((o) => getWordDisplayDef(o, settings.lang));
-      const allOptions = [...distractors, targetDef].sort(() => Math.random() - 0.5);
-      const correctOptionIndex = allOptions.indexOf(targetDef);
+      const safeOpts = generateSafeQuizOptions(w, words, settings.lang);
       const clozeData = generateClozeData(w);
 
       return {
         word: w,
         mode: reviewMode,
-        options: allOptions,
-        correctOptionIndex,
+        options: safeOpts.options,
+        correctOptionIndex: safeOpts.correctOptionIndex,
+        acceptableOptionIndices: safeOpts.acceptableOptionIndices,
+        sameTermEntries: safeOpts.sameTermEntries,
         fullSentence: clozeData.fullSentence,
         clozeSentence: clozeData.clozeSentence,
         firstLetter: clozeData.firstLetter,
@@ -1011,25 +1036,46 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
                   </button>
                 </div>
 
-                <span className="text-xs font-bold text-slate-400 uppercase">
-                  [{currentQ.word.pos}]
-                </span>
+                <div className="flex items-center justify-center gap-2 flex-wrap pt-0.5">
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/60 uppercase">
+                    詞性：[{currentQ.word.pos}]
+                  </span>
+                  {(currentQ.sameTermEntries?.length || 1) > 1 && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 dark:bg-amber-950/70 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/60 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      <span>一詞多義（收錄 {currentQ.sameTermEntries?.length} 義）</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Example sentence context hint for polysemy disambiguation */}
+                {currentQ.word.ex && currentQ.word.ex.trim() && (
+                  <div className="max-w-md mx-auto mt-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-750/70 border border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300 italic text-center">
+                    <span className="font-semibold text-slate-400 not-italic mr-1.5">例句情境：</span>
+                    "{currentQ.word.ex.trim()}"
+                  </div>
+                )}
               </div>
 
               {/* 4 Multiple Choice Options */}
               <div className="space-y-2.5">
                 {currentQ.options.map((option, idx) => {
                   const isSelected = selectedOption === idx;
-                  const isCorrect = idx === currentQ.correctOptionIndex;
+                  const isPrimaryCorrect = idx === currentQ.correctOptionIndex;
+                  const isSecondaryCorrect = (currentQ.acceptableOptionIndices || []).includes(idx);
+                  const isAnyCorrect = isPrimaryCorrect || isSecondaryCorrect;
 
                   let style =
                     'bg-slate-50 dark:bg-slate-700/60 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700';
 
                   if (isAnswered) {
-                    if (isCorrect) {
+                    if (isPrimaryCorrect) {
                       style =
                         'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-800 dark:text-emerald-200 font-bold';
-                    } else if (isSelected && !isCorrect) {
+                    } else if (isSelected && isSecondaryCorrect) {
+                      style =
+                        'bg-teal-50 dark:bg-teal-950/60 border-teal-500 text-teal-800 dark:text-teal-200 font-bold';
+                    } else if (isSelected && !isAnyCorrect) {
                       style =
                         'bg-rose-50 dark:bg-rose-950/60 border-rose-500 text-rose-800 dark:text-rose-200 font-bold';
                     } else {
@@ -1044,16 +1090,24 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
                       disabled={isAnswered}
                       className={`w-full p-3.5 rounded-xl border text-xs sm:text-sm font-semibold transition text-left flex items-center justify-between cursor-pointer ${style}`}
                     >
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2.5 min-w-0">
                         <span className="w-6 h-6 rounded-lg bg-slate-200/80 dark:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-mono font-bold flex items-center justify-center shrink-0">
                           {idx + 1}
                         </span>
                         <span className="line-clamp-2">{option}</span>
+                        {isAnswered && isSelected && isSecondaryCorrect && !isPrimaryCorrect && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-100 dark:bg-teal-900/60 text-teal-700 dark:text-teal-300 ml-1 shrink-0">
+                            認可其它收錄釋義
+                          </span>
+                        )}
                       </div>
-                      {isAnswered && isCorrect && (
+                      {isAnswered && isPrimaryCorrect && (
                         <Check className="w-4 h-4 text-emerald-600 shrink-0" />
                       )}
-                      {isAnswered && isSelected && !isCorrect && (
+                      {isAnswered && isSelected && isSecondaryCorrect && !isPrimaryCorrect && (
+                        <Check className="w-4 h-4 text-teal-600 shrink-0" />
+                      )}
+                      {isAnswered && isSelected && !isAnyCorrect && (
                         <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
                       )}
                     </button>
@@ -1236,20 +1290,65 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
                     w.id !== currentQ.word.id
                 );
                 if (otherMeanings.length === 0) return null;
+
+                const isSecondaryAccepted = !!lastFeedback.secondaryMatch;
+
                 return (
-                  <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl text-xs text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-900/50 space-y-1.5">
-                    <span className="font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300">
-                      💡 一詞多義提醒（字庫中收錄的其它義項）：
+                  <div
+                    className={`p-3 rounded-xl text-xs border space-y-1.5 ${
+                      isSecondaryAccepted
+                        ? 'bg-teal-50/80 dark:bg-teal-950/40 text-teal-900 dark:text-teal-200 border-teal-200 dark:border-teal-900/60'
+                        : 'bg-indigo-50/70 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-900/50'
+                    }`}
+                  >
+                    <span
+                      className={`font-bold flex items-center gap-1.5 ${
+                        isSecondaryAccepted
+                          ? 'text-teal-700 dark:text-teal-300'
+                          : 'text-indigo-700 dark:text-indigo-300'
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      {isSecondaryAccepted
+                        ? '💡 答題判定：您選擇了此單字的另一項收錄釋義，已認可判定為正確！'
+                        : '💡 一詞多義提醒（字庫中收錄的全部義項）：'}
                     </span>
-                    <div className="space-y-1 pl-2 border-l-2 border-indigo-300 dark:border-indigo-700 text-[11px]">
+                    <div
+                      className={`space-y-1 pl-2 border-l-2 text-[11px] ${
+                        isSecondaryAccepted
+                          ? 'border-teal-300 dark:border-teal-700'
+                          : 'border-indigo-300 dark:border-indigo-700'
+                      }`}
+                    >
                       <p>
-                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">[{currentQ.word.pos}]</span> {currentQ.word.def} <span className="opacity-70">(本題所測)</span>
+                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                          [{currentQ.word.pos}]
+                        </span>{' '}
+                        {currentQ.word.def}
+                        <span className="opacity-70 ml-1.5">
+                          {isSecondaryAccepted ? '(題幹預設目標)' : '(本題所測)'}
+                        </span>
                       </p>
-                      {otherMeanings.map((om, oIdx) => (
-                        <p key={oIdx} className="opacity-80">
-                          <span className="font-mono font-bold">[{om.pos}]</span> {om.def}
-                        </p>
-                      ))}
+                      {otherMeanings.map((om, oIdx) => {
+                        const isChosenEntry = lastFeedback.secondaryMatch?.id === om.id;
+                        return (
+                          <p
+                            key={oIdx}
+                            className={
+                              isChosenEntry
+                                ? 'font-bold text-teal-700 dark:text-teal-300'
+                                : 'opacity-80'
+                            }
+                          >
+                            <span className="font-mono font-bold">[{om.pos}]</span> {om.def}
+                            {isChosenEntry && (
+                              <span className="ml-1.5 px-1.5 py-0.5 rounded bg-teal-200/60 dark:bg-teal-850 text-teal-800 dark:text-teal-200 text-[10px]">
+                                ✔ 您所選取的釋義 (已認可)
+                              </span>
+                            )}
+                          </p>
+                        );
+                      })}
                     </div>
                   </div>
                 );

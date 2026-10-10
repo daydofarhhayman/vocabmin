@@ -43,7 +43,11 @@ import { Word, ViewTab, AppSettings, DailyStats, POS } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { tts } from '../services/tts';
 import { storage } from '../services/storage';
-import { getWordDisplayDef } from '../utils/wordLang';
+import {
+  getWordDisplayDef,
+  generateSafeQuizOptions,
+  checkPolysemyAnswerMatch
+} from '../utils/wordLang';
 import { User } from 'firebase/auth';
 import {
   HomeConfig,
@@ -217,7 +221,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   // Speed Quiz Widget State & Logic
   const [speedQuizTargetWord, setSpeedQuizTargetWord] = useState<Word | null>(null);
-  const [speedQuizOptions, setSpeedQuizOptions] = useState<{ text: string; isCorrect: boolean }[]>([]);
+  const [speedQuizOptions, setSpeedQuizOptions] = useState<
+    { text: string; isCorrect: boolean; isAcceptable?: boolean }[]
+  >([]);
   const [speedQuizSelectedIdx, setSpeedQuizSelectedIdx] = useState<number | null>(null);
   const [speedQuizAnswered, setSpeedQuizAnswered] = useState(false);
   const [speedQuizScore, setSpeedQuizScore] = useState(0);
@@ -235,22 +241,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
     const pool = validWords.length > 0 ? validWords : words;
     const target = pool[Math.floor(Math.random() * pool.length)];
 
-    const otherDefs = pool
-      .filter((w) => w.term.toLowerCase() !== target.term.toLowerCase())
-      .map((w) => getWordDisplayDef(w, settings.lang))
-      .filter(Boolean);
-
-    const shuffledOthers = [...otherDefs].sort(() => Math.random() - 0.5).slice(0, 3);
-    const fallbackDistractors = ['持續堅持', '微小進展', '深刻認知', '靈光一現'];
-    while (shuffledOthers.length < 3) {
-      shuffledOthers.push(fallbackDistractors[shuffledOthers.length % fallbackDistractors.length]);
-    }
-
-    const correctDef = getWordDisplayDef(target, settings.lang);
-    const options = [
-      { text: correctDef, isCorrect: true },
-      ...shuffledOthers.map((d) => ({ text: d, isCorrect: false }))
-    ].sort(() => Math.random() - 0.5);
+    const safeOpts = generateSafeQuizOptions(target, pool, settings.lang);
+    const options = safeOpts.options.map((text, idx) => ({
+      text,
+      isCorrect: idx === safeOpts.correctOptionIndex,
+      isAcceptable: safeOpts.acceptableOptionIndices.includes(idx)
+    }));
 
     setSpeedQuizTargetWord(target);
     setSpeedQuizOptions(options);
@@ -268,7 +264,19 @@ export const HomeView: React.FC<HomeViewProps> = ({
     setSpeedQuizAnswered(true);
 
     const chosen = speedQuizOptions[idx];
-    if (chosen?.isCorrect) {
+    let isCorrect = !!(chosen?.isCorrect || chosen?.isAcceptable);
+
+    if (!isCorrect && chosen?.text) {
+      const secMatch = checkPolysemyAnswerMatch(speedQuizTargetWord, chosen.text, words, settings.lang);
+      if (secMatch) {
+        isCorrect = true;
+        setSpeedQuizOptions((prev) =>
+          prev.map((opt, i) => (i === idx ? { ...opt, isAcceptable: true } : opt))
+        );
+      }
+    }
+
+    if (isCorrect) {
       setSpeedQuizScore((prev) => prev + 1);
       tts.speak(speedQuizTargetWord.term);
       try {
@@ -1361,13 +1369,18 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     {speedQuizTargetWord ? (
                       <div className="space-y-3">
                         <div className="flex items-center justify-between bg-slate-50/80 dark:bg-slate-900/40 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-base sm:text-lg text-slate-900 dark:text-white capitalize">
                               {speedQuizTargetWord.term}
                             </span>
                             <span className="text-xs font-semibold text-slate-400">
                               {speedQuizTargetWord.pos}
                             </span>
+                            {words.filter((w) => w.term.trim().toLowerCase() === speedQuizTargetWord.term.trim().toLowerCase()).length > 1 && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/60">
+                                一詞多義
+                              </span>
+                            )}
                           </div>
                           <button
                             onClick={() => tts.speak(speedQuizTargetWord.term)}
@@ -1381,10 +1394,15 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {speedQuizOptions.map((opt, optIdx) => {
                             let btnStyle = 'bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400 dark:hover:border-indigo-500';
+                            const isChosen = speedQuizSelectedIdx === optIdx;
+                            const isMatch = opt.isCorrect || (isChosen && opt.isAcceptable);
+
                             if (speedQuizAnswered) {
                               if (opt.isCorrect) {
                                 btnStyle = 'bg-emerald-500 text-white border-emerald-500 font-bold shadow-sm shadow-emerald-500/20';
-                              } else if (speedQuizSelectedIdx === optIdx) {
+                              } else if (isChosen && opt.isAcceptable) {
+                                btnStyle = 'bg-teal-600 text-white border-teal-600 font-bold shadow-sm shadow-teal-500/20';
+                              } else if (isChosen) {
                                 btnStyle = 'bg-rose-500 text-white border-rose-500 font-bold';
                               } else {
                                 btnStyle = 'opacity-40 bg-slate-100 dark:bg-slate-800 text-slate-400 border-transparent';
@@ -1399,7 +1417,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                                 className={`p-2.5 rounded-xl border text-xs text-left transition font-medium flex items-center justify-between gap-2 ${btnStyle}`}
                               >
                                 <span className="line-clamp-2">{opt.text}</span>
-                                {speedQuizAnswered && opt.isCorrect && (
+                                {speedQuizAnswered && isMatch && (
                                   <Check className="w-3.5 h-3.5 shrink-0" />
                                 )}
                               </button>
@@ -1410,8 +1428,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         {speedQuizAnswered && (
                           <div className="flex items-center justify-between pt-1">
                             <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                              {speedQuizOptions[speedQuizSelectedIdx ?? 0]?.isCorrect
-                                ? '🎉 太棒了，回答正確！'
+                              {speedQuizOptions[speedQuizSelectedIdx ?? 0]?.isCorrect || speedQuizOptions[speedQuizSelectedIdx ?? 0]?.isAcceptable
+                                ? (speedQuizOptions[speedQuizSelectedIdx ?? 0]?.isAcceptable && !speedQuizOptions[speedQuizSelectedIdx ?? 0]?.isCorrect
+                                    ? '💡 認可其它收錄釋義，回答正確！'
+                                    : '🎉 太棒了，回答正確！')
                                 : `💡 正確釋義為：${getWordDisplayDef(speedQuizTargetWord, settings.lang)}`}
                             </span>
                             <button
