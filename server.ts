@@ -2699,7 +2699,8 @@ CRITICAL INTEGRITY & ANTI-HALLUCINATION RULES:
   * "meanings": Provide accurate Traditional Chinese and English definitions for this base word or inflected usage.
   * "suggestions": MUST BE an empty array [].
 - If status is "valid":
-  * "meanings": Extract 1-5 distinct, common definitions with Traditional Chinese "def", English "defEn", part of speech "pos", and natural example "ex".
+  * "meanings": Extract 1-5 authentic, distinct definitions with Traditional Chinese "def", English "defEn", part of speech "pos", and natural example "ex".
+  * 🚨 FIDELITY TO CAMBRIDGE DICTIONARY: Strictly follow authentic Cambridge English-Chinese Dictionary headwords. If a word only has 1 primary definition in Cambridge (e.g. "identity" strictly has only 1 definition: "身分；本身；特性"), do NOT artificially invent or split extra meanings! Only return multiple meanings when the Cambridge English-Chinese dictionary legitimately has multiple distinct entries.
   * "suggestions": MUST BE an empty array [].
 
 Return a JSON object conforming to the schema.`;
@@ -2794,8 +2795,8 @@ Return a JSON object conforming to the schema.`;
           inflectionType: parsed.inflectionType || '單字變形',
           suggestions: [],
           meanings: validMeanings,
-          source: 'cambridge',
-          sourceLabel: `劍橋英漢辭典 (偵測為「${(parsed.baseForm || cleanWord).toLowerCase()}」之變形)`
+          source: 'ai',
+          sourceLabel: `Gemini AI 智能解析 (偵測為「${(parsed.baseForm || cleanWord).toLowerCase()}」之變形)`
         };
         wordAllMeaningsCache.set(cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
@@ -2812,8 +2813,8 @@ Return a JSON object conforming to the schema.`;
             status: 'valid',
             suggestions: [],
             meanings: validMeanings,
-            source: 'cambridge',
-            sourceLabel: '劍橋英漢辭典 (Cambridge Dictionary · 官方標準同步)'
+            source: 'ai',
+            sourceLabel: 'Gemini AI 智能解析 (參照劍橋辭典標準)'
           };
           wordAllMeaningsCache.set(cacheKey, payload);
           return res.json({ ...payload, fromCache: false });
