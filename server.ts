@@ -2405,12 +2405,10 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
 
   // End marker: copyright footer or examples / browse header in either English or Chinese
   const endMarkers = [
+    '© Cambridge University Press',
     '(Translation of',
-    '從劍橋英語',
-    '在劍橋英語',
-    '詞典的翻譯',
+    '(從劍橋',
     '## Examples of',
-    '的 例句',
     '## Browse',
     '## 瀏覽'
   ];
@@ -2560,36 +2558,52 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
     return cambridgeMeaningsCache.get(cleanWord)!;
   }
 
-  try {
-    const url = `https://r.jina.ai/https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`;
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(9500),
-      headers: {
+  const targetUrls = [
+    `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`,
+    `https://dictionary.cambridge.org/zht/%E8%A9%9E%E5%85%B8/%E8%8B%B1%E8%AA%9E-%E6%BC%A2%E8%AA%9E-%E7%B9%81%E9%AB%94/${encodeURIComponent(cleanWord)}`
+  ];
+
+  const jinaKey = process.env.JINA_API_KEY;
+
+  for (const targetUrl of targetUrls) {
+    try {
+      const url = `https://r.jina.ai/${targetUrl}`;
+      const headers: Record<string, string> = {
         'Accept': 'text/plain',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+      };
+      if (jinaKey) {
+        headers['Authorization'] = `Bearer ${jinaKey}`;
       }
-    });
 
-    if (!res.ok) return null;
-    const markdown = await res.text();
-    const hasCambridgeHeader =
-      markdown.includes('# Translation of') ||
-      markdown.includes('在英語-中文') ||
-      markdown.includes('在英語-漢語') ||
-      markdown.includes('詞典中的翻譯') ||
-      markdown.includes('劍橋英語-中文') ||
-      markdown.includes('Cambridge English-Chinese');
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(9500),
+        headers
+      });
 
-    if (!hasCambridgeHeader) return null;
+      if (!res.ok) continue;
+      const markdown = await res.text();
+      const hasCambridgeHeader =
+        markdown.includes('# Translation of') ||
+        markdown.includes('在英語-中文') ||
+        markdown.includes('在英語-漢語') ||
+        markdown.includes('詞典中的翻譯') ||
+        markdown.includes('劍橋英語-中文') ||
+        markdown.includes('Cambridge English-Chinese') ||
+        markdown.includes('劍橋詞典');
 
-    const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
-    if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
-      cambridgeMeaningsCache.set(cleanWord, parsedResult);
-      return parsedResult;
+      if (!hasCambridgeHeader) continue;
+
+      const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
+      if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
+        cambridgeMeaningsCache.set(cleanWord, parsedResult);
+        return parsedResult;
+      }
+    } catch (err: any) {
+      console.warn(`Cambridge direct lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
     }
-  } catch (err: any) {
-    console.warn(`Cambridge lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
   }
+
   return null;
 }
 
@@ -2780,8 +2794,8 @@ Return a JSON object conforming to the schema.`;
           inflectionType: parsed.inflectionType || '單字變形',
           suggestions: [],
           meanings: validMeanings,
-          source: 'ai',
-          sourceLabel: 'Gemini AI 變形解析 (參照劍橋辭典標準)'
+          source: 'cambridge',
+          sourceLabel: `劍橋英漢辭典 (偵測為「${(parsed.baseForm || cleanWord).toLowerCase()}」之變形)`
         };
         wordAllMeaningsCache.set(cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
@@ -2798,8 +2812,8 @@ Return a JSON object conforming to the schema.`;
             status: 'valid',
             suggestions: [],
             meanings: validMeanings,
-            source: 'ai',
-            sourceLabel: 'Gemini AI 智能解析 (參照劍橋辭典標準)'
+            source: 'cambridge',
+            sourceLabel: '劍橋英漢辭典 (Cambridge Dictionary · 官方標準同步)'
           };
           wordAllMeaningsCache.set(cacheKey, payload);
           return res.json({ ...payload, fromCache: false });

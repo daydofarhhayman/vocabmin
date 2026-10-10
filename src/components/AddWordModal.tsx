@@ -935,11 +935,12 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                     </span>
                     <div className="min-w-0">
                       <span className="font-bold">
-                        {lookupSource === 'cambridge'
-                          ? '自劍橋字典 (Cambridge Dictionary) 抓取資料'
-                          : lookupSource === 'ai'
-                          ? '依劍橋辭典標準 · 由 Gemini AI 智能解析多種釋義'
-                          : '雙語辭典備援查詢'}
+                        {lookupSourceLabel ||
+                          (lookupSource === 'cambridge'
+                            ? '自劍橋英漢辭典 (Cambridge Dictionary) 抓取資料'
+                            : lookupSource === 'ai'
+                            ? '依劍橋辭典標準 · 由 Gemini AI 智能解析多種釋義'
+                            : '雙語辭典備援查詢')}
                       </span>
                       <span className="opacity-80 ml-1.5 whitespace-nowrap">
                         ・共為您整理 {definitions.length} 種釋義
