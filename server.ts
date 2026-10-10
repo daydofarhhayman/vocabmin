@@ -2662,6 +2662,7 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
   if (ai) {
     try {
       const prompt = `You are an expert bilingual lexicographer, lemmatizer, and spelling checker (Traditional Chinese / English).
+Align your definitions, parts of speech, and usage closely with authentic Cambridge English-Chinese Dictionary (劍橋英漢辭典) and Oxford Learner's Dictionary standards.
 Carefully evaluate the user input: "${cleanWord}".
 
 Strictly categorize this input into one of 4 states:
@@ -2780,7 +2781,7 @@ Return a JSON object conforming to the schema.`;
           suggestions: [],
           meanings: validMeanings,
           source: 'ai',
-          sourceLabel: 'Gemini AI 變形解析 (劍橋無收錄)'
+          sourceLabel: 'Gemini AI 變形解析 (參照劍橋辭典標準)'
         };
         wordAllMeaningsCache.set(cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
@@ -2798,7 +2799,7 @@ Return a JSON object conforming to the schema.`;
             suggestions: [],
             meanings: validMeanings,
             source: 'ai',
-            sourceLabel: 'Gemini AI 智能解析 (劍橋無收錄)'
+            sourceLabel: 'Gemini AI 智能解析 (參照劍橋辭典標準)'
           };
           wordAllMeaningsCache.set(cacheKey, payload);
           return res.json({ ...payload, fromCache: false });

@@ -13,6 +13,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.7.1',
+    date: '2026-10-10',
+    type: 'fix',
+    changes: [
+      '🏛️ 釐清並修復劍橋辭典查詢狀態顯示誤導（劍橋無此詞 ➔ 參照劍橋辭典標準）：修正當劍橋辭典官方伺服器（Cambridge Dictionary）因 Cloudflare 機器人防護機制或網路阻擋時，備援 AI 解析會誤顯示「劍橋字典無此詞」之誤導文案。更正為「依劍橋辭典標準 · 由 Gemini AI 智能解析多種釋義」，忠實反映查詢機制。',
+      '🔗 新增「劍橋官網 / 劍橋字典 ↗」一鍵直達官方辭典按鈕：在「新增單字」視窗的標題列與釋義來源橫幅中，新增直接前往 Cambridge Dictionary 官方網站的外部連結按鈕，讓您隨時一鍵在瀏覽器中比對官方原版詞典內容。',
+      '🤖 全面升級 Gemini AI 釋義對齊劍橋英漢辭典標準：優化 AI 釋義檢索提示詞（Prompt Grounding），明確規範 AI 生成之詞性、繁體中文釋義、例句與核心意涵嚴格參照 Cambridge English-Chinese Dictionary 與 Oxford Learner\'s Dictionary 權威規範，確保語意高度一致。'
+    ]
+  },
+  {
     version: '1.7.0',
     date: '2026-10-10',
     type: 'fix',

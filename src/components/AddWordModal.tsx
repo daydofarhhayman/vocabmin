@@ -780,7 +780,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       onClick={() => handleLookupAllMeanings()}
                       disabled={isAllMeaningsLoading}
                       className="text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/70 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-800 transition active:scale-95 cursor-pointer disabled:opacity-50"
-                      title="優先從劍橋字典 (Cambridge Dictionary) 抓取多種解釋，若無收錄則由 AI 智能生成"
+                      title="優先從劍橋字典 (Cambridge Dictionary) 抓取多種解釋，若遇防爬擋截或無收錄則由 AI 參照劍橋辭典標準生成"
                     >
                       {isAllMeaningsLoading ? (
                         <>
@@ -794,6 +794,15 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                         </>
                       )}
                     </button>
+                    <a
+                      href={`https://dictionary.cambridge.org/zht/詞典/英語-漢語-繁體/${encodeURIComponent(term.trim().toLowerCase())}`}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 transition active:scale-95"
+                      title="在劍橋辭典官方網站中檢視"
+                    >
+                      <span>劍橋官網 ↗</span>
+                    </a>
                   </div>
                 )}
               </div>
@@ -912,7 +921,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
               {/* Lookup Source Banner */}
               {lookupSource && (
                 <div
-                  className={`mt-2 p-3 rounded-2xl border text-xs flex items-center justify-between animate-enter ${
+                  className={`mt-2 p-3 rounded-2xl border text-xs flex items-center justify-between gap-2 animate-enter ${
                     lookupSource === 'cambridge'
                       ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
                       : lookupSource === 'ai'
@@ -920,34 +929,49 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-base flex-shrink-0">
                       {lookupSource === 'cambridge' ? '🏛️' : lookupSource === 'ai' ? '✨' : '📖'}
                     </span>
-                    <div>
+                    <div className="min-w-0">
                       <span className="font-bold">
                         {lookupSource === 'cambridge'
-                          ? '優先自劍橋字典 (Cambridge Dictionary) 抓取資料'
+                          ? '自劍橋字典 (Cambridge Dictionary) 抓取資料'
                           : lookupSource === 'ai'
-                          ? '劍橋字典無此詞，由 Gemini AI 智能解析多種釋義'
+                          ? '依劍橋辭典標準 · 由 Gemini AI 智能解析多種釋義'
                           : '雙語辭典備援查詢'}
                       </span>
-                      <span className="opacity-80 ml-1.5">
+                      <span className="opacity-80 ml-1.5 whitespace-nowrap">
                         ・共為您整理 {definitions.length} 種釋義
                       </span>
                     </div>
                   </div>
-                  <span
-                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
-                      lookupSource === 'cambridge'
-                        ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300'
-                        : lookupSource === 'ai'
-                        ? 'bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300'
-                        : 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300'
-                    }`}
-                  >
-                    {lookupSource === 'cambridge' ? '權威劍橋辭典' : lookupSource === 'ai' ? 'AI 智能備援' : '雙語辭典'}
-                  </span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {term.trim() && (
+                      <a
+                        href={`https://dictionary.cambridge.org/zht/詞典/英語-漢語-繁體/${encodeURIComponent(
+                          term.trim().toLowerCase()
+                        )}`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="px-2 py-0.5 rounded-lg text-[10px] font-semibold border border-current opacity-80 hover:opacity-100 transition-opacity flex items-center gap-0.5"
+                        title="在劍橋字典官方網站中開啟"
+                      >
+                        劍橋字典 ↗
+                      </a>
+                    )}
+                    <span
+                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                        lookupSource === 'cambridge'
+                          ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300'
+                          : lookupSource === 'ai'
+                          ? 'bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300'
+                          : 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300'
+                      }`}
+                    >
+                      {lookupSource === 'cambridge' ? '權威劍橋辭典' : lookupSource === 'ai' ? 'AI 依劍橋標準' : '雙語辭典'}
+                    </span>
+                  </div>
                 </div>
               )}
 
