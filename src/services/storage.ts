@@ -531,11 +531,27 @@ export class StorageService {
         this.saveCloudArticles(initialArticles).catch(console.error);
       }
 
+      // 5. Home Config
+      let cloudHomeConfig: any | undefined;
+      const homeConfigSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'homeConfig'));
+      if (homeConfigSnap.exists()) {
+        cloudHomeConfig = homeConfigSnap.data();
+      }
+
+      // 6. Reader Settings
+      let cloudReaderSettings: ReaderSettings | undefined;
+      const readerSettingsSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'readerSettings'));
+      if (readerSettingsSnap.exists()) {
+        cloudReaderSettings = { ...DEFAULT_READER_SETTINGS, ...readerSettingsSnap.data() } as ReaderSettings;
+      }
+
       return {
         words: cloudWords,
         stats: cloudStats,
         settings: cloudSettings,
-        articles: cloudArticles
+        articles: cloudArticles,
+        homeConfig: cloudHomeConfig,
+        readerSettings: cloudReaderSettings
       };
     } catch (e) {
       console.error('Error syncing from cloud:', e);
@@ -548,7 +564,9 @@ export class StorageService {
     words: Word[],
     stats: DailyStats,
     settings: AppSettings,
-    articles?: Article[]
+    articles?: Article[],
+    homeConfig?: any,
+    readerSettings?: ReaderSettings
   ): Promise<void> {
     if (!this.currentUser || !firestoreDb) return;
     const uid = this.currentUser.uid;
@@ -557,6 +575,14 @@ export class StorageService {
       // 1. Settings & Stats & Meta
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), settings);
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats);
+      if (homeConfig) {
+        const cleanHome = JSON.parse(JSON.stringify(homeConfig));
+        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'homeConfig'), cleanHome);
+      }
+      if (readerSettings) {
+        const cleanReader = JSON.parse(JSON.stringify(readerSettings));
+        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'readerSettings'), cleanReader);
+      }
       await setDoc(
         doc(firestoreDb, 'users', uid, 'data', 'meta'),
         {
@@ -760,6 +786,35 @@ export class StorageService {
       await deleteDoc(doc(firestoreDb, 'users', uid, 'words', wordId));
     } catch (e) {
       console.error('Failed to delete cloud word by id:', e);
+    }
+  }
+
+  public async updateCloudWord(wordId: string, updates: Partial<Word>): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    try {
+      const cleanUpdates = JSON.parse(JSON.stringify(updates));
+      await setDoc(doc(firestoreDb, 'users', uid, 'words', wordId), cleanUpdates, { merge: true });
+    } catch (e) {
+      console.error('Failed to update cloud word:', e);
+    }
+  }
+
+  public async batchUpdateCloudWords(batch: { id: string; data: Partial<Word> }[]): Promise<void> {
+    if (!this.currentUser || !firestoreDb || !batch.length) return;
+    const uid = this.currentUser.uid;
+    try {
+      for (let i = 0; i < batch.length; i += 400) {
+        const b = writeBatch(firestoreDb);
+        const chunk = batch.slice(i, i + 400);
+        chunk.forEach(({ id, data }) => {
+          const clean = JSON.parse(JSON.stringify(data));
+          b.set(doc(firestoreDb, 'users', uid, 'words', id), clean, { merge: true });
+        });
+        await b.commit();
+      }
+    } catch (e) {
+      console.error('Failed to batch update cloud words:', e);
     }
   }
 
@@ -969,6 +1024,28 @@ export class StorageService {
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats, { merge: true });
     } catch (e) {
       console.error('Failed to save cloud stats:', e);
+    }
+  }
+
+  public async saveCloudHomeConfig(config: any): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    try {
+      const clean = JSON.parse(JSON.stringify(config));
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'homeConfig'), clean, { merge: true });
+    } catch (e) {
+      console.error('Failed to save cloud home config:', e);
+    }
+  }
+
+  public async saveCloudReaderSettings(settings: ReaderSettings): Promise<void> {
+    if (!this.currentUser || !firestoreDb) return;
+    const uid = this.currentUser.uid;
+    try {
+      const clean = JSON.parse(JSON.stringify(settings));
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'readerSettings'), clean, { merge: true });
+    } catch (e) {
+      console.error('Failed to save cloud reader settings:', e);
     }
   }
 

@@ -38,6 +38,7 @@ export interface HomeConfig {
   accentColor: HomeAccentColor;
   cardStyle: HomeCardStyle;
   widgets: HomeWidgetItem[];
+  dailyGoalTarget?: number;
 }
 
 export interface WidgetMeta {
@@ -301,7 +302,8 @@ export function loadHomeConfig(): HomeConfig {
     return {
       accentColor: parsed.accentColor || 'indigo',
       cardStyle: parsed.cardStyle || 'modern',
-      widgets: mergedWidgets
+      widgets: mergedWidgets,
+      dailyGoalTarget: typeof parsed.dailyGoalTarget === 'number' ? parsed.dailyGoalTarget : undefined
     };
   } catch {
     return DEFAULT_HOME_CONFIG;

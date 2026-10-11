@@ -253,6 +253,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     setReaderSettings((prev) => {
       const updated = { ...prev, ...newSettings };
       storage.saveLocalReaderSettings(updated);
+      storage.saveCloudReaderSettings(updated).catch(console.error);
       return updated;
     });
   };

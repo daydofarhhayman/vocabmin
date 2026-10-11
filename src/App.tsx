@@ -81,12 +81,18 @@ export default function App() {
   const handleUpdateHomeConfig = useCallback((newConfig: HomeConfig) => {
     setHomeConfig(newConfig);
     saveHomeConfig(newConfig);
-  }, []);
+    if (user) {
+      storage.saveCloudHomeConfig(newConfig).catch(console.error);
+    }
+  }, [user]);
 
   const handleResetHomeConfig = useCallback(() => {
     setHomeConfig(DEFAULT_HOME_CONFIG);
     saveHomeConfig(DEFAULT_HOME_CONFIG);
-  }, []);
+    if (user) {
+      storage.saveCloudHomeConfig(DEFAULT_HOME_CONFIG).catch(console.error);
+    }
+  }, [user]);
 
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
@@ -146,14 +152,21 @@ export default function App() {
     showToast('已清空文章閱讀庫中的所有文章');
   }, [user, showToast]);
 
-  const handleDeleteArticle = useCallback((id: string) => {
-    const updated = storage.deleteArticle(id, user?.uid);
+  const handleDeleteArticle = useCallback((idOrTitle: string) => {
+    const clean = (idOrTitle || '').trim().toLowerCase();
+    const matched = articles.find(
+      (a) => a.id === idOrTitle || (a.title && a.title.trim().toLowerCase() === clean)
+    );
+    const targetId = matched ? matched.id : idOrTitle;
+    const targetTitle = matched ? matched.title : idOrTitle;
+
+    const updated = storage.deleteArticle(targetId, user?.uid);
     setArticles(updated);
     if (user) {
-      storage.deleteCloudArticle(id).catch(console.error);
+      storage.deleteCloudArticle(targetId).catch(console.error);
     }
-    showToast('已從文章閱讀庫刪除指定文章');
-  }, [user, showToast]);
+    showToast(`已從文章閱讀庫刪除文章「${targetTitle}」`);
+  }, [articles, user, showToast]);
 
   // 1. Initial Load: Listen to Firebase Auth state & load user-scoped data
   useEffect(() => {
@@ -184,8 +197,13 @@ export default function App() {
         try {
           const cloudData = await storage.syncFromCloud();
           if (cloudData) {
-            setWords(cloudData.words);
-            storage.saveLocalWords(cloudData.words, currentUser.uid);
+            // Apply SRS decay to authoritative cloud words so overdue cards decay accurately
+            const { updated: cloudWordsDecayed, count: decayedCount } = applySRSDecay(cloudData.words);
+            setWords(cloudWordsDecayed);
+            storage.saveLocalWords(cloudWordsDecayed, currentUser.uid);
+            if (decayedCount > 0) {
+              storage.saveCloudWordsOnly(cloudWordsDecayed).catch(console.error);
+            }
 
             if (cloudData.articles !== undefined) {
               setArticles(cloudData.articles);
@@ -198,6 +216,13 @@ export default function App() {
             if (cloudData.settings) {
               setSettings(cloudData.settings);
               storage.saveLocalSettings(cloudData.settings, currentUser.uid);
+            }
+            if ((cloudData as any).homeConfig) {
+              setHomeConfig((cloudData as any).homeConfig);
+              saveHomeConfig((cloudData as any).homeConfig);
+            }
+            if ((cloudData as any).readerSettings) {
+              storage.saveLocalReaderSettings((cloudData as any).readerSettings);
             }
           }
         } catch (syncErr) {
@@ -252,11 +277,14 @@ export default function App() {
             [type]: (current[type] || 0) + increment
           }
         };
-        storage.saveLocalStats(updated);
+        storage.saveLocalStats(updated, user?.uid);
+        if (user) {
+          storage.saveCloudStats(updated).catch(console.error);
+        }
         return updated;
       });
     },
-    []
+    [user]
   );
 
   // Settings update handler
@@ -337,7 +365,7 @@ export default function App() {
         }
 
         const updated = [...created, ...prev];
-        storage.saveLocalWords(updated);
+        storage.saveLocalWords(updated, user?.uid);
         recordActivity('added', created.length);
         showToast(`成功新增 ${created.length} 個單字！`);
 
@@ -372,11 +400,14 @@ export default function App() {
     (wordId: string, updates: Partial<Word>) => {
       setWords((prev) => {
         const updated = prev.map((w) => (w.id === wordId ? { ...w, ...updates } : w));
-        storage.saveLocalWords(updated);
+        storage.saveLocalWords(updated, user?.uid);
         return updated;
       });
+      if (user) {
+        storage.updateCloudWord(wordId, updates).catch(console.error);
+      }
     },
-    []
+    [user]
   );
 
   // Batch word review updates
@@ -390,12 +421,15 @@ export default function App() {
           }
           return w;
         });
-        storage.saveLocalWords(updated);
+        storage.saveLocalWords(updated, user?.uid);
         return updated;
       });
+      if (user) {
+        storage.batchUpdateCloudWords(batch).catch(console.error);
+      }
       recordActivity('reviewed', batch.length);
     },
-    [recordActivity]
+    [user, recordActivity]
   );
 
   // Edit word group (update all definitions with same term, strictly preserving existing SRS stats)
@@ -444,7 +478,7 @@ export default function App() {
         });
 
         const finalWords = [...newEntries, ...clean];
-        storage.saveLocalWords(finalWords);
+        storage.saveLocalWords(finalWords, user?.uid);
         if (user) {
           storage.syncToCloud(finalWords, dailyStats, settings);
         }
@@ -707,7 +741,7 @@ export default function App() {
       });
 
       cleanCount = deduplicated.length;
-      storage.saveLocalWords(deduplicated);
+      storage.saveLocalWords(deduplicated, user?.uid);
       if (user) {
         storage.syncToCloud(deduplicated, dailyStats, settings);
       }
@@ -728,7 +762,7 @@ export default function App() {
     let count = 0;
     setWords((prev) => {
       count = prev.length;
-      storage.saveLocalWords([]);
+      storage.saveLocalWords([], user?.uid);
       if (user) {
         storage.clearCloudWords().catch((err) => console.error('Cloud clear error:', err));
       }
@@ -751,7 +785,7 @@ export default function App() {
         lastReview: 0,
         nextReview: Date.now()
       }));
-      storage.saveLocalWords(updated);
+      storage.saveLocalWords(updated, user?.uid);
       if (user) {
         storage.saveCloudWordsOnly(updated).catch((err) => console.error('Cloud reset error:', err));
       }
@@ -840,7 +874,7 @@ export default function App() {
           }
           return w;
         });
-        storage.saveLocalWords(merged);
+        storage.saveLocalWords(merged, user?.uid);
         if (user) {
           storage.saveCloudWordsOnly(merged).catch(console.error);
         }
@@ -868,6 +902,9 @@ export default function App() {
       try {
         const data = JSON.parse(e.target?.result as string);
         let count = 0;
+        let mergedWordsList: Word[] = words;
+        let mergedStatsData: DailyStats = dailyStats;
+
         if (data.vocab_data && Array.isArray(data.vocab_data)) {
           setWords((prev) => {
             const currentIds = new Set(prev.map((w) => w.id));
@@ -878,18 +915,25 @@ export default function App() {
                 count++;
               }
             });
-            storage.saveLocalWords(merged);
+            mergedWordsList = merged;
+            storage.saveLocalWords(merged, user?.uid);
             return merged;
           });
         }
         if (data.vocab_stats) {
           setDailyStats((prev) => {
             const merged = { ...prev, ...data.vocab_stats };
-            storage.saveLocalStats(merged);
+            mergedStatsData = merged;
+            storage.saveLocalStats(merged, user?.uid);
             return merged;
           });
         }
-        showToast(`成功匯入 ${count} 個單字！`);
+
+        if (user) {
+          storage.syncToCloud(mergedWordsList, mergedStatsData, settings, articles).catch(console.error);
+        }
+
+        showToast(`成功匯入 ${count} 個單字，已自動同步至雲端資料庫！`);
       } catch (err) {
         showToast('JSON 格式錯誤，請檢查檔案');
       }
@@ -907,11 +951,15 @@ export default function App() {
       onConfirm: () => {
         setWords([]);
         setDailyStats({});
-        storage.saveLocalWords([]);
-        storage.saveLocalStats({});
+        storage.saveLocalWords([], user?.uid);
+        storage.saveLocalStats({}, user?.uid);
+        if (user) {
+          storage.clearCloudWords().catch(console.error);
+          storage.saveCloudStats({}).catch(console.error);
+        }
         setConfirmConfig((c) => ({ ...c, isOpen: false }));
         setIsSettingsOpen(false);
-        showToast('所有資料已清空');
+        showToast('所有單字與學習記錄已從本地與雲端清空！');
       }
     });
   };

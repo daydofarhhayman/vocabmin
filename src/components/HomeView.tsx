@@ -152,8 +152,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const currentTheme = COLOR_THEMES[homeConfig.accentColor] || COLOR_THEMES.indigo;
 
-  // Daily target setting (stored locally)
+  // Daily target setting (stored locally and synced with homeConfig)
   const [dailyGoalTarget, setDailyGoalTarget] = useState<number>(() => {
+    if (homeConfig.dailyGoalTarget) return homeConfig.dailyGoalTarget;
     try {
       const saved = localStorage.getItem('vocabmin_daily_target');
       return saved ? parseInt(saved, 10) : 15;
@@ -162,12 +163,24 @@ export const HomeView: React.FC<HomeViewProps> = ({
     }
   });
 
+  useEffect(() => {
+    if (homeConfig.dailyGoalTarget && homeConfig.dailyGoalTarget !== dailyGoalTarget) {
+      setDailyGoalTarget(homeConfig.dailyGoalTarget);
+    }
+  }, [homeConfig.dailyGoalTarget]);
+
   const handleUpdateDailyTarget = (newTarget: number) => {
     const val = Math.max(5, Math.min(100, newTarget));
     setDailyGoalTarget(val);
     try {
       localStorage.setItem('vocabmin_daily_target', val.toString());
     } catch {}
+    if (onUpdateHomeConfig) {
+      onUpdateHomeConfig({
+        ...homeConfig,
+        dailyGoalTarget: val
+      });
+    }
   };
 
   // Random Word Widget State
