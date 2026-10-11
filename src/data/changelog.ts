@@ -13,6 +13,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.7.5',
+    date: '2026-10-11',
+    type: 'fix',
+    changes: [
+      '🏷️ 徹底修復「AI 助手／字庫專家批次分類與單字分類未寫入雲端」重大缺陷：解決使用者透過 AI 助手下達指令（例如「請幫我將未分類的單字分類至chemistry中」）並點擊確認卡片後，雖然介面即時顯示已歸類，但因 React 狀態異步排程更新導致受影響文檔 ID 在傳送時尚未被塞入閉包陣列，造成 Firestore 雲端寫入被靜默略過，重新整理（F5）或重新登入時單字立即被打回原狀之嚴重問題。',
+      '⚡ 導入即時狀態參照架構（wordsRef 同步直寫引擎）：全面重構單字庫批次分類、單字修改、分類更名/刪除、標準化排版、去重合併等全部動作資料流，徹底消除 React 異步狀態延遲，確保所有操作均在執行當下準確取得全部受影響文檔並即時直寫 Firestore。',
+      '🛡️ 雙重保險雲端直寫機制（ID + Term 雙向匹配 & Set Merge）：升級 batchUpdateCloudWordsCategory，支援 ID 與單字條目雙向索引匹配，並將所有雲端更新操作由容易中斷的 batch.update 全面改為容錯性極高的 batch.set(..., { merge: true })，防止因文檔不存在引發批次失敗。',
+      '🎨 分類大小寫規範對齊（Canonical Casing）與新自訂分類自動持久化：口語指令無論輸入大寫、小寫或混合大小寫，系統自動比對並規範化至現存分類（如 chemistry 自動對齊既有之 Chemistry），若為全新分類則自動將其收錄至 customCategories 並同步儲存至雲端，重新整理與跨裝置皆完美維持！'
+    ]
+  },
+  {
     version: '1.7.4',
     date: '2026-10-11',
     type: 'fix',

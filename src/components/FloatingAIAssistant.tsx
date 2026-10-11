@@ -896,6 +896,10 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           termList = words
             .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
             .map((w) => w.term);
+        } else if (/(?:未分類)/.test(searchSource)) {
+          termList = words
+            .filter((w) => !w.category || w.category.trim() === '' || w.category.trim() === '未分類')
+            .map((w) => w.term);
         } else {
           termList = words.map((w) => w.term);
         }

@@ -158,7 +158,16 @@ export class StorageService {
   }
 
   public getCurrentUser(): User | null {
-    return this.currentUser;
+    return this.currentUser || (firebaseAuth ? firebaseAuth.currentUser : null);
+  }
+
+  public getResolvedUid(fallbackUid?: string): string | null {
+    if (this.currentUser?.uid) return this.currentUser.uid;
+    if (firebaseAuth?.currentUser?.uid) {
+      this.currentUser = firebaseAuth.currentUser;
+      return firebaseAuth.currentUser.uid;
+    }
+    return fallbackUid || null;
   }
 
   public async signInWithGoogle(): Promise<User> {
@@ -473,9 +482,11 @@ export class StorageService {
     stats?: DailyStats;
     settings?: AppSettings;
     articles?: Article[];
+    homeConfig?: any;
+    readerSettings?: ReaderSettings;
   } | null> {
-    if (!this.currentUser || !firestoreDb) return null;
-    const uid = this.currentUser.uid;
+    const uid = this.getResolvedUid();
+    if (!uid || !firestoreDb) return null;
 
     try {
       // 1. Settings
@@ -496,7 +507,10 @@ export class StorageService {
       const cloudWords: Word[] = [];
       const wordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
       if (!wordsSnap.empty) {
-        wordsSnap.forEach((docSnap) => cloudWords.push(docSnap.data() as Word));
+        wordsSnap.forEach((docSnap) => {
+          const data = docSnap.data() as Word;
+          cloudWords.push({ ...data, id: data.id || docSnap.id });
+        });
         cloudWords.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       }
 
@@ -559,17 +573,17 @@ export class StorageService {
     }
   }
 
-  // Full reconciliation: upserts active items AND removes deleted items from Firestore
   public async syncToCloud(
     words: Word[],
     stats: DailyStats,
     settings: AppSettings,
     articles?: Article[],
     homeConfig?: any,
-    readerSettings?: ReaderSettings
+    readerSettings?: ReaderSettings,
+    fallbackUid?: string
   ): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
 
     try {
       // 1. Settings & Stats & Meta
@@ -618,14 +632,14 @@ export class StorageService {
         const chunk = words.slice(i, i + 400);
         chunk.forEach((w) => {
           const cleanWord = JSON.parse(JSON.stringify(w));
-          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord);
+          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord, { merge: true });
         });
         await batch.commit();
       }
 
       // 3. Articles reconciliation (if provided)
       if (articles !== undefined) {
-        await this.saveCloudArticles(articles);
+        await this.saveCloudArticles(articles, uid);
       }
     } catch (e) {
       console.error('Failed to sync to cloud:', e);
@@ -635,9 +649,9 @@ export class StorageService {
   // ==========================================
   // Direct Cloud Database Mutations for Articles
   // ==========================================
-  public async clearCloudArticles(): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async clearCloudArticles(fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
 
     try {
       const snap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));
@@ -662,9 +676,9 @@ export class StorageService {
     }
   }
 
-  public async deleteCloudArticle(articleId: string): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async deleteCloudArticle(articleId: string, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
 
     try {
       await deleteDoc(doc(firestoreDb, 'users', uid, 'articles', articleId));
@@ -683,9 +697,9 @@ export class StorageService {
     }
   }
 
-  public async saveCloudArticles(articles: Article[]): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async saveCloudArticles(articles: Article[], fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
 
     try {
       const existingArticlesSnap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));
@@ -709,9 +723,8 @@ export class StorageService {
         const batch = writeBatch(firestoreDb);
         const chunk = articles.slice(i, i + 400);
         chunk.forEach((a) => {
-          // Remove undefined fields to prevent Firestore serialization errors
           const cleanArt = JSON.parse(JSON.stringify(a));
-          batch.set(doc(firestoreDb, 'users', uid, 'articles', a.id), cleanArt);
+          batch.set(doc(firestoreDb, 'users', uid, 'articles', a.id), cleanArt, { merge: true });
         });
         await batch.commit();
       }
@@ -731,9 +744,9 @@ export class StorageService {
   }
 
   // Direct Cloud Database Mutations (Immediate Firestore Execution)
-  public async clearCloudWords(): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async clearCloudWords(fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
 
     try {
       const snap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
@@ -754,9 +767,9 @@ export class StorageService {
     }
   }
 
-  public async deleteCloudWordsByTerm(term: string): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async deleteCloudWordsByTerm(term: string, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     const clean = term.trim().toLowerCase();
 
     try {
@@ -779,9 +792,9 @@ export class StorageService {
     }
   }
 
-  public async deleteCloudWordById(wordId: string): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async deleteCloudWordById(wordId: string, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     try {
       await deleteDoc(doc(firestoreDb, 'users', uid, 'words', wordId));
     } catch (e) {
@@ -789,9 +802,9 @@ export class StorageService {
     }
   }
 
-  public async updateCloudWord(wordId: string, updates: Partial<Word>): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async updateCloudWord(wordId: string, updates: Partial<Word>, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     try {
       const cleanUpdates = JSON.parse(JSON.stringify(updates));
       await setDoc(doc(firestoreDb, 'users', uid, 'words', wordId), cleanUpdates, { merge: true });
@@ -800,9 +813,9 @@ export class StorageService {
     }
   }
 
-  public async batchUpdateCloudWords(batch: { id: string; data: Partial<Word> }[]): Promise<void> {
-    if (!this.currentUser || !firestoreDb || !batch.length) return;
-    const uid = this.currentUser.uid;
+  public async batchUpdateCloudWords(batch: { id: string; data: Partial<Word> }[], fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb || !batch.length) return;
     try {
       for (let i = 0; i < batch.length; i += 400) {
         const b = writeBatch(firestoreDb);
@@ -818,9 +831,9 @@ export class StorageService {
     }
   }
 
-  public async saveCloudWordsOnly(words: Word[]): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async saveCloudWordsOnly(words: Word[], fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
 
     try {
       const existingWordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
@@ -845,7 +858,7 @@ export class StorageService {
         const chunk = words.slice(i, i + 400);
         chunk.forEach((w) => {
           const cleanWord = JSON.parse(JSON.stringify(w));
-          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord);
+          batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord, { merge: true });
         });
         await batch.commit();
       }
@@ -863,9 +876,9 @@ export class StorageService {
   // ==========================================
   // Direct Cloud Database Mutations for Categories
   // ==========================================
-  public async deleteCloudCategory(categoryName: string, affectedWordIds?: string[]): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async deleteCloudCategory(categoryName: string, affectedWordIds?: string[], fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     const cleanCat = categoryName.trim().toLowerCase();
 
     try {
@@ -888,9 +901,11 @@ export class StorageService {
           const batch = writeBatch(firestoreDb);
           const chunk = targetIds.slice(i, i + 400);
           chunk.forEach((id) => {
-            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
-              category: deleteField()
-            });
+            batch.set(
+              doc(firestoreDb, 'users', uid, 'words', id),
+              { category: deleteField() },
+              { merge: true }
+            );
           });
           await batch.commit();
         }
@@ -918,9 +933,9 @@ export class StorageService {
     }
   }
 
-  public async renameCloudCategory(oldName: string, newName: string, affectedWordIds?: string[]): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async renameCloudCategory(oldName: string, newName: string, affectedWordIds?: string[], fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     const cleanOld = oldName.trim().toLowerCase();
     const cleanNew = newName.trim();
 
@@ -942,9 +957,11 @@ export class StorageService {
           const batch = writeBatch(firestoreDb);
           const chunk = targetIds.slice(i, i + 400);
           chunk.forEach((id) => {
-            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
-              category: cleanNew
-            });
+            batch.set(
+              doc(firestoreDb, 'users', uid, 'words', id),
+              { category: cleanNew },
+              { merge: true }
+            );
           });
           await batch.commit();
         }
@@ -972,25 +989,44 @@ export class StorageService {
     }
   }
 
-  public async batchUpdateCloudWordsCategory(wordIds: string[], newCategory?: string): Promise<void> {
-    if (!this.currentUser || !firestoreDb || !wordIds.length) return;
-    const uid = this.currentUser.uid;
+  public async batchUpdateCloudWordsCategory(
+    wordIds: string[],
+    newCategory?: string,
+    terms?: string[],
+    fallbackUid?: string
+  ): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     const cleanCat = newCategory?.trim();
     const isUncategorized = !cleanCat || cleanCat === '未分類';
 
     try {
-      for (let i = 0; i < wordIds.length; i += 400) {
+      const targetIdSet = new Set<string>((wordIds || []).filter(Boolean));
+
+      // Also search Firestore by terms to ensure 100% of affected word documents are updated
+      if (terms && terms.length > 0) {
+        const termsLower = new Set(terms.map((t) => t.trim().toLowerCase()));
+        const snap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
+        snap.forEach((d) => {
+          const data = d.data() as Word;
+          if (data?.term && termsLower.has(data.term.trim().toLowerCase())) {
+            targetIdSet.add(d.id);
+          }
+        });
+      }
+
+      const allIds = Array.from(targetIdSet);
+      if (allIds.length === 0) return;
+
+      for (let i = 0; i < allIds.length; i += 400) {
         const batch = writeBatch(firestoreDb);
-        const chunk = wordIds.slice(i, i + 400);
+        const chunk = allIds.slice(i, i + 400);
         chunk.forEach((id) => {
+          const docRef = doc(firestoreDb, 'users', uid, 'words', id);
           if (isUncategorized) {
-            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
-              category: deleteField()
-            });
+            batch.set(docRef, { category: deleteField() }, { merge: true });
           } else {
-            batch.update(doc(firestoreDb, 'users', uid, 'words', id), {
-              category: cleanCat
-            });
+            batch.set(docRef, { category: cleanCat }, { merge: true });
           }
         });
         await batch.commit();
@@ -1007,9 +1043,9 @@ export class StorageService {
     }
   }
 
-  public async saveCloudSettings(settings: AppSettings): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async saveCloudSettings(settings: AppSettings, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     try {
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), settings, { merge: true });
     } catch (e) {
@@ -1017,9 +1053,9 @@ export class StorageService {
     }
   }
 
-  public async saveCloudStats(stats: DailyStats): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async saveCloudStats(stats: DailyStats, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     try {
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats, { merge: true });
     } catch (e) {
@@ -1027,9 +1063,9 @@ export class StorageService {
     }
   }
 
-  public async saveCloudHomeConfig(config: any): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async saveCloudHomeConfig(config: any, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     try {
       const clean = JSON.parse(JSON.stringify(config));
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'homeConfig'), clean, { merge: true });
@@ -1038,9 +1074,9 @@ export class StorageService {
     }
   }
 
-  public async saveCloudReaderSettings(settings: ReaderSettings): Promise<void> {
-    if (!this.currentUser || !firestoreDb) return;
-    const uid = this.currentUser.uid;
+  public async saveCloudReaderSettings(settings: ReaderSettings, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb) return;
     try {
       const clean = JSON.parse(JSON.stringify(settings));
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'readerSettings'), clean, { merge: true });

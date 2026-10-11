@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
 import { Word, WordGroup, DailyStats, AppSettings, ViewTab, POS, Article } from './types';
 import { storage, DEFAULT_SETTINGS, DEFAULT_CATEGORIES } from './services/storage';
 import { applySRSDecay } from './services/srs';
@@ -28,6 +28,10 @@ import type { ActiveStudyQuestion } from './components/StudyHubView';
 export default function App() {
   // Core Data State
   const [words, setWords] = useState<Word[]>([]);
+  const wordsRef = useRef<Word[]>([]);
+  useEffect(() => {
+    wordsRef.current = words;
+  }, [words]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStats>({});
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -191,6 +195,7 @@ export default function App() {
         setArticles(localArticles);
 
         const { updated } = applySRSDecay(localWords);
+        wordsRef.current = updated;
         setWords(updated);
 
         // 2. Reconcile with cloud database (Firestore is authoritative)
@@ -199,10 +204,11 @@ export default function App() {
           if (cloudData) {
             // Apply SRS decay to authoritative cloud words so overdue cards decay accurately
             const { updated: cloudWordsDecayed, count: decayedCount } = applySRSDecay(cloudData.words);
+            wordsRef.current = cloudWordsDecayed;
             setWords(cloudWordsDecayed);
             storage.saveLocalWords(cloudWordsDecayed, currentUser.uid);
             if (decayedCount > 0) {
-              storage.saveCloudWordsOnly(cloudWordsDecayed).catch(console.error);
+              storage.saveCloudWordsOnly(cloudWordsDecayed, currentUser.uid).catch(console.error);
             }
 
             if (cloudData.articles !== undefined) {
@@ -315,67 +321,64 @@ export default function App() {
   const handleAddWords = useCallback(
     (newWordItems: Partial<Word>[]) => {
       const now = Date.now();
+      const currentWords = wordsRef.current;
+      const existingKeys = new Set(
+        currentWords.map(
+          (w) =>
+            `${w.term.trim().toLowerCase()}||${(w.pos || '').trim().toLowerCase()}||${w.def
+              .trim()
+              .toLowerCase()}`
+        )
+      );
 
-      setWords((prev) => {
-        // Build duplicate check set from existing words
-        const existingKeys = new Set(
-          prev.map(
-            (w) =>
-              `${w.term.trim().toLowerCase()}||${(w.pos || '').trim().toLowerCase()}||${w.def
-                .trim()
-                .toLowerCase()}`
-          )
-        );
+      const created: Word[] = [];
+      for (let idx = 0; idx < newWordItems.length; idx++) {
+        const item = newWordItems[idx];
+        const term = (item.term || '').trim();
+        const pos = normalizePos(item.pos);
+        const def = (item.def || '').trim();
+        if (!term || !def) continue;
 
-        const created: Word[] = [];
-        for (let idx = 0; idx < newWordItems.length; idx++) {
-          const item = newWordItems[idx];
-          const term = (item.term || '').trim();
-          const pos = normalizePos(item.pos);
-          const def = (item.def || '').trim();
-          if (!term || !def) continue;
-
-          const key = `${term.toLowerCase()}||${pos.toLowerCase()}||${def.toLowerCase()}`;
-          // If already in library, skip adding exact duplicate
-          if (existingKeys.has(key)) {
-            continue;
-          }
-          existingKeys.add(key);
-
-          created.push({
-            id: item.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`,
-            term,
-            pos,
-            def,
-            defEn: (item.defEn || '').trim() || undefined,
-            ex: (item.ex || '').trim(),
-            category: item.category ? item.category.trim() : undefined,
-            level: item.level !== undefined ? item.level : 0,
-            interval: item.interval || 1,
-            easeFactor: item.easeFactor || 2.5,
-            timestamp: now,
-            lastReview: now,
-            nextReview: now + 86400000
-          });
+        const key = `${term.toLowerCase()}||${pos.toLowerCase()}||${def.toLowerCase()}`;
+        if (existingKeys.has(key)) {
+          continue;
         }
+        existingKeys.add(key);
 
-        if (created.length === 0) {
-          showToast('所選單字已全部存在於單字庫中，未重複新增。');
-          return prev;
-        }
+        created.push({
+          id: item.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`,
+          term,
+          pos,
+          def,
+          defEn: (item.defEn || '').trim() || undefined,
+          ex: (item.ex || '').trim(),
+          category: item.category ? item.category.trim() : undefined,
+          level: item.level !== undefined ? item.level : 0,
+          interval: item.interval || 1,
+          easeFactor: item.easeFactor || 2.5,
+          timestamp: now,
+          lastReview: now,
+          nextReview: now + 86400000
+        });
+      }
 
-        const updated = [...created, ...prev];
-        storage.saveLocalWords(updated, user?.uid);
-        recordActivity('added', created.length);
-        showToast(`成功新增 ${created.length} 個單字！`);
+      if (created.length === 0) {
+        showToast('所選單字已全部存在於單字庫中，未重複新增。');
+        return;
+      }
 
-        if (user) {
-          storage.syncToCloud(updated, dailyStats, settings);
-        }
-        return updated;
-      });
+      const updated = [...created, ...currentWords];
+      wordsRef.current = updated;
+      setWords(updated);
+      storage.saveLocalWords(updated, user?.uid);
+      recordActivity('added', created.length);
+      showToast(`成功新增 ${created.length} 個單字！`);
+
+      if (user) {
+        storage.saveCloudWordsOnly(updated, user.uid).catch(console.error);
+      }
     },
-    [dailyStats, settings, user, recordActivity, showToast]
+    [user, recordActivity, showToast]
   );
 
   // Listen for words synced from VocabMin Companion Chrome Extension
@@ -398,13 +401,13 @@ export default function App() {
   // Single word review update
   const handleUpdateWordReview = useCallback(
     (wordId: string, updates: Partial<Word>) => {
-      setWords((prev) => {
-        const updated = prev.map((w) => (w.id === wordId ? { ...w, ...updates } : w));
-        storage.saveLocalWords(updated, user?.uid);
-        return updated;
-      });
+      const currentWords = wordsRef.current;
+      const updated = currentWords.map((w) => (w.id === wordId ? { ...w, ...updates } : w));
+      wordsRef.current = updated;
+      setWords(updated);
+      storage.saveLocalWords(updated, user?.uid);
       if (user) {
-        storage.updateCloudWord(wordId, updates).catch(console.error);
+        storage.updateCloudWord(wordId, updates, user.uid).catch(console.error);
       }
     },
     [user]
@@ -413,19 +416,19 @@ export default function App() {
   // Batch word review updates
   const handleBatchUpdateReview = useCallback(
     (batch: { id: string; data: Partial<Word> }[]) => {
-      setWords((prev) => {
-        const map = new Map(batch.map((b) => [b.id, b.data]));
-        const updated = prev.map((w) => {
-          if (map.has(w.id)) {
-            return { ...w, ...map.get(w.id)! };
-          }
-          return w;
-        });
-        storage.saveLocalWords(updated, user?.uid);
-        return updated;
+      const currentWords = wordsRef.current;
+      const map = new Map(batch.map((b) => [b.id, b.data]));
+      const updated = currentWords.map((w) => {
+        if (map.has(w.id)) {
+          return { ...w, ...map.get(w.id)! };
+        }
+        return w;
       });
+      wordsRef.current = updated;
+      setWords(updated);
+      storage.saveLocalWords(updated, user?.uid);
       if (user) {
-        storage.batchUpdateCloudWords(batch).catch(console.error);
+        storage.batchUpdateCloudWords(batch, user.uid).catch(console.error);
       }
       recordActivity('reviewed', batch.length);
     },
@@ -435,58 +438,56 @@ export default function App() {
   // Edit word group (update all definitions with same term, strictly preserving existing SRS stats)
   const handleUpdateWordGroup = useCallback(
     (oldTerm: string, updatedList: Partial<Word>[]) => {
-      setWords((prev) => {
-        const cleanOldTerm = oldTerm.trim().toLowerCase();
-        const oldEntries = prev.filter(
-          (w) => w.term.trim().toLowerCase() === cleanOldTerm
-        );
-        // Remove old entries
-        const clean = prev.filter(
-          (w) => w.term.trim().toLowerCase() !== cleanOldTerm
-        );
-        const now = Date.now();
-        const newEntries: Word[] = updatedList.map((item, idx) => {
-          // Match by id first, then by pos+def
-          const matchedOld =
-            (item.id && oldEntries.find((o) => o.id === item.id)) ||
-            oldEntries.find(
-              (o) =>
-                o.pos === item.pos &&
-                o.def.trim().toLowerCase() === (item.def || '').trim().toLowerCase()
-            );
+      const cleanOldTerm = oldTerm.trim().toLowerCase();
+      const currentWords = wordsRef.current;
+      const oldEntries = currentWords.filter(
+        (w) => w.term.trim().toLowerCase() === cleanOldTerm
+      );
+      const clean = currentWords.filter(
+        (w) => w.term.trim().toLowerCase() !== cleanOldTerm
+      );
+      const now = Date.now();
+      const newEntries: Word[] = updatedList.map((item, idx) => {
+        const matchedOld =
+          (item.id && oldEntries.find((o) => o.id === item.id)) ||
+          oldEntries.find(
+            (o) =>
+              o.pos === item.pos &&
+              o.def.trim().toLowerCase() === (item.def || '').trim().toLowerCase()
+          );
 
-          return {
-            id: item.id || matchedOld?.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`,
-            term: item.term || oldTerm,
-            pos: item.pos || matchedOld?.pos || 'n.',
-            def: item.def || matchedOld?.def || '',
-            defEn: item.defEn !== undefined ? item.defEn : matchedOld?.defEn,
-            ex: item.ex !== undefined ? item.ex : (matchedOld?.ex || ''),
-            category:
-              item.category !== undefined
-                ? item.category
-                  ? item.category.trim()
-                  : undefined
-                : matchedOld?.category,
-            level: item.level !== undefined ? item.level : (matchedOld?.level ?? 0),
-            interval: item.interval || matchedOld?.interval || 1,
-            easeFactor: item.easeFactor || matchedOld?.easeFactor || 2.5,
-            timestamp: matchedOld?.timestamp || item.timestamp || now,
-            lastReview: matchedOld?.lastReview || item.lastReview || now,
-            nextReview: matchedOld?.nextReview || item.nextReview || (now + 86400000)
-          };
-        });
-
-        const finalWords = [...newEntries, ...clean];
-        storage.saveLocalWords(finalWords, user?.uid);
-        if (user) {
-          storage.syncToCloud(finalWords, dailyStats, settings);
-        }
-        return finalWords;
+        return {
+          id: item.id || matchedOld?.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`,
+          term: item.term || oldTerm,
+          pos: item.pos || matchedOld?.pos || 'n.',
+          def: item.def || matchedOld?.def || '',
+          defEn: item.defEn !== undefined ? item.defEn : matchedOld?.defEn,
+          ex: item.ex !== undefined ? item.ex : (matchedOld?.ex || ''),
+          category:
+            item.category !== undefined
+              ? item.category
+                ? item.category.trim()
+                : undefined
+              : matchedOld?.category,
+          level: item.level !== undefined ? item.level : (matchedOld?.level ?? 0),
+          interval: item.interval || matchedOld?.interval || 1,
+          easeFactor: item.easeFactor || matchedOld?.easeFactor || 2.5,
+          timestamp: matchedOld?.timestamp || item.timestamp || now,
+          lastReview: matchedOld?.lastReview || item.lastReview || now,
+          nextReview: matchedOld?.nextReview || item.nextReview || (now + 86400000)
+        };
       });
+
+      const finalWords = [...newEntries, ...clean];
+      wordsRef.current = finalWords;
+      setWords(finalWords);
+      storage.saveLocalWords(finalWords, user?.uid);
+      if (user) {
+        storage.saveCloudWordsOnly(finalWords, user.uid).catch(console.error);
+      }
       showToast('單字修改成功！');
     },
-    [dailyStats, settings, user, showToast]
+    [user, showToast]
   );
 
   // Category Management Handlers
@@ -516,26 +517,27 @@ export default function App() {
       );
       const updatedSettings = { ...settings, customCategories: updatedCats };
       setSettings(updatedSettings);
-      storage.saveLocalSettings(updatedSettings);
+      storage.saveLocalSettings(updatedSettings, user?.uid);
 
+      const currentWords = wordsRef.current;
       const affectedIds: string[] = [];
-      setWords((prev) => {
-        const nextWords = prev.map((w) => {
-          if (w.category && w.category.trim().toLowerCase() === cleanOld.toLowerCase()) {
-            affectedIds.push(w.id);
-            return { ...w, category: cleanNew };
-          }
-          return w;
-        });
-
-        storage.saveLocalWords(nextWords);
-        return nextWords;
+      const nextWords = currentWords.map((w) => {
+        if (w.category && w.category.trim().toLowerCase() === cleanOld.toLowerCase()) {
+          affectedIds.push(w.id);
+          return { ...w, category: cleanNew };
+        }
+        return w;
       });
+
+      wordsRef.current = nextWords;
+      setWords(nextWords);
+      storage.saveLocalWords(nextWords, user?.uid);
 
       // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
       if (user) {
         try {
-          await storage.renameCloudCategory(cleanOld, cleanNew, affectedIds);
+          await storage.renameCloudCategory(cleanOld, cleanNew, affectedIds, user.uid);
+          await storage.saveCloudSettings(updatedSettings, user.uid);
         } catch (err) {
           console.error('Failed to rename cloud category directly:', err);
         }
@@ -555,28 +557,29 @@ export default function App() {
       const updatedCats = currentCats.filter((c) => c.trim().toLowerCase() !== clean.toLowerCase());
       const updatedSettings = { ...settings, customCategories: updatedCats };
       setSettings(updatedSettings);
-      storage.saveLocalSettings(updatedSettings);
+      storage.saveLocalSettings(updatedSettings, user?.uid);
 
+      const currentWords = wordsRef.current;
       const affectedIds: string[] = [];
-      setWords((prev) => {
-        const nextWords = prev.map((w) => {
-          if (w.category && w.category.trim().toLowerCase() === clean.toLowerCase()) {
-            affectedIds.push(w.id);
-            const copy = { ...w };
-            delete copy.category;
-            return copy;
-          }
-          return w;
-        });
-
-        storage.saveLocalWords(nextWords);
-        return nextWords;
+      const nextWords = currentWords.map((w) => {
+        if (w.category && w.category.trim().toLowerCase() === clean.toLowerCase()) {
+          affectedIds.push(w.id);
+          const copy = { ...w };
+          delete copy.category;
+          return copy;
+        }
+        return w;
       });
+
+      wordsRef.current = nextWords;
+      setWords(nextWords);
+      storage.saveLocalWords(nextWords, user?.uid);
 
       // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
       if (user) {
         try {
-          await storage.deleteCloudCategory(clean, affectedIds);
+          await storage.deleteCloudCategory(clean, affectedIds, user.uid);
+          await storage.saveCloudSettings(updatedSettings, user.uid);
         } catch (err) {
           console.error('Failed to delete cloud category directly:', err);
         }
@@ -591,32 +594,46 @@ export default function App() {
     async (term: string, newCategory?: string) => {
       const cleanTerm = term.trim().toLowerCase();
       const cleanCat = newCategory?.trim();
-      const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : cleanCat;
+      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const matchedCat = cleanCat ? currentCats.find((c) => c.trim().toLowerCase() === cleanCat.toLowerCase()) : undefined;
+      const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : (matchedCat || cleanCat);
 
+      const currentWords = wordsRef.current;
       const affectedIds: string[] = [];
-      setWords((prev) => {
-        const nextWords = prev.map((w) => {
-          if (w.term.trim().toLowerCase() === cleanTerm) {
-            affectedIds.push(w.id);
-            const copy = { ...w };
-            if (finalCat) {
-              copy.category = finalCat;
-            } else {
-              delete copy.category;
-            }
-            return copy;
+      const nextWords = currentWords.map((w) => {
+        if (w.term.trim().toLowerCase() === cleanTerm) {
+          affectedIds.push(w.id);
+          const copy = { ...w };
+          if (finalCat) {
+            copy.category = finalCat;
+          } else {
+            delete copy.category;
           }
-          return w;
-        });
-
-        storage.saveLocalWords(nextWords);
-        return nextWords;
+          return copy;
+        }
+        return w;
       });
 
+      wordsRef.current = nextWords;
+      setWords(nextWords);
+      storage.saveLocalWords(nextWords, user?.uid);
+
+      if (finalCat) {
+        if (!currentCats.some((c) => c.trim().toLowerCase() === finalCat.toLowerCase())) {
+          const updatedCats = [...currentCats, finalCat];
+          const updatedSettings = { ...settings, customCategories: updatedCats };
+          setSettings(updatedSettings);
+          storage.saveLocalSettings(updatedSettings, user?.uid);
+          if (user) {
+            storage.saveCloudSettings(updatedSettings, user.uid).catch(console.error);
+          }
+        }
+      }
+
       // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
-      if (user && affectedIds.length > 0) {
+      if (user) {
         try {
-          await storage.batchUpdateCloudWordsCategory(affectedIds, finalCat);
+          await storage.batchUpdateCloudWordsCategory(affectedIds, finalCat, [term], user.uid);
         } catch (err) {
           console.error('Failed to update cloud word category directly:', err);
         }
@@ -624,7 +641,7 @@ export default function App() {
 
       showToast(finalCat ? `已將「${term}」歸類至「${finalCat}」` : `已取消「${term}」的分類`);
     },
-    [user, showToast]
+    [settings, user, showToast]
   );
 
   const handleBatchUpdateTermsCategory = useCallback(
@@ -632,32 +649,49 @@ export default function App() {
       if (!terms.length) return;
       const termsSet = new Set(terms.map((t) => t.trim().toLowerCase()));
       const cleanCat = newCategory?.trim();
-      const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : cleanCat;
+      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const matchedCat = cleanCat ? currentCats.find((c) => c.trim().toLowerCase() === cleanCat.toLowerCase()) : undefined;
+      const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : (matchedCat || cleanCat);
 
+      const currentWords = wordsRef.current;
       const affectedIds: string[] = [];
-      setWords((prev) => {
-        const nextWords = prev.map((w) => {
-          if (termsSet.has(w.term.trim().toLowerCase())) {
-            affectedIds.push(w.id);
-            const copy = { ...w };
-            if (finalCat) {
-              copy.category = finalCat;
-            } else {
-              delete copy.category;
-            }
-            return copy;
-          }
-          return w;
-        });
+      const affectedTerms: string[] = [];
 
-        storage.saveLocalWords(nextWords);
-        return nextWords;
+      const nextWords = currentWords.map((w) => {
+        if (termsSet.has(w.term.trim().toLowerCase())) {
+          affectedIds.push(w.id);
+          affectedTerms.push(w.term);
+          const copy = { ...w };
+          if (finalCat) {
+            copy.category = finalCat;
+          } else {
+            delete copy.category;
+          }
+          return copy;
+        }
+        return w;
       });
 
+      wordsRef.current = nextWords;
+      setWords(nextWords);
+      storage.saveLocalWords(nextWords, user?.uid);
+
+      if (finalCat) {
+        if (!currentCats.some((c) => c.trim().toLowerCase() === finalCat.toLowerCase())) {
+          const updatedCats = [...currentCats, finalCat];
+          const updatedSettings = { ...settings, customCategories: updatedCats };
+          setSettings(updatedSettings);
+          storage.saveLocalSettings(updatedSettings, user?.uid);
+          if (user) {
+            storage.saveCloudSettings(updatedSettings, user.uid).catch(console.error);
+          }
+        }
+      }
+
       // DIRECT CLOUD MUTATION (Immediate Firestore Execution):
-      if (user && affectedIds.length > 0) {
+      if (user) {
         try {
-          await storage.batchUpdateCloudWordsCategory(affectedIds, finalCat);
+          await storage.batchUpdateCloudWordsCategory(affectedIds, finalCat, affectedTerms, user.uid);
         } catch (err) {
           console.error('Failed to batch update cloud words category directly:', err);
         }
@@ -669,7 +703,7 @@ export default function App() {
           : `已將 ${terms.length} 個單字設為未分類`
       );
     },
-    [user, showToast]
+    [settings, user, showToast]
   );
 
   // Deduplicate words: merge repeated items with same term and pos/def, keeping highest mastery and SRS stats
@@ -678,75 +712,75 @@ export default function App() {
     let cleanCount = 0;
     const mergedTermsSet = new Set<string>();
 
-    setWords((prev) => {
-      originalCount = prev.length;
-      const termMap = new Map<string, Word[]>();
+    const currentWords = wordsRef.current;
+    originalCount = currentWords.length;
+    const termMap = new Map<string, Word[]>();
 
-      prev.forEach((w) => {
-        const key = w.term.trim().toLowerCase();
-        if (!termMap.has(key)) termMap.set(key, []);
-        termMap.get(key)!.push(w);
-      });
-
-      const deduplicated: Word[] = [];
-
-      termMap.forEach((entries) => {
-        // Group entries by normalized (pos + def)
-        const defMap = new Map<string, Word[]>();
-        entries.forEach((e) => {
-          const normDef = `${(e.pos || 'n.').trim().toLowerCase()}||${e.def.trim().toLowerCase()}`;
-          if (!defMap.has(normDef)) defMap.set(normDef, []);
-          defMap.get(normDef)!.push(e);
-        });
-
-        if (entries.length > defMap.size) {
-          mergedTermsSet.add(entries[0].term);
-        }
-
-        defMap.forEach((duplicates) => {
-          // If duplicates exist, pick the best stats
-          const best = duplicates.reduce((prevBest, cur) => {
-            return (cur.level || 0) > (prevBest.level || 0) ? cur : prevBest;
-          }, duplicates[0]);
-
-          const maxLevel = Math.max(...duplicates.map((d) => d.level || 0));
-          const maxEase = Math.max(...duplicates.map((d) => d.easeFactor || 2.5));
-          const maxInterval = Math.max(...duplicates.map((d) => d.interval || 1));
-          const maxLastReview = Math.max(...duplicates.map((d) => d.lastReview || 0));
-          const minNextReview = Math.min(
-            ...duplicates.map((d) => d.nextReview || Date.now() + 86400000)
-          );
-          // Longest example sentence
-          const bestEx =
-            duplicates
-              .map((d) => d.ex || '')
-              .filter(Boolean)
-              .sort((a, b) => b.length - a.length)[0] ||
-            best.ex ||
-            '';
-
-          const bestDefEn = duplicates.find((d) => d.defEn && d.defEn.trim())?.defEn || best.defEn;
-
-          deduplicated.push({
-            ...best,
-            defEn: bestDefEn,
-            level: maxLevel,
-            easeFactor: maxEase,
-            interval: maxInterval,
-            lastReview: maxLastReview,
-            nextReview: minNextReview,
-            ex: bestEx
-          });
-        });
-      });
-
-      cleanCount = deduplicated.length;
-      storage.saveLocalWords(deduplicated, user?.uid);
-      if (user) {
-        storage.syncToCloud(deduplicated, dailyStats, settings);
-      }
-      return deduplicated;
+    currentWords.forEach((w) => {
+      const key = w.term.trim().toLowerCase();
+      if (!termMap.has(key)) termMap.set(key, []);
+      termMap.get(key)!.push(w);
     });
+
+    const deduplicated: Word[] = [];
+
+    termMap.forEach((entries) => {
+      // Group entries by normalized (pos + def)
+      const defMap = new Map<string, Word[]>();
+      entries.forEach((e) => {
+        const normDef = `${(e.pos || 'n.').trim().toLowerCase()}||${e.def.trim().toLowerCase()}`;
+        if (!defMap.has(normDef)) defMap.set(normDef, []);
+        defMap.get(normDef)!.push(e);
+      });
+
+      if (entries.length > defMap.size) {
+        mergedTermsSet.add(entries[0].term);
+      }
+
+      defMap.forEach((duplicates) => {
+        // If duplicates exist, pick the best stats
+        const best = duplicates.reduce((prevBest, cur) => {
+          return (cur.level || 0) > (prevBest.level || 0) ? cur : prevBest;
+        }, duplicates[0]);
+
+        const maxLevel = Math.max(...duplicates.map((d) => d.level || 0));
+        const maxEase = Math.max(...duplicates.map((d) => d.easeFactor || 2.5));
+        const maxInterval = Math.max(...duplicates.map((d) => d.interval || 1));
+        const maxLastReview = Math.max(...duplicates.map((d) => d.lastReview || 0));
+        const minNextReview = Math.min(
+          ...duplicates.map((d) => d.nextReview || Date.now() + 86400000)
+        );
+        // Longest example sentence
+        const bestEx =
+          duplicates
+            .map((d) => d.ex || '')
+            .filter(Boolean)
+            .sort((a, b) => b.length - a.length)[0] ||
+          best.ex ||
+          '';
+
+        const bestDefEn = duplicates.find((d) => d.defEn && d.defEn.trim())?.defEn || best.defEn;
+
+        deduplicated.push({
+          ...best,
+          defEn: bestDefEn,
+          level: maxLevel,
+          easeFactor: maxEase,
+          interval: maxInterval,
+          lastReview: maxLastReview,
+          nextReview: minNextReview,
+          ex: bestEx
+        });
+      });
+    });
+
+    cleanCount = deduplicated.length;
+    wordsRef.current = deduplicated;
+    setWords(deduplicated);
+    storage.saveLocalWords(deduplicated, user?.uid);
+    if (user) {
+      storage.saveCloudWordsOnly(deduplicated, user.uid).catch(console.error);
+    }
 
     const removedCount = originalCount - cleanCount;
     return {
@@ -755,42 +789,39 @@ export default function App() {
       removedCount,
       mergedTerms: Array.from(mergedTermsSet)
     };
-  }, [dailyStats, settings, user]);
+  }, [user]);
 
   // Clear all words
   const handleClearAllWords = useCallback(() => {
-    let count = 0;
-    setWords((prev) => {
-      count = prev.length;
-      storage.saveLocalWords([], user?.uid);
-      if (user) {
-        storage.clearCloudWords().catch((err) => console.error('Cloud clear error:', err));
-      }
-      return [];
-    });
+    const count = wordsRef.current.length;
+    wordsRef.current = [];
+    setWords([]);
+    storage.saveLocalWords([], user?.uid);
+    if (user) {
+      storage.clearCloudWords(user.uid).catch((err) => console.error('Cloud clear error:', err));
+    }
     showToast(`已成功清空單字庫（共清除 ${count} 個單字）`);
     return count;
   }, [user, showToast]);
 
   // Reset all words mastery to 0
   const handleResetAllMastery = useCallback(() => {
-    let count = 0;
-    setWords((prev) => {
-      count = prev.length;
-      const updated = prev.map((w) => ({
-        ...w,
-        level: 0,
-        interval: 1,
-        easeFactor: 2.5,
-        lastReview: 0,
-        nextReview: Date.now()
-      }));
-      storage.saveLocalWords(updated, user?.uid);
-      if (user) {
-        storage.saveCloudWordsOnly(updated).catch((err) => console.error('Cloud reset error:', err));
-      }
-      return updated;
-    });
+    const currentWords = wordsRef.current;
+    const count = currentWords.length;
+    const updated = currentWords.map((w) => ({
+      ...w,
+      level: 0,
+      interval: 1,
+      easeFactor: 2.5,
+      lastReview: 0,
+      nextReview: Date.now()
+    }));
+    wordsRef.current = updated;
+    setWords(updated);
+    storage.saveLocalWords(updated, user?.uid);
+    if (user) {
+      storage.saveCloudWordsOnly(updated, user.uid).catch((err) => console.error('Cloud reset error:', err));
+    }
     showToast(`已成功將全庫 ${count} 個單字熟練度重置為完全不熟練 (Level 0)！`);
     return count;
   }, [user, showToast]);
@@ -806,18 +837,18 @@ export default function App() {
         confirmText: '確認刪除',
         onConfirm: () => {
           const clean = term.trim().toLowerCase();
-          setWords((prev) => {
-            const updated = prev.filter(
-              (w) => w.term.trim().toLowerCase() !== clean
+          const currentWords = wordsRef.current;
+          const updated = currentWords.filter(
+            (w) => w.term.trim().toLowerCase() !== clean
+          );
+          wordsRef.current = updated;
+          setWords(updated);
+          storage.saveLocalWords(updated, user?.uid);
+          if (user) {
+            storage.deleteCloudWordsByTerm(clean, user.uid).catch((err) =>
+              console.error('Cloud delete term error:', err)
             );
-            storage.saveLocalWords(updated);
-            if (user) {
-              storage.deleteCloudWordsByTerm(clean).catch((err) =>
-                console.error('Cloud delete term error:', err)
-              );
-            }
-            return updated;
-          });
+          }
           setConfirmConfig((c) => ({ ...c, isOpen: false }));
           showToast(`已刪除「${term}」`);
         }
@@ -836,16 +867,16 @@ export default function App() {
         type: 'danger',
         confirmText: '確認刪除',
         onConfirm: () => {
-          setWords((prev) => {
-            const updated = prev.filter((w) => w.id !== wordId);
-            storage.saveLocalWords(updated);
-            if (user) {
-              storage.deleteCloudWordById(wordId).catch((err) =>
-                console.error('Cloud delete word error:', err)
-              );
-            }
-            return updated;
-          });
+          const currentWords = wordsRef.current;
+          const updated = currentWords.filter((w) => w.id !== wordId);
+          wordsRef.current = updated;
+          setWords(updated);
+          storage.saveLocalWords(updated, user?.uid);
+          if (user) {
+            storage.deleteCloudWordById(wordId, user.uid).catch((err) =>
+              console.error('Cloud delete word error:', err)
+            );
+          }
           setConfirmConfig((c) => ({ ...c, isOpen: false }));
           showToast(`已刪除「${term}」的該項釋義`);
         }
@@ -857,29 +888,29 @@ export default function App() {
   // Batch standardize words
   const handleBatchStandardizeWords = useCallback(
     (updatedList: Partial<Word>[]) => {
-      setWords((prev) => {
-        const updateByTerm = new Map(
-          updatedList.map((u) => [(u.term || '').trim().toLowerCase(), u])
-        );
-        const merged = prev.map((w) => {
-          const u = updateByTerm.get((w.term || '').trim().toLowerCase());
-          if (u) {
-            return {
-              ...w,
-              pos: u.pos || w.pos,
-              def: u.def || w.def,
-              defEn: u.defEn !== undefined ? u.defEn : w.defEn,
-              ex: u.ex !== undefined ? u.ex : w.ex
-            };
-          }
-          return w;
-        });
-        storage.saveLocalWords(merged, user?.uid);
-        if (user) {
-          storage.saveCloudWordsOnly(merged).catch(console.error);
+      const updateByTerm = new Map(
+        updatedList.map((u) => [(u.term || '').trim().toLowerCase(), u])
+      );
+      const currentWords = wordsRef.current;
+      const merged = currentWords.map((w) => {
+        const u = updateByTerm.get((w.term || '').trim().toLowerCase());
+        if (u) {
+          return {
+            ...w,
+            pos: u.pos || w.pos,
+            def: u.def || w.def,
+            defEn: u.defEn !== undefined ? u.defEn : w.defEn,
+            ex: u.ex !== undefined ? u.ex : w.ex
+          };
         }
-        return merged;
+        return w;
       });
+      wordsRef.current = merged;
+      setWords(merged);
+      storage.saveLocalWords(merged, user?.uid);
+      if (user) {
+        storage.saveCloudWordsOnly(merged, user.uid).catch(console.error);
+      }
       showToast('成功完成單字庫標準化更新！');
     },
     [user, showToast]
@@ -887,12 +918,12 @@ export default function App() {
 
   // Import / Export
   const handleExportJSON = () => {
-    storage.exportJSON(words, dailyStats, settings);
+    storage.exportJSON(wordsRef.current, dailyStats, settings);
     showToast('備份 JSON 已匯出！');
   };
 
   const handleExportCSV = () => {
-    storage.exportCSV(words);
+    storage.exportCSV(wordsRef.current);
     showToast('單字 CSV 清單已匯出！');
   };
 
@@ -902,35 +933,32 @@ export default function App() {
       try {
         const data = JSON.parse(e.target?.result as string);
         let count = 0;
-        let mergedWordsList: Word[] = words;
+        let mergedWordsList: Word[] = wordsRef.current;
         let mergedStatsData: DailyStats = dailyStats;
 
         if (data.vocab_data && Array.isArray(data.vocab_data)) {
-          setWords((prev) => {
-            const currentIds = new Set(prev.map((w) => w.id));
-            const merged = [...prev];
-            data.vocab_data.forEach((w: Word) => {
-              if (!currentIds.has(w.id)) {
-                merged.unshift(w);
-                count++;
-              }
-            });
-            mergedWordsList = merged;
-            storage.saveLocalWords(merged, user?.uid);
-            return merged;
+          const currentIds = new Set(wordsRef.current.map((w) => w.id));
+          const merged = [...wordsRef.current];
+          data.vocab_data.forEach((w: Word) => {
+            if (!currentIds.has(w.id)) {
+              merged.unshift(w);
+              count++;
+            }
           });
+          mergedWordsList = merged;
+          wordsRef.current = merged;
+          setWords(merged);
+          storage.saveLocalWords(merged, user?.uid);
         }
         if (data.vocab_stats) {
-          setDailyStats((prev) => {
-            const merged = { ...prev, ...data.vocab_stats };
-            mergedStatsData = merged;
-            storage.saveLocalStats(merged, user?.uid);
-            return merged;
-          });
+          const mergedStats = { ...dailyStats, ...data.vocab_stats };
+          mergedStatsData = mergedStats;
+          setDailyStats(mergedStats);
+          storage.saveLocalStats(mergedStats, user?.uid);
         }
 
         if (user) {
-          storage.syncToCloud(mergedWordsList, mergedStatsData, settings, articles).catch(console.error);
+          storage.syncToCloud(mergedWordsList, mergedStatsData, settings, articles, homeConfig, undefined, user.uid).catch(console.error);
         }
 
         showToast(`成功匯入 ${count} 個單字，已自動同步至雲端資料庫！`);
@@ -949,13 +977,14 @@ export default function App() {
       type: 'danger',
       confirmText: '確定全部清空',
       onConfirm: () => {
+        wordsRef.current = [];
         setWords([]);
         setDailyStats({});
         storage.saveLocalWords([], user?.uid);
         storage.saveLocalStats({}, user?.uid);
         if (user) {
-          storage.clearCloudWords().catch(console.error);
-          storage.saveCloudStats({}).catch(console.error);
+          storage.clearCloudWords(user.uid).catch(console.error);
+          storage.saveCloudStats({}, user.uid).catch(console.error);
         }
         setConfirmConfig((c) => ({ ...c, isOpen: false }));
         setIsSettingsOpen(false);

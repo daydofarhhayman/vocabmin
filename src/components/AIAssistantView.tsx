@@ -1173,6 +1173,10 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           termList = existingWords
             .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
             .map((w) => w.term);
+        } else if (/(?:未分類)/.test(searchSource)) {
+          termList = existingWords
+            .filter((w) => !w.category || w.category.trim() === '' || w.category.trim() === '未分類')
+            .map((w) => w.term);
         } else {
           termList = existingWords.map((w) => w.term);
         }
