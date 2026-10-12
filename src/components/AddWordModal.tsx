@@ -128,6 +128,9 @@ const THEMATIC_PACKS = [
   }
 ];
 
+// In-memory session category cache (resets to '未分類' on page refresh)
+let sessionLastSelectedCategory = '未分類';
+
 export const AddWordModal: React.FC<AddWordModalProps> = ({
   isOpen,
   onClose,
@@ -143,7 +146,17 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
   // Single word state
   const [term, setTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('未分類');
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => {
+    if (
+      sessionLastSelectedCategory !== '未分類' &&
+      categories &&
+      categories.length > 0 &&
+      !categories.includes(sessionLastSelectedCategory)
+    ) {
+      return '未分類';
+    }
+    return sessionLastSelectedCategory || '未分類';
+  });
   const [isAddingNewCat, setIsAddingNewCat] = useState(false);
   const [newCatInput, setNewCatInput] = useState('');
   const [definitions, setDefinitions] = useState<DefinitionInput[]>([
@@ -1025,6 +1038,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                           setIsAddingNewCat(true);
                         } else {
                           setSelectedCategory(e.target.value);
+                          sessionLastSelectedCategory = e.target.value;
                         }
                       }}
                       className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
@@ -1057,6 +1071,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       if (clean && clean !== '未分類') {
                         if (onAddCategory) onAddCategory(clean);
                         setSelectedCategory(clean);
+                        sessionLastSelectedCategory = clean;
                       }
                       setIsAddingNewCat(false);
                       setNewCatInput('');
@@ -1368,7 +1383,10 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   </span>
                   <select
                     value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedCategory(e.target.value);
+                      sessionLastSelectedCategory = e.target.value;
+                    }}
                     className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
                   >
                     <option value="未分類">未分類 (預設)</option>
