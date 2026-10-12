@@ -25,7 +25,7 @@ import { CategoryManagerModal } from './CategoryManagerModal';
 interface WordListViewProps {
   words: Word[];
   settings: AppSettings;
-  onOpenAdd: (initialTerm?: string, initialCategory?: string) => void;
+  onOpenAdd: (initialTerm?: string) => void;
   onEditWord: (word: Word) => void;
   onDeleteGroup: (term: string) => void;
   onDeleteSingleWord?: (wordId: string, term: string, defSnippet?: string) => void;
@@ -415,12 +415,7 @@ export const WordListView: React.FC<WordListViewProps> = ({
 
             {/* Add Word Button */}
             <button
-              onClick={() =>
-                onOpenAdd(
-                  undefined,
-                  categoryFilter !== 'ALL' && categoryFilter !== 'UNCATEGORIZED' ? categoryFilter : undefined
-                )
-              }
+              onClick={() => onOpenAdd()}
               className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-500/10 transition active:scale-95 cursor-pointer"
             >
               <Plus className="w-4 h-4" />

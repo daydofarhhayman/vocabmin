@@ -33,7 +33,6 @@ interface AddWordModalProps {
   lang: 'zh' | 'en';
   existingWords?: Word[];
   initialTerm?: string;
-  initialCategory?: string;
   categories?: string[];
   onAddCategory?: (categoryName: string) => void;
 }
@@ -136,7 +135,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   lang,
   existingWords = [],
   initialTerm = '',
-  initialCategory = '',
   categories = [],
   onAddCategory
 }) => {
@@ -144,35 +142,10 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   const [activeTab, setActiveTab] = useState<'single' | 'batch' | 'packs'>('single');
 
   // Single word state
-  const termInputRef = useRef<HTMLInputElement>(null);
   const [term, setTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>(() => {
-    if (initialCategory && initialCategory.trim()) {
-      return initialCategory.trim();
-    }
-    const saved = storage.getLocalLastCategory();
-    if (saved && (saved === '未分類' || (categories && categories.includes(saved)))) {
-      return saved;
-    }
-    return saved || '未分類';
-  });
+  const [selectedCategory, setSelectedCategory] = useState<string>('未分類');
   const [isAddingNewCat, setIsAddingNewCat] = useState(false);
   const [newCatInput, setNewCatInput] = useState('');
-  const [isContinuousAdd, setIsContinuousAdd] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('vocabmin_continuous_add_mode') === 'true';
-    } catch {
-      return false;
-    }
-  });
-  const [continuousSuccessMsg, setContinuousSuccessMsg] = useState<string | null>(null);
-
-  const handleSelectCategory = (cat: string) => {
-    const clean = cat ? cat.trim() : '未分類';
-    setSelectedCategory(clean);
-    storage.saveLocalLastCategory(clean);
-  };
-
   const [definitions, setDefinitions] = useState<DefinitionInput[]>([
     { pos: 'n.', def: '', ex: '', selected: true }
   ]);
@@ -226,13 +199,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
       }
     }
   }, [initialTerm]);
-
-  // Pre-fill initialCategory if passed
-  useEffect(() => {
-    if (initialCategory && initialCategory.trim()) {
-      handleSelectCategory(initialCategory.trim());
-    }
-  }, [initialCategory]);
 
   // Check clipboard on modal open
   useEffect(() => {
@@ -488,9 +454,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     const cleanCategory = selectedCategory.trim();
     const finalCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
 
-    // Persist category selection
-    storage.saveLocalLastCategory(selectedCategory);
-
     const newWords: Partial<Word>[] = validDefs.map((d) => ({
       term: cleanTerm,
       pos: d.pos,
@@ -504,32 +467,13 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     }));
 
     onAddWords(newWords);
-
-    if (isContinuousAdd) {
-      // Continuous adding mode: Keep modal open, preserve category, reset word fields & refocus
-      setTerm('');
-      setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
-      setLookupSource(null);
-      setLookupSourceLabel(null);
-      setCandidateSuggestions([]);
-      setInflectionInfo(null);
-      setTypoSuggestions([]);
-      setIsInvalidWord(false);
-      setInvalidWordMessage(null);
-      setContinuousSuccessMsg(`✅ 已收錄「${cleanTerm}」！可直接輸入下一個單字`);
-      setTimeout(() => setContinuousSuccessMsg(null), 3000);
-      setTimeout(() => {
-        termInputRef.current?.focus();
-      }, 50);
-    } else {
-      // Standard mode: Reset form and close modal
-      setTerm('');
-      setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
-      setLookupSource(null);
-      setLookupSourceLabel(null);
-      setCandidateSuggestions([]);
-      onClose();
-    }
+    // Reset form
+    setTerm('');
+    setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
+    setLookupSource(null);
+    setLookupSourceLabel(null);
+    setCandidateSuggestions([]);
+    onClose();
   };
 
   // Batch Parser: Parse lines or CSV or comma lists
@@ -699,7 +643,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     if (!selectedItems.length) return;
 
     const cleanCategory = selectedCategory.trim();
-    storage.saveLocalLastCategory(selectedCategory);
     const finalCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
 
     const newWords: Partial<Word>[] = selectedItems.map((item) => ({
@@ -866,7 +809,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
               <div className="relative flex items-center">
                 <input
-                  ref={termInputRef}
                   type="text"
                   required
                   autoFocus
@@ -1082,7 +1024,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                         if (e.target.value === '__NEW__') {
                           setIsAddingNewCat(true);
                         } else {
-                          handleSelectCategory(e.target.value);
+                          setSelectedCategory(e.target.value);
                         }
                       }}
                       className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
@@ -1114,7 +1056,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       const clean = newCatInput.trim();
                       if (clean && clean !== '未分類') {
                         if (onAddCategory) onAddCategory(clean);
-                        handleSelectCategory(clean);
+                        setSelectedCategory(clean);
                       }
                       setIsAddingNewCat(false);
                       setNewCatInput('');
@@ -1276,31 +1218,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
               ))}
             </div>
 
-            {/* Continuous Add Toggle & Feedback */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1 pt-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
-                <input
-                  type="checkbox"
-                  checked={isContinuousAdd}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setIsContinuousAdd(checked);
-                    try {
-                      localStorage.setItem('vocabmin_continuous_add_mode', String(checked));
-                    } catch {}
-                  }}
-                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
-                />
-                <span className="font-bold">連續新增模式（收錄後保留分類，直接輸入下一個）</span>
-              </label>
-
-              {continuousSuccessMsg && (
-                <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold animate-enter flex items-center gap-1">
-                  <span>{continuousSuccessMsg}</span>
-                </span>
-              )}
-            </div>
-
             <button
               type="submit"
               className="w-full py-3.5 bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-600 hover:opacity-95 text-white font-bold rounded-2xl shadow-lg shadow-indigo-500/20 text-sm transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
@@ -1309,8 +1226,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
               <span>
                 {definitions.filter((d) => d.selected !== false && d.def.trim().length > 0).length > 1
                   ? `一次收錄所選 ${definitions.filter((d) => d.selected !== false && d.def.trim().length > 0).length} 項釋義至單字庫`
-                  : isContinuousAdd
-                  ? '收錄並繼續新增下一個'
                   : '收錄至單字庫'}
               </span>
             </button>
@@ -1453,7 +1368,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   </span>
                   <select
                     value={selectedCategory}
-                    onChange={(e) => handleSelectCategory(e.target.value)}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
                     className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
                   >
                     <option value="未分類">未分類 (預設)</option>
