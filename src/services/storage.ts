@@ -31,7 +31,8 @@ const STORAGE_KEYS = {
   ARTICLES: 'vocabmin_articles_v1',
   READER_SETTINGS: 'vocabmin_reader_settings_v1',
   SENTENCE_ANALYSES: 'vocabmin_sentence_analyses_v1',
-  WORD_ANALYSES: 'vocabmin_word_analyses_v1'
+  WORD_ANALYSES: 'vocabmin_word_analyses_v1',
+  LAST_CATEGORY: 'vocabmin_last_selected_category'
 };
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -238,6 +239,11 @@ export class StorageService {
     return id ? `vocabmin_articles_${id}` : STORAGE_KEYS.ARTICLES;
   }
 
+  private getLastCategoryKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid;
+    return id ? `vocabmin_last_category_${id}` : STORAGE_KEYS.LAST_CATEGORY;
+  }
+
   // Clear data for a specific user ID
   public clearUserDataForUid(uid: string): void {
     try {
@@ -338,6 +344,27 @@ export class StorageService {
       localStorage.setItem(key, JSON.stringify(settings));
     } catch (e) {
       console.error('Failed to save settings locally:', e);
+    }
+  }
+
+  public getLocalLastCategory(uid?: string): string {
+    try {
+      const key = this.getLastCategoryKey(uid);
+      const saved = localStorage.getItem(key) || localStorage.getItem(STORAGE_KEYS.LAST_CATEGORY);
+      return saved ? saved.trim() : '未分類';
+    } catch {
+      return '未分類';
+    }
+  }
+
+  public saveLocalLastCategory(category: string, uid?: string): void {
+    try {
+      const clean = category && category.trim() ? category.trim() : '未分類';
+      const key = this.getLastCategoryKey(uid);
+      localStorage.setItem(key, clean);
+      localStorage.setItem(STORAGE_KEYS.LAST_CATEGORY, clean);
+    } catch (e) {
+      console.error('Failed to save last category locally:', e);
     }
   }
 

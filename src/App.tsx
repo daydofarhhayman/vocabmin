@@ -52,6 +52,7 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [addModalInitialTerm, setAddModalInitialTerm] = useState<string>('');
+  const [addModalInitialCategory, setAddModalInitialCategory] = useState<string>('');
   const [editModalWord, setEditModalWord] = useState<Word | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHomeEditMode, setIsHomeEditMode] = useState(false);
@@ -1166,8 +1167,9 @@ export default function App() {
           <HomeView
             words={words}
             setTab={setCurrentTab}
-            onOpenAdd={(term?: string) => {
+            onOpenAdd={(term?: string, cat?: string) => {
               setAddModalInitialTerm(term || '');
+              setAddModalInitialCategory(cat || '');
               setIsAddModalOpen(true);
             }}
             onSelectWord={handleOpenWordDetail}
@@ -1213,8 +1215,9 @@ export default function App() {
           <WordListView
             words={words}
             settings={settings}
-            onOpenAdd={(term?: string) => {
+            onOpenAdd={(term?: string, cat?: string) => {
               setAddModalInitialTerm(term || '');
+              setAddModalInitialCategory(cat || '');
               setIsAddModalOpen(true);
             }}
             onEditWord={(w) => setEditModalWord(w)}
@@ -1348,11 +1351,13 @@ export default function App() {
             onClose={() => {
               setIsAddModalOpen(false);
               setAddModalInitialTerm('');
+              setAddModalInitialCategory('');
             }}
             onAddWords={handleAddWords}
             lang={settings.lang}
             existingWords={words}
             initialTerm={addModalInitialTerm}
+            initialCategory={addModalInitialCategory}
             categories={settings.customCategories || DEFAULT_CATEGORIES}
             onAddCategory={handleAddCategory}
           />

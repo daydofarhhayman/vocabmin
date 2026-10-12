@@ -70,7 +70,7 @@ import { WidgetGalleryDrawer } from './WidgetGalleryDrawer';
 interface HomeViewProps {
   words: Word[];
   setTab: (tab: ViewTab) => void;
-  onOpenAdd: () => void;
+  onOpenAdd: (initialTerm?: string, initialCategory?: string) => void;
   onSelectWord: (word: Word) => void;
   settings: AppSettings;
   dueWordsCount: number;
