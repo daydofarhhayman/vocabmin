@@ -2355,10 +2355,22 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
   const cleanWord = word.trim().toLowerCase();
   const meanings: any[] = [];
 
-  // Extract Cambridge entry header word (e.g. Translation of **epiphany**)
+  // Extract Cambridge entry header word (e.g. # Translation of **epiphany** or # **epiphany** 在英語-漢語（繁體）詞典中的翻譯)
   const enTitleMatch = markdown.match(/# Translation of \*\*([^*]+)\*\*/i);
   const zhTitleMatch = markdown.match(/# \*\*([^*]+)\*\* 在英語-(?:中文|漢語)/i);
-  const headerWord = (enTitleMatch?.[1] || zhTitleMatch?.[1] || word).trim().toLowerCase();
+  const zhAltTitleMatch = markdown.match(/# \*\*([^*]+)\*\* 在英(?:漢|語)/i);
+
+  // 🚨 CRITICAL: If there is no authentic entry title header, Cambridge did NOT index this word (likely 404 or spelling suggestion page)!
+  if (!enTitleMatch && !zhTitleMatch && !zhAltTitleMatch) {
+    return { meanings: [], isInflected: false };
+  }
+
+  const rawHeader = (enTitleMatch?.[1] || zhTitleMatch?.[1] || zhAltTitleMatch?.[1] || '').trim().toLowerCase();
+  if (!rawHeader || rawHeader.includes('拼寫建議') || rawHeader.includes('suggestion') || rawHeader.includes('找不到')) {
+    return { meanings: [], isInflected: false };
+  }
+
+  const headerWord = rawHeader;
 
   // Check for Cambridge inflection subtitle
   // e.g. "past simple and past participle of study", "plural of epiphany", "comparative of happy"
@@ -2391,17 +2403,19 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
     }
   }
 
-  // Match English or Traditional Chinese entry header
-  let content = markdown;
-  const enStart = markdown.indexOf('# Translation of');
-  const zhStartMatch = markdown.match(/# \*\*?[^\n*#]+\*\*? 在英語-(中文|漢語)/i);
-  const zhStart = typeof zhStartMatch?.index === 'number' ? zhStartMatch.index : -1;
+  // Determine entry body start position
+  const enStart = enTitleMatch ? markdown.indexOf(enTitleMatch[0]) : -1;
+  const zhStart = zhTitleMatch ? markdown.indexOf(zhTitleMatch[0]) : -1;
+  const zhAltStart = zhAltTitleMatch ? markdown.indexOf(zhAltTitleMatch[0]) : -1;
 
-  if (enStart >= 0 && (zhStart < 0 || enStart < zhStart)) {
-    content = markdown.slice(enStart);
-  } else if (zhStart >= 0) {
-    content = markdown.slice(zhStart);
+  const validStarts = [enStart, zhStart, zhAltStart].filter((idx) => idx >= 0);
+  if (validStarts.length === 0) {
+    // 🚨 ABSOLUTELY NEVER parse from position 0 (avoids capturing website navigation menus / template headers)
+    return { meanings: [], isInflected: false };
   }
+
+  const contentStart = Math.min(...validStarts);
+  let content = markdown.slice(contentStart);
 
   // End marker: copyright footer or examples / browse header in either English or Chinese
   const endMarkers = [
@@ -2449,9 +2463,12 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
     const cleanedLine = cleanCambridgeMd(rawLine);
     const hasChinese = /[\u4e00-\u9fa5]/.test(rawLine);
 
-    // Filter out CEFR lines (e.g. A2, B1, C2), codes, phonetics, audio, navigation
-    const isCefrOrCode =
+    // Filter out CEFR lines, codes, phonetics, audio, navigation, template markers, and dictionary lists
+    const isGarbageLine =
       /^(A1|A2|B1|B2|C1|C2)\b/i.test(cleanedLine) ||
+      rawLine.includes('{{') ||
+      rawLine.includes('}}') ||
+      rawLine.includes('Beta') ||
       rawLine.includes('/help/codes.html') ||
       rawLine.includes('codes.html') ||
       rawLine.includes('Audio') ||
@@ -2462,19 +2479,28 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
       rawLine.includes('More examples') ||
       rawLine.includes('Fewer examples') ||
       rawLine.includes('Synonyms') ||
-      rawLine.includes('Grammar');
+      rawLine.includes('Grammar') ||
+      rawLine.includes('英語文法') ||
+      /英語.*西班牙語/i.test(rawLine) ||
+      /西班牙語.*英語/i.test(rawLine) ||
+      rawLine.includes('詞典中的翻譯') ||
+      rawLine.includes('Cambridge English-Chinese') ||
+      rawLine.includes('劍橋英語-中文') ||
+      rawLine.includes('拼寫建議');
+
+    if (isGarbageLine) continue;
 
     // Identify candidate English definition line
     const isEnDef =
       !hasChinese &&
-      !isCefrOrCode &&
       !rawLine.startsWith('#') &&
       !rawLine.startsWith('*') &&
       !rawLine.startsWith('!') &&
       cleanedLine.length >= 10 &&
       cleanedLine.length <= 400 &&
       !cleanedLine.startsWith('http') &&
-      cleanedLine.split(/\s+/).length >= 2;
+      cleanedLine.split(/\s+/).length >= 2 &&
+      /[a-zA-Z]{2,}/.test(cleanedLine);
 
     if (isEnDef && i + 1 < lines.length) {
       // Look up to 2 lines ahead for Chinese definition in case of blank/tag line
@@ -2483,14 +2509,22 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
       for (let look = 1; look <= 2 && i + look < lines.length; look++) {
         const candidate = lines[i + look];
         const trimmedCandidate = candidate.trim();
+        const candClean = cleanCambridgeMd(candidate);
         if (
           /[\u4e00-\u9fa5]/.test(candidate) &&
           !/^[a-zA-Z]/.test(trimmedCandidate) && // Definitions start with Chinese or brackets, never English
+          !candidate.includes('{{') &&
+          !candidate.includes('}}') &&
           !candidate.includes('Cambridge') &&
           !candidate.includes('詞典') &&
           !candidate.includes('分享') &&
           !candidate.includes('加入詞彙表') &&
-          !candidate.includes('例句')
+          !candidate.includes('例句') &&
+          !candidate.includes('英語文法') &&
+          !candidate.includes('西班牙語') &&
+          !candidate.includes('拼寫建議') &&
+          candClean.length >= 1 &&
+          candClean.length <= 100
         ) {
           nextLine = candidate;
           nextLineIdx = i + look;
@@ -2507,6 +2541,7 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
         for (let j = nextLineIdx + 1; j < Math.min(nextLineIdx + 8, lines.length); j++) {
           const lRaw = lines[j];
           if (lRaw.startsWith('###') || lRaw.startsWith('#')) break;
+          if (lRaw.includes('{{') || lRaw.includes('}}')) continue;
           const lClean = cleanCambridgeMd(lRaw);
           if (
             (lRaw.startsWith('*') || lClean.toLowerCase().includes(cleanWord)) &&
@@ -2525,7 +2560,13 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
           }
         }
 
-        if (defZh && !meanings.some((m) => m.def === defZh)) {
+        if (
+          defZh &&
+          defZh.length >= 1 &&
+          !defZh.includes('{{') &&
+          !defZh.includes('英語文法') &&
+          !meanings.some((m) => m.def === defZh)
+        ) {
           meanings.push({
             pos: currentPos,
             def: defZh,
@@ -2555,7 +2596,14 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
   if (!cleanWord || !/^[a-zA-Z\s'-]+$/.test(cleanWord)) return null;
 
   if (cambridgeMeaningsCache.has(cleanWord)) {
-    return cambridgeMeaningsCache.get(cleanWord)!;
+    const cached = cambridgeMeaningsCache.get(cleanWord)!;
+    const isCorrupt = cached.meanings?.some(
+      (m: any) => m.def?.includes('英語文法') || m.def?.includes('{{') || m.defEn?.includes('{{')
+    );
+    if (!isCorrupt && cached.meanings?.length > 0) {
+      return cached;
+    }
+    cambridgeMeaningsCache.delete(cleanWord);
   }
 
   const targetUrls = [
@@ -2583,16 +2631,35 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
 
       if (!res.ok) continue;
       const markdown = await res.text();
-      const hasCambridgeHeader =
-        markdown.includes('# Translation of') ||
-        markdown.includes('在英語-中文') ||
-        markdown.includes('在英語-漢語') ||
-        markdown.includes('詞典中的翻譯') ||
-        markdown.includes('劍橋英語-中文') ||
-        markdown.includes('Cambridge English-Chinese') ||
-        markdown.includes('劍橋詞典');
 
-      if (!hasCambridgeHeader) continue;
+      // 🚨 CRITICAL: Check for Cambridge Dictionary "Unlisted Word" / "Spelling Suggestions" pages
+      // When a word is NOT in Cambridge Dictionary, Cambridge returns spelling advice page like "關於 ... 的拼寫建議"
+      const isUnlistedOrSuggestions =
+        markdown.includes('拼寫建議') ||
+        markdown.includes('在拼寫或發音上近似的詞') ||
+        markdown.includes('近似的詞') ||
+        markdown.includes('Suggestions for') ||
+        markdown.includes('Search suggestions for') ||
+        markdown.includes('Did you mean') ||
+        markdown.includes('No results found') ||
+        markdown.includes('在該辭典中找不到') ||
+        markdown.includes('找不到任何結果') ||
+        markdown.includes('我們找不到');
+
+      if (isUnlistedOrSuggestions) {
+        // Word is definitely not indexed by Cambridge Dictionary! Skip Cambridge scraper and fallback to Gemini AI.
+        continue;
+      }
+
+      // 🚨 CRITICAL: Legitimate entry MUST have an explicit headword title
+      const hasRealEntryHeader =
+        /# Translation of \*\*([^*]+)\*\*/i.test(markdown) ||
+        /# \*\*([^*]+)\*\* 在英語-(?:中文|漢語)/i.test(markdown) ||
+        /# \*\*([^*]+)\*\* 在英(?:漢|語)/i.test(markdown);
+
+      if (!hasRealEntryHeader) {
+        continue;
+      }
 
       const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
       if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
@@ -2636,11 +2703,23 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
   const cacheKey = cleanWord.toLowerCase();
   if (!forceRefresh && wordAllMeaningsCache.has(cacheKey)) {
     const cached = wordAllMeaningsCache.get(cacheKey)!;
-    return res.json({
-      ...cached,
-      term: cleanWord,
-      fromCache: true
-    });
+    const isCorrupted = cached.meanings?.some(
+      (m: any) =>
+        m.def?.includes('英語文法') ||
+        m.def?.includes('{{') ||
+        m.defEn?.includes('{{') ||
+        m.def?.includes('西班牙語')
+    );
+    if (!isCorrupted) {
+      return res.json({
+        ...cached,
+        term: cleanWord,
+        fromCache: true
+      });
+    } else {
+      wordAllMeaningsCache.delete(cacheKey);
+      cambridgeMeaningsCache.delete(cacheKey);
+    }
   }
 
   // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先從劍橋字典中抓資料與變形資訊)

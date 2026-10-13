@@ -224,14 +224,30 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
 
       if (Array.isArray(data.meanings)) {
         setDiscoveredSource(data.source === 'cambridge' ? 'cambridge' : 'ai');
-        // Filter out definitions that the user already has in group.entries
+        // Filter out definitions that the user already has in group.entries or contain template junk
         const existingDefs = group.entries.map((e) => ({
           pos: (e.pos || '').trim().toLowerCase(),
           def: e.def.trim().toLowerCase()
         }));
 
         const missing = (data.meanings as DiscoveredMeaning[]).filter((m) => {
-          const normDef = m.def.trim().toLowerCase();
+          if (!m || typeof m.def !== 'string') return false;
+          const def = m.def.trim();
+          const defEn = (m.defEn || '').trim();
+          if (
+            def.includes('{{') ||
+            def.includes('}}') ||
+            def.includes('英語文法') ||
+            def.includes('西班牙語') ||
+            def.includes('Beta') ||
+            defEn.includes('{{') ||
+            defEn.includes('}}') ||
+            defEn.includes('Beta')
+          ) {
+            return false;
+          }
+
+          const normDef = def.toLowerCase();
           const normPos = (m.pos || '').trim().toLowerCase();
           // Check if any existing entry matches or substantially overlaps
           const isAlreadyCovered = existingDefs.some((e) => {

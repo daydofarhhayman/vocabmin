@@ -330,7 +330,27 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
       }
 
       // 4. Populate Valid Definitions
-      if (Array.isArray(data.meanings) && data.meanings.length > 0) {
+      const rawMeanings = Array.isArray(data.meanings) ? data.meanings : [];
+      const validMeanings = rawMeanings.filter((m: any) => {
+        if (!m || typeof m.def !== 'string') return false;
+        const def = m.def.trim();
+        const defEn = (m.defEn || '').trim();
+        if (
+          def.includes('{{') ||
+          def.includes('}}') ||
+          def.includes('英語文法') ||
+          def.includes('西班牙語') ||
+          def.includes('Beta') ||
+          defEn.includes('{{') ||
+          defEn.includes('}}') ||
+          defEn.includes('Beta')
+        ) {
+          return false;
+        }
+        return def.length > 0;
+      });
+
+      if (validMeanings.length > 0) {
         setLookupSource(data.source || 'cambridge');
         setLookupSourceLabel(
           data.sourceLabel ||
@@ -342,7 +362,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
         const existingDefsForTerm = existingTermsMap.get(cleanTerm.toLowerCase()) || [];
 
         setDefinitions(
-          data.meanings.map((m: any, idx: number) => {
+          validMeanings.map((m: any, idx: number) => {
             const normDef = (m.def || '').trim().toLowerCase();
             const normPos = normalizePos(m.pos);
             const isAlreadyInLib = existingDefsForTerm.some(

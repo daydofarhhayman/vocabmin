@@ -149,12 +149,32 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
         return;
       }
 
-      if (Array.isArray(data.meanings) && data.meanings.length > 0) {
+      const rawMeanings = Array.isArray(data.meanings) ? data.meanings : [];
+      const validMeanings = rawMeanings.filter((m: any) => {
+        if (!m || typeof m.def !== 'string') return false;
+        const def = m.def.trim();
+        const defEn = (m.defEn || '').trim();
+        if (
+          def.includes('{{') ||
+          def.includes('}}') ||
+          def.includes('英語文法') ||
+          def.includes('西班牙語') ||
+          def.includes('Beta') ||
+          defEn.includes('{{') ||
+          defEn.includes('}}') ||
+          defEn.includes('Beta')
+        ) {
+          return false;
+        }
+        return def.length > 0;
+      });
+
+      if (validMeanings.length > 0) {
         setDefinitions((prev) => {
           const currentCleanDefs = prev.map((p) => p.def.trim().toLowerCase());
           const newRows = [...prev];
 
-          for (const m of data.meanings) {
+          for (const m of validMeanings) {
             const mCleanDef = (m.def || '').trim().toLowerCase();
             // If already present in rows, skip
             if (currentCleanDefs.includes(mCleanDef)) continue;
