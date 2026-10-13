@@ -494,6 +494,10 @@ export class StorageService {
       const settingsSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'));
       if (settingsSnap.exists()) {
         cloudSettings = { ...DEFAULT_SETTINGS, ...settingsSnap.data() } as AppSettings;
+      } else {
+        const localSettings = this.getLocalSettings(uid);
+        cloudSettings = localSettings;
+        this.saveCloudSettings(localSettings, uid).catch(console.error);
       }
 
       // 2. Stats
@@ -501,23 +505,40 @@ export class StorageService {
       const statsSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'));
       if (statsSnap.exists()) {
         cloudStats = statsSnap.data() as DailyStats;
+      } else {
+        const localStats = this.getLocalStats(uid);
+        if (Object.keys(localStats).length > 0) {
+          cloudStats = localStats;
+          this.saveCloudStats(localStats, uid).catch(console.error);
+        }
       }
 
-      // 3. Words - strictly isolated by UID; defaults to empty array for new/clean users
+      // 3. Words - strictly isolated by UID; preserves local words on first-time sync
       const cloudWords: Word[] = [];
       const wordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
+      const metaSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'meta'));
+      const metaData = metaSnap.data();
+
       if (!wordsSnap.empty) {
         wordsSnap.forEach((docSnap) => {
           const data = docSnap.data() as Word;
           cloudWords.push({ ...data, id: data.id || docSnap.id });
         });
         cloudWords.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      } else if (metaData?.hasSynced !== true) {
+        // First-time user in cloud: seed local words into cloud rather than clearing
+        const localKey = this.getWordsKey(uid);
+        const localData = localStorage.getItem(localKey);
+        if (localData !== null) {
+          try {
+            const parsed = JSON.parse(localData);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              cloudWords.push(...parsed);
+              this.saveCloudWordsOnly(parsed, uid).catch(console.error);
+            }
+          } catch {}
+        }
       }
-
-      // 4. Articles - strictly isolated by UID; authoritatively synced
-      let cloudArticles: Article[] | undefined;
-      const metaSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'meta'));
-      const metaData = metaSnap.data();
       const hasArticlesSynced = metaData?.hasArticlesSynced === true;
 
       const articlesSnap = await getDocs(collection(firestoreDb, 'users', uid, 'articles'));

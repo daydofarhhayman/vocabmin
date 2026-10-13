@@ -198,12 +198,33 @@ export default function App() {
         wordsRef.current = updated;
         setWords(updated);
 
-        // 2. Reconcile with cloud database (Firestore is authoritative)
+        // 2. Reconcile with cloud database (Firestore is authoritative, but protect unsynced local words)
         try {
           const cloudData = await storage.syncFromCloud();
           if (cloudData) {
-            // Apply SRS decay to authoritative cloud words so overdue cards decay accurately
-            const { updated: cloudWordsDecayed, count: decayedCount } = applySRSDecay(cloudData.words);
+            let authoritativeWords: Word[];
+
+            if (cloudData.words.length === 0 && localWords.length > 0) {
+              // Cloud has 0 words, but local has words (e.g. first login or unsynced words):
+              // Seed local words into cloud rather than wiping them out!
+              authoritativeWords = localWords;
+              storage.saveCloudWordsOnly(localWords, currentUser.uid).catch(console.error);
+            } else if (cloudData.words.length > 0) {
+              const cloudIds = new Set(cloudData.words.map((w) => w.id));
+              // Detect any words created locally that haven't reached cloud yet (e.g. refresh before write completed)
+              const localUnsynced = localWords.filter((lw) => !cloudIds.has(lw.id));
+              if (localUnsynced.length > 0) {
+                authoritativeWords = [...localUnsynced, ...cloudData.words];
+                storage.saveCloudWordsOnly(authoritativeWords, currentUser.uid).catch(console.error);
+              } else {
+                authoritativeWords = cloudData.words;
+              }
+            } else {
+              authoritativeWords = [];
+            }
+
+            // Apply SRS decay to authoritative words so overdue cards decay accurately
+            const { updated: cloudWordsDecayed, count: decayedCount } = applySRSDecay(authoritativeWords);
             wordsRef.current = cloudWordsDecayed;
             setWords(cloudWordsDecayed);
             storage.saveLocalWords(cloudWordsDecayed, currentUser.uid);
@@ -236,6 +257,7 @@ export default function App() {
         }
       } else {
         // Logged out: Clear all in-memory state completely
+        wordsRef.current = [];
         setWords([]);
         setDailyStats({});
         setArticles([]);
@@ -298,9 +320,9 @@ export default function App() {
     (newSettings: Partial<AppSettings>) => {
       setSettings((prev) => {
         const merged = { ...prev, ...newSettings };
-        storage.saveLocalSettings(merged);
+        storage.saveLocalSettings(merged, user?.uid);
         if (user) {
-          storage.saveCloudSettings(merged);
+          storage.saveCloudSettings(merged, user.uid);
         }
         return merged;
       });
@@ -409,8 +431,9 @@ export default function App() {
       if (user) {
         storage.updateCloudWord(wordId, updates, user.uid).catch(console.error);
       }
+      recordActivity('reviewed', 1);
     },
-    [user]
+    [user, recordActivity]
   );
 
   // Batch word review updates
@@ -1057,6 +1080,7 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await storage.signOut();
+      wordsRef.current = [];
       setUser(null);
       setWords([]);
       setDailyStats({});

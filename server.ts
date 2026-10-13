@@ -2356,9 +2356,9 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
   const meanings: any[] = [];
 
   // Extract Cambridge entry header word (e.g. # Translation of **epiphany** or # **epiphany** 在英語-漢語（繁體）詞典中的翻譯)
-  const enTitleMatch = markdown.match(/# Translation of \*\*([^*]+)\*\*/i);
-  const zhTitleMatch = markdown.match(/# \*\*([^*]+)\*\* 在英語-(?:中文|漢語)/i);
-  const zhAltTitleMatch = markdown.match(/# \*\*([^*]+)\*\* 在英(?:漢|語)/i);
+  const enTitleMatch = markdown.match(/# Translation of (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?(?:\s+[–\-]|in|\n|\r|$)/i);
+  const zhTitleMatch = markdown.match(/# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英語-(?:中文|漢語)/i);
+  const zhAltTitleMatch = markdown.match(/# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英(?:漢|語)/i);
 
   // 🚨 CRITICAL: If there is no authentic entry title header, Cambridge did NOT index this word (likely 404 or spelling suggestion page)!
   if (!enTitleMatch && !zhTitleMatch && !zhAltTitleMatch) {
@@ -2653,9 +2653,9 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
 
       // 🚨 CRITICAL: Legitimate entry MUST have an explicit headword title
       const hasRealEntryHeader =
-        /# Translation of \*\*([^*]+)\*\*/i.test(markdown) ||
-        /# \*\*([^*]+)\*\* 在英語-(?:中文|漢語)/i.test(markdown) ||
-        /# \*\*([^*]+)\*\* 在英(?:漢|語)/i.test(markdown);
+        /# Translation of (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?/i.test(markdown) ||
+        /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英語-(?:中文|漢語)/i.test(markdown) ||
+        /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英(?:漢|語)/i.test(markdown);
 
       if (!hasRealEntryHeader) {
         continue;
