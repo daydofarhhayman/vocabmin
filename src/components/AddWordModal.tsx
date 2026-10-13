@@ -8,6 +8,7 @@ import {
   Sparkles,
   Volume2,
   Clipboard,
+  ClipboardPaste,
   CheckSquare,
   Square,
   AlertCircle,
@@ -405,14 +406,26 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     handleLookupAllMeanings(baseWord);
   };
 
-  const handleApplyClipboard = () => {
-    if (!detectedClipboard) return;
-    setTerm(detectedClipboard);
+  const handleApplyClipboard = async () => {
+    let textToApply = detectedClipboard;
+    if (!textToApply && typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        const text = await navigator.clipboard.readText();
+        const clean = (text || '').trim();
+        if (clean && clean.length >= 2 && clean.length <= 64) {
+          textToApply = clean;
+        }
+      } catch {
+        // Silently ignore clipboard permission errors
+      }
+    }
+    if (!textToApply) return;
+    setTerm(textToApply);
     setIsInvalidWord(false);
     setInvalidWordMessage(null);
     setTypoSuggestions([]);
     setInflectionInfo(null);
-    handleLookupAllMeanings(detectedClipboard);
+    handleLookupAllMeanings(textToApply);
     setDetectedClipboard(null);
   };
 
@@ -760,25 +773,6 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
         {/* ─── TAB 1: SINGLE WORD ─── */}
         {activeTab === 'single' && (
           <form onSubmit={handleSaveSingle} className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
-            {/* Clipboard Quick-Fill Banner if detected */}
-            {detectedClipboard && (
-              <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-900/60 flex items-center justify-between text-xs animate-enter">
-                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
-                  <Clipboard className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-                  <span className="font-medium">
-                    偵測到剪貼簿內容：<strong className="font-bold underline">{detectedClipboard}</strong>
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleApplyClipboard}
-                  className="px-3 py-1 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shadow-sm transition active:scale-95 flex-shrink-0"
-                >
-                  一鍵帶入
-                </button>
-              </div>
-            )}
-
             {/* Word Input Area */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
@@ -842,18 +836,38 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                     }
                   }}
                   placeholder="例如：epiphany, resilient, present, run..."
-                  className="w-full p-3.5 pr-12 rounded-2xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 font-bold text-base outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-800 dark:text-white"
+                  className={`w-full p-3.5 ${
+                    term.trim() ? 'pr-20' : 'pr-12'
+                  } rounded-2xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 font-bold text-base outline-none focus:ring-2 focus:ring-indigo-500/20 text-slate-800 dark:text-white`}
                 />
-                {term.trim() && (
+                <div className="absolute right-2.5 flex items-center gap-1">
+                  {term.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => tts.speak(term)}
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 rounded-xl transition cursor-pointer"
+                      title="朗讀試聽發音"
+                    >
+                      <Volume2 className="w-5 h-5" />
+                    </button>
+                  )}
+                  {/* 橘色貼上剪貼簿圖標 */}
                   <button
                     type="button"
-                    onClick={() => tts.speak(term)}
-                    className="absolute right-3 p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
-                    title="朗讀試聽發音"
+                    onClick={() => handleApplyClipboard()}
+                    className="p-1.5 text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-xl transition cursor-pointer active:scale-95 relative"
+                    title={
+                      detectedClipboard
+                        ? `貼上剪貼簿內容「${detectedClipboard}」`
+                        : '貼上剪貼簿內容'
+                    }
                   >
-                    <Volume2 className="w-5 h-5" />
+                    <ClipboardPaste className="w-5 h-5" />
+                    {detectedClipboard && (
+                      <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white dark:ring-slate-800 animate-pulse" />
+                    )}
                   </button>
-                )}
+                </div>
               </div>
 
               {/* Inflected Form Banner (變形識別 + 一鍵切換至原形) */}
