@@ -1099,7 +1099,7 @@ export default function App() {
 
   const handleManualSync = async () => {
     if (!user) return;
-    await storage.syncToCloud(words, dailyStats, settings, articles);
+    await storage.syncToCloud(wordsRef.current, dailyStats, settings, articles, homeConfig, undefined, user.uid);
     showToast('已同步最新進度至雲端！');
   };
 
