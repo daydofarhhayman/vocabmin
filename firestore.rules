@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 嚴格使用者資料隔離規則
+    // 登入的使用者僅能存取與操作屬於自己 UID 的文檔及其所有子集合（如 words, articles, data 等）
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

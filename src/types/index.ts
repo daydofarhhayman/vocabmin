@@ -201,3 +201,10 @@ export interface WordAllMeaningsResult {
   fromCache?: boolean;
   message?: string;
 }
+
+export interface CloudSyncResult {
+  success: boolean;
+  wordCount: number;
+  error?: string;
+  code?: string;
+}

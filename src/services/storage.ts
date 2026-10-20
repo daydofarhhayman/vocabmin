@@ -1,4 +1,4 @@
-import { Word, DailyStats, AppSettings, POS, Article, ReaderSettings, SentenceAnalysisData, WordAnalysisData } from '../types';
+import { Word, DailyStats, AppSettings, POS, Article, ReaderSettings, SentenceAnalysisData, WordAnalysisData, CloudSyncResult } from '../types';
 import { DEFAULT_ARTICLES } from '../utils/defaultArticles';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
@@ -477,7 +477,7 @@ export class StorageService {
   }
 
   // Cloud Synchronization Methods
-  public async syncFromCloud(): Promise<{
+  public async syncFromCloud(fallbackUid?: string): Promise<{
     words: Word[];
     stats?: DailyStats;
     settings?: AppSettings;
@@ -485,7 +485,7 @@ export class StorageService {
     homeConfig?: any;
     readerSettings?: ReaderSettings;
   } | null> {
-    const uid = this.getResolvedUid();
+    const uid = this.getResolvedUid(fallbackUid);
     if (!uid || !firestoreDb) return null;
 
     try {
@@ -525,8 +525,8 @@ export class StorageService {
           cloudWords.push({ ...data, id: data.id || docSnap.id });
         });
         cloudWords.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-      } else if (metaData?.hasSynced !== true) {
-        // First-time user in cloud: seed local words into cloud rather than clearing
+      } else {
+        // Cloud words collection is empty: check if local storage has existing words to seed to cloud
         const localKey = this.getWordsKey(uid);
         const localData = localStorage.getItem(localKey);
         if (localData !== null) {
@@ -602,35 +602,44 @@ export class StorageService {
     homeConfig?: any,
     readerSettings?: ReaderSettings,
     fallbackUid?: string
-  ): Promise<void> {
+  ): Promise<CloudSyncResult> {
     const uid = this.getResolvedUid(fallbackUid);
-    if (!uid || !firestoreDb) return;
+    if (!uid) {
+      return { success: false, wordCount: 0, error: '尚未登入帳號或找不到使用者識別碼 (UID)' };
+    }
+    if (!firestoreDb) {
+      return { success: false, wordCount: 0, error: 'Firebase 雲端資料庫尚未初始化，請檢查網路連線' };
+    }
 
     try {
-      // 1. Settings & Stats & Meta
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), settings);
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats);
+      // 1. Settings & Stats & Meta (Clean JSON to eliminate undefined values that crash Firestore)
+      const cleanSettings = JSON.parse(JSON.stringify(settings));
+      const cleanStats = JSON.parse(JSON.stringify(stats));
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), cleanSettings, { merge: true });
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), cleanStats, { merge: true });
+
       if (homeConfig) {
         const cleanHome = JSON.parse(JSON.stringify(homeConfig));
-        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'homeConfig'), cleanHome);
+        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'homeConfig'), cleanHome, { merge: true });
       }
       if (readerSettings) {
         const cleanReader = JSON.parse(JSON.stringify(readerSettings));
-        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'readerSettings'), cleanReader);
+        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'readerSettings'), cleanReader, { merge: true });
       }
-      await setDoc(
-        doc(firestoreDb, 'users', uid, 'data', 'meta'),
-        {
-          hasSynced: true,
-          wordCount: words.length,
-          lastSyncedAt: Date.now()
-        },
-        { merge: true }
-      );
 
-      // 2. Words reconciliation: delete obsolete docs, upsert active docs
+      // 2. Sanitize and ensure valid non-empty IDs for all words
+      const now = Date.now();
+      const sanitizedWords: Word[] = words.map((w, idx) => {
+        const safeId = (w.id && String(w.id).trim()) || `w-${w.timestamp || now}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
+        return {
+          ...w,
+          id: safeId
+        };
+      });
+
+      // 3. Words reconciliation: delete obsolete docs, upsert active docs
       const existingWordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
-      const activeWordIds = new Set(words.map((w) => w.id));
+      const activeWordIds = new Set(sanitizedWords.map((w) => w.id));
 
       const obsoleteWordRefs: any[] = [];
       existingWordsSnap.forEach((docSnap) => {
@@ -648,9 +657,9 @@ export class StorageService {
       }
 
       // Batch upsert active words
-      for (let i = 0; i < words.length; i += 400) {
+      for (let i = 0; i < sanitizedWords.length; i += 400) {
         const batch = writeBatch(firestoreDb);
-        const chunk = words.slice(i, i + 400);
+        const chunk = sanitizedWords.slice(i, i + 400);
         chunk.forEach((w) => {
           const cleanWord = JSON.parse(JSON.stringify(w));
           batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord, { merge: true });
@@ -658,12 +667,38 @@ export class StorageService {
         await batch.commit();
       }
 
-      // 3. Articles reconciliation (if provided)
+      // 4. Articles reconciliation (if provided)
       if (articles !== undefined) {
         await this.saveCloudArticles(articles, uid);
       }
-    } catch (e) {
+
+      // 5. Update metadata document
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          hasSynced: true,
+          wordCount: sanitizedWords.length,
+          lastSyncedAt: Date.now()
+        },
+        { merge: true }
+      );
+
+      return {
+        success: true,
+        wordCount: sanitizedWords.length
+      };
+    } catch (e: any) {
       console.error('Failed to sync to cloud:', e);
+      let userFriendlyMsg = e?.message || '未知錯誤';
+      if (e?.code === 'permission-denied' || userFriendlyMsg.includes('Missing or insufficient permissions')) {
+        userFriendlyMsg = 'Firebase 權限不足 (Permission Denied)，請至 Firebase 控制台更新 Firestore 規則 (firestore.rules) 允許讀寫 users/{userId}/{document=**}';
+      }
+      return {
+        success: false,
+        wordCount: 0,
+        error: userFriendlyMsg,
+        code: e?.code
+      };
     }
   }
 
@@ -852,13 +887,28 @@ export class StorageService {
     }
   }
 
-  public async saveCloudWordsOnly(words: Word[], fallbackUid?: string): Promise<void> {
+  public async saveCloudWordsOnly(words: Word[], fallbackUid?: string): Promise<CloudSyncResult> {
     const uid = this.getResolvedUid(fallbackUid);
-    if (!uid || !firestoreDb) return;
+    if (!uid) {
+      return { success: false, wordCount: 0, error: '尚未登入或找不到使用者識別碼 (UID)' };
+    }
+    if (!firestoreDb) {
+      return { success: false, wordCount: 0, error: 'Firebase 雲端資料庫尚未初始化' };
+    }
 
     try {
       const existingWordsSnap = await getDocs(collection(firestoreDb, 'users', uid, 'words'));
-      const activeWordIds = new Set(words.map((w) => w.id));
+
+      const now = Date.now();
+      const sanitizedWords: Word[] = words.map((w, idx) => {
+        const safeId = (w.id && String(w.id).trim()) || `w-${w.timestamp || now}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
+        return {
+          ...w,
+          id: safeId
+        };
+      });
+
+      const activeWordIds = new Set(sanitizedWords.map((w) => w.id));
 
       const obsoleteRefs: any[] = [];
       existingWordsSnap.forEach((docSnap) => {
@@ -874,9 +924,9 @@ export class StorageService {
         await batch.commit();
       }
 
-      for (let i = 0; i < words.length; i += 400) {
+      for (let i = 0; i < sanitizedWords.length; i += 400) {
         const batch = writeBatch(firestoreDb);
-        const chunk = words.slice(i, i + 400);
+        const chunk = sanitizedWords.slice(i, i + 400);
         chunk.forEach((w) => {
           const cleanWord = JSON.parse(JSON.stringify(w));
           batch.set(doc(firestoreDb, 'users', uid, 'words', w.id), cleanWord, { merge: true });
@@ -886,11 +936,26 @@ export class StorageService {
 
       await setDoc(doc(firestoreDb, 'users', uid, 'data', 'meta'), {
         hasSynced: true,
-        wordCount: words.length,
+        wordCount: sanitizedWords.length,
         lastSyncedAt: Date.now()
       }, { merge: true });
-    } catch (e) {
+
+      return {
+        success: true,
+        wordCount: sanitizedWords.length
+      };
+    } catch (e: any) {
       console.error('Failed to save cloud words only:', e);
+      let userFriendlyMsg = e?.message || '未知錯誤';
+      if (e?.code === 'permission-denied' || userFriendlyMsg.includes('Missing or insufficient permissions')) {
+        userFriendlyMsg = 'Firebase 權限不足 (Permission Denied)，請檢查 Firestore 規則 (firestore.rules)';
+      }
+      return {
+        success: false,
+        wordCount: 0,
+        error: userFriendlyMsg,
+        code: e?.code
+      };
     }
   }
 
@@ -1068,7 +1133,8 @@ export class StorageService {
     const uid = this.getResolvedUid(fallbackUid);
     if (!uid || !firestoreDb) return;
     try {
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), settings, { merge: true });
+      const clean = JSON.parse(JSON.stringify(settings));
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), clean, { merge: true });
     } catch (e) {
       console.error('Failed to save cloud settings:', e);
     }
@@ -1078,7 +1144,8 @@ export class StorageService {
     const uid = this.getResolvedUid(fallbackUid);
     if (!uid || !firestoreDb) return;
     try {
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), stats, { merge: true });
+      const clean = JSON.parse(JSON.stringify(stats));
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), clean, { merge: true });
     } catch (e) {
       console.error('Failed to save cloud stats:', e);
     }

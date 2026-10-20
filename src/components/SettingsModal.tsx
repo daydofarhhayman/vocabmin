@@ -13,7 +13,9 @@ import {
   Palette,
   Check,
   Layout,
-  Sparkles
+  Sparkles,
+  CloudUpload,
+  RefreshCw
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
@@ -30,9 +32,12 @@ interface SettingsModalProps {
   onLogin: () => void;
   onLogout: () => void;
   onSyncCloud: () => void;
+  onPullCloud?: () => void;
   onLinkGoogle?: () => void;
   onOpenAI?: () => void;
   onOpenCustomizeHome?: () => void;
+  wordsCount?: number;
+  isSyncing?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -44,8 +49,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onLogin,
   onLogout,
   onSyncCloud,
+  onPullCloud,
   onLinkGoogle,
-  onOpenCustomizeHome
+  onOpenCustomizeHome,
+  wordsCount,
+  isSyncing
 }) => {
   const t = TRANSLATIONS[settings.lang];
 
@@ -113,27 +121,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   )}
                 </div>
               ) : (
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-sm font-bold text-slate-800 dark:text-white block">
-                      {user.displayName || user.email}
-                    </span>
-                    <span className="text-xs text-slate-400">雲端即時同步已啟用</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={onSyncCloud}
-                      className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition"
-                    >
-                      立即同步
-                    </button>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-bold text-slate-800 dark:text-white block">
+                        {user.displayName || user.email}
+                      </span>
+                      <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          雲端連線正常
+                        </span>
+                        {wordsCount !== undefined && (
+                          <span>• 本機單字：{wordsCount} 個</span>
+                        )}
+                      </div>
+                    </div>
                     <button
                       onClick={onLogout}
-                      className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition flex items-center gap-1"
+                      className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-700/60 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-1"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       <span>登出</span>
                     </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={onSyncCloud}
+                      disabled={isSyncing}
+                      className="flex-1 py-2 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-600/20 cursor-pointer"
+                      title="將此裝置的單字全量推播至雲端，供手機等其他裝置存取"
+                    >
+                      <CloudUpload className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? '正在同步至雲端...' : '立即同步至雲端 (推播本機)'}</span>
+                    </button>
+
+                    {onPullCloud && (
+                      <button
+                        onClick={onPullCloud}
+                        disabled={isSyncing}
+                        className="py-2 px-3 bg-slate-100 dark:bg-slate-700/70 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="自雲端重新下載最新單字庫（適合手機端或新裝置）"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                        <span>重新拉取</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )

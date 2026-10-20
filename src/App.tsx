@@ -42,6 +42,7 @@ export default function App() {
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   // Navigation State
   const [currentTab, setCurrentTab] = useState<ViewTab>('home');
@@ -200,7 +201,7 @@ export default function App() {
 
         // 2. Reconcile with cloud database (Firestore is authoritative, but protect unsynced local words)
         try {
-          const cloudData = await storage.syncFromCloud();
+          const cloudData = await storage.syncFromCloud(currentUser.uid);
           if (cloudData) {
             let authoritativeWords: Word[];
 
@@ -1099,8 +1100,56 @@ export default function App() {
 
   const handleManualSync = async () => {
     if (!user) return;
-    await storage.syncToCloud(wordsRef.current, dailyStats, settings, articles, homeConfig, undefined, user.uid);
-    showToast('已同步最新進度至雲端！');
+    setIsSyncing(true);
+    try {
+      const res = await storage.syncToCloud(
+        wordsRef.current,
+        dailyStats,
+        settings,
+        articles,
+        homeConfig,
+        undefined,
+        user.uid
+      );
+      if (res.success) {
+        showToast(`✅ 雲端同步成功！已成功推播 ${res.wordCount} 個單字至雲端`);
+      } else {
+        showToast(`❌ 同步失敗：${res.error || '請檢查網路連線或 Firebase 權限'}`);
+      }
+    } catch (err: any) {
+      showToast(`❌ 同步異常：${err?.message || '發生未知錯誤'}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handlePullFromCloud = async () => {
+    if (!user) return;
+    setIsSyncing(true);
+    try {
+      const cloudData = await storage.syncFromCloud(user.uid);
+      if (cloudData && Array.isArray(cloudData.words) && cloudData.words.length > 0) {
+        const { updated } = applySRSDecay(cloudData.words);
+        wordsRef.current = updated;
+        setWords(updated);
+        storage.saveLocalWords(updated, user.uid);
+        if (cloudData.settings) {
+          setSettings(cloudData.settings);
+          storage.saveLocalSettings(cloudData.settings, user.uid);
+        }
+        if (cloudData.stats) {
+          setDailyStats(cloudData.stats);
+          storage.saveLocalStats(cloudData.stats, user.uid);
+        }
+        showToast(`✅ 成功自雲端下載 ${updated.length} 個單字！`);
+      } else {
+        showToast('⚠️ 雲端尚無單字資料，請先在有單字的電腦端點擊「立即同步至雲端」');
+      }
+    } catch (err: any) {
+      showToast(`❌ 下載失敗：${err?.message || '發生未知錯誤'}`);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // 1. Splash Screen: When verifying authentication on startup
@@ -1425,6 +1474,9 @@ export default function App() {
             onLogout={handleLogout}
             onLinkGoogle={handleLinkGoogle}
             onSyncCloud={handleManualSync}
+            onPullCloud={handlePullFromCloud}
+            wordsCount={words.length}
+            isSyncing={isSyncing}
             onOpenCustomizeHome={() => {
               setIsSettingsOpen(false);
               setCurrentTab('home');

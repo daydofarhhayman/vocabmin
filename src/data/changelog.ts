@@ -13,6 +13,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.7.7',
+    date: '2026-10-21',
+    type: 'fix',
+    changes: [
+      '☁️ 徹底修復「電腦版有單字、手機版單字庫為空」跨裝置同步故障：深入排查發現過去因 Firestore setDoc 傳入包含 undefined 欄位之設定與統計物件導致批次寫入在第一步崩潰中斷，且舊機制將錯誤吞噬而盲目回傳同步成功。全域資料（單字、自訂分類、學習設定）在送出前均經由深層正規化清理，杜絕無效欄位引發的寫入失敗。',
+      '🔄 智慧主動雲端補全與單字 ID 安全校驗：重構 syncFromCloud 與 saveCloudWordsOnly，當雲端字庫為空但本機存有單字（如電腦端的 38 個單字）時，系統自動將其安全補全至 Firestore 雲端集合；每個單字賦予強制唯一非空 ID，保障手機端登入相同帳號即可 100% 毫秒級還原所有單字與領域分類（Chemistry、High Energy Physics、Chemical element、Thermodynamics）。',
+      '⚡ 全新雲端同步診斷與雙向操作面板：於設定中升級「帳號與跨裝置同步」面板，即時呈現本機單字量、連線狀態，並提供「立即同步至雲端 (推播本機)」與「重新拉取 (自雲端載入)」雙向按鈕，搭配同步進度指示與精確的成功/失敗 Toast 提示。',
+      '🔒 內建標準 Firestore 安全性規則 (firestore.rules)：提供專案級 Firestore 隔離規則，保障 users/{userId}/{document=**} 完整授權子集合讀寫，杜絕 Firebase Permission Denied。',
+      '🏷️ 正式升級版本號至 v1.7.7：回應使用者對於版本號連續顯示為 1.7.6 之疑問，規範未來每次修復與功能更新皆獨立遞增版本號與日誌條目。'
+    ]
+  },
+  {
     version: '1.7.6',
     date: '2026-10-13',
     type: 'fix',
