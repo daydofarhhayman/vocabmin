@@ -176,15 +176,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     );
   });
 
-  // Quick Lookup
-  async function performQuickLookup() {
-    const query = quickLookupInput.value.trim();
+  // Quick Lookup (Cambridge Dictionary Priority -> AI Fallback -> Bilingual Dictionary)
+  async function performQuickLookup(overrideQuery) {
+    const query = (typeof overrideQuery === 'string' ? overrideQuery : quickLookupInput.value).trim();
     if (!query) return;
+    if (typeof overrideQuery === 'string') {
+      quickLookupInput.value = query;
+    }
 
     lookupResultContainer.innerHTML = `
       <div style="text-align: center; padding: 25px 0; color: #64748b;">
         <div style="font-size: 20px; margin-bottom: 6px;">⏳</div>
-        <div>正在查詢「${escapeHtml(query)}」...</div>
+        <div>優先檢索劍橋辭典「${escapeHtml(query)}」...</div>
+        <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">若劍橋未收錄，將自動切換至 AI 智能解析</div>
       </div>
     `;
 
@@ -206,49 +210,162 @@ document.addEventListener('DOMContentLoaded', async () => {
         const phonetic = res.phonetic || '';
         const ex = res.ex || '';
         const exZh = res.exZh || '';
+        const status = res.status || 'valid';
+        const baseForm = res.baseForm || '';
+        const inflectionType = res.inflectionType || '單字變形';
+        const suggestions = Array.isArray(res.suggestions) ? res.suggestions : [];
+        const meanings = Array.isArray(res.meanings) && res.meanings.length > 0
+          ? res.meanings
+          : (def ? [{ pos, def, defEn, ex, exZh }] : []);
+        const source = res.source || 'cambridge';
+        const sourceLabel =
+          res.sourceLabel ||
+          (source === 'cambridge'
+            ? '劍橋英漢辭典 (Cambridge Dictionary)'
+            : source === 'ai'
+            ? '劍橋未收錄 · 由 Gemini AI 智能生成'
+            : '雙語辭典備援');
+
+        const sourceBadgeStyle =
+          source === 'cambridge'
+            ? 'background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;'
+            : source === 'ai'
+            ? 'background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe;'
+            : 'background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;';
+        const sourceIcon = source === 'cambridge' ? '🏛️' : source === 'ai' ? '✨' : '📖';
+        const cambridgeUrl = `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(term.toLowerCase())}`;
 
         lookupResultContainer.innerHTML = `
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
             <div>
-              <div style="font-size: 16px; font-weight: 700; color: #0f172a;">${escapeHtml(term)}</div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span style="font-size: 16px; font-weight: 700; color: #0f172a;">${escapeHtml(term)}</span>
+                <a href="${cambridgeUrl}" target="_blank" rel="noopener noreferrer" style="font-size:11px; color:#6366f1; text-decoration:none; font-weight:600;">劍橋官網 ↗</a>
+              </div>
               <div style="display:flex; gap: 6px; align-items:center; margin-top:2px;">
-                <span style="font-size:11px; background:#e0e7ff; color:#4338ca; padding:1px 5px; border-radius:4px; font-weight:600;">${escapeHtml(pos)}</span>
+                ${status !== 'typo' && status !== 'invalid' ? `<span style="font-size:11px; background:#e0e7ff; color:#4338ca; padding:1px 5px; border-radius:4px; font-weight:600;">${escapeHtml(pos)}</span>` : ''}
                 ${phonetic ? `<span style="color:#6366f1; font-size:12px;">${escapeHtml(phonetic)}</span>` : ''}
-                <button id="lookup-speak-btn" style="border:none; background:none; cursor:pointer;">🔊</button>
+                <button id="lookup-speak-btn" style="border:none; background:none; cursor:pointer;" title="發音">🔊</button>
               </div>
             </div>
-            <button id="lookup-add-btn" class="btn-sm btn-primary">+ 加入生字庫</button>
+            ${status !== 'typo' && status !== 'invalid' ? `<button id="lookup-add-btn" class="btn-sm btn-primary">+ 加入生字庫</button>` : ''}
           </div>
-          <div style="font-size: 14px; font-weight: 600; color: #1e293b; margin-bottom: 6px;">${escapeHtml(def)}</div>
-          ${defEn ? `<div style="font-size: 12px; color: #475569; font-style: italic; margin-bottom: 8px;">${escapeHtml(defEn)}</div>` : ''}
-          ${ex ? `
-            <div style="background:#f8fafc; border-left:3px solid #6366f1; padding:6px 8px; border-radius:0 6px 6px 0; font-size:12px;">
-              <div style="font-weight:500; color:#1e293b;">${escapeHtml(ex)}</div>
-              ${exZh ? `<div style="color:#64748b; margin-top:2px;">${escapeHtml(exZh)}</div>` : ''}
+
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:600; margin-bottom:8px; ${sourceBadgeStyle}">
+            <span>${sourceIcon} ${escapeHtml(sourceLabel)}</span>
+            ${meanings.length > 1 ? `<span>共 ${meanings.length} 義</span>` : ''}
+          </div>
+
+          ${status === 'inflected' && baseForm && baseForm.toLowerCase() !== term.toLowerCase() ? `
+            <div style="display:flex; align-items:center; justify-content:space-between; background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; padding:5px 8px; border-radius:6px; font-size:11.5px; margin-bottom:8px;">
+              <span>🔄 <b>${escapeHtml(baseForm)}</b> 的${escapeHtml(inflectionType)}</span>
+              <button id="lookup-switch-base-btn" data-base="${escapeHtml(baseForm)}" style="background:#2563eb; color:#fff; border:none; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:600; cursor:pointer;">查原型</button>
             </div>
           ` : ''}
+
+          ${status === 'typo' && suggestions.length > 0 ? `
+            <div style="background:#fffbeb; border:1px solid #fde68a; padding:10px; border-radius:8px;">
+              <div style="font-size:12px; font-weight:700; color:#b45309; margin-bottom:6px;">💡 您是不是要找：</div>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                ${suggestions.map((sug) => `
+                  <button class="lookup-typo-sug-btn" data-sug="${escapeHtml(sug)}" style="background:#fff; border:1px solid #f59e0b; color:#b45309; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:600; cursor:pointer;">
+                    ${escapeHtml(sug)}
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          ` : status === 'invalid' ? `
+            <div style="background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:10px; border-radius:8px; font-size:12px;">
+              ⚠️ ${escapeHtml(res.message || `查無「${term}」之有效英文單字，請檢查拼寫。`)}
+            </div>
+          ` : meanings.length > 1 ? `
+            <div style="display:flex; flex-direction:column; gap:6px;">
+              ${meanings.map((m, idx) => `
+                <label style="display:flex; align-items:flex-start; gap:7px; padding:7px 9px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; cursor:pointer;">
+                  <input type="checkbox" class="lookup-meaning-checkbox" data-idx="${idx}" ${idx === 0 ? 'checked' : ''} style="margin-top:3px; accent-color:#4f46e5; cursor:pointer;" />
+                  <div style="flex:1; min-width:0;">
+                    <div style="display:flex; align-items:center; gap:5px;">
+                      <span style="font-size:10.5px; background:#e0e7ff; color:#4338ca; padding:1px 5px; border-radius:4px; font-weight:600;">${escapeHtml(m.pos || 'n.')}</span>
+                      <span style="font-size:13px; font-weight:700; color:#0f172a;">${escapeHtml(m.def)}</span>
+                    </div>
+                    ${m.defEn ? `<div style="font-size:11.5px; color:#475569; font-style:italic; margin-top:2px;">${escapeHtml(m.defEn)}</div>` : ''}
+                    ${m.ex ? `<div style="font-size:11.5px; color:#64748b; margin-top:3px; border-left:2px solid #818cf8; padding-left:6px;">${escapeHtml(m.ex)}</div>` : ''}
+                  </div>
+                </label>
+              `).join('')}
+            </div>
+          ` : `
+            <div style="font-size: 14px; font-weight: 600; color: #1e293b; margin-bottom: 6px;">${escapeHtml(def)}</div>
+            ${defEn ? `<div style="font-size: 12px; color: #475569; font-style: italic; margin-bottom: 8px;">${escapeHtml(defEn)}</div>` : ''}
+            ${ex ? `
+              <div style="background:#f8fafc; border-left:3px solid #6366f1; padding:6px 8px; border-radius:0 6px 6px 0; font-size:12px;">
+                <div style="font-weight:500; color:#1e293b;">${escapeHtml(ex)}</div>
+                ${exZh ? `<div style="color:#64748b; margin-top:2px;">${escapeHtml(exZh)}</div>` : ''}
+              </div>
+            ` : ''}
+          `}
         `;
 
-        document.getElementById('lookup-speak-btn').onclick = () => playAudio(term);
+        const speakBtn = document.getElementById('lookup-speak-btn');
+        if (speakBtn) speakBtn.onclick = () => playAudio(term);
+
+        const switchBaseBtn = document.getElementById('lookup-switch-base-btn');
+        if (switchBaseBtn) {
+          switchBaseBtn.onclick = () => performQuickLookup(switchBaseBtn.getAttribute('data-base'));
+        }
+
+        lookupResultContainer.querySelectorAll('.lookup-typo-sug-btn').forEach((btn) => {
+          btn.onclick = () => performQuickLookup(btn.getAttribute('data-sug'));
+        });
+
         const addBtn = document.getElementById('lookup-add-btn');
-        addBtn.onclick = () => {
-          chrome.runtime.sendMessage({
-            action: 'SAVE_WORD',
-            word: { term, pos, def, defEn, phonetic, ex, exZh }
-          }, (saveRes) => {
-            if (saveRes?.success) {
-              addBtn.disabled = true;
-              addBtn.textContent = '✅ 已加入';
-              addBtn.style.background = '#10b981';
-              loadSavedWords();
+        if (addBtn) {
+          addBtn.onclick = () => {
+            const checkboxes = lookupResultContainer.querySelectorAll('.lookup-meaning-checkbox');
+            let selectedMeanings = [];
+            if (checkboxes.length > 0) {
+              checkboxes.forEach((cb) => {
+                if (cb.checked) {
+                  const idx = Number(cb.getAttribute('data-idx'));
+                  if (meanings[idx]) selectedMeanings.push(meanings[idx]);
+                }
+              });
             }
-          });
-        };
+            if (selectedMeanings.length === 0) {
+              selectedMeanings = meanings.length > 0 ? [meanings[0]] : [{ pos, def, defEn, ex, exZh }];
+            }
+
+            const wordsToSave = selectedMeanings.map((m) => ({
+              term,
+              pos: m.pos || pos,
+              def: m.def || def,
+              defEn: m.defEn || defEn,
+              phonetic,
+              ex: m.ex || ex,
+              exZh: m.exZh || exZh
+            }));
+
+            chrome.runtime.sendMessage(
+              {
+                action: 'SAVE_WORDS',
+                words: wordsToSave
+              },
+              (saveRes) => {
+                if (saveRes?.success) {
+                  addBtn.disabled = true;
+                  addBtn.textContent = `✅ 已加入 (${wordsToSave.length} 義)`;
+                  addBtn.style.background = '#10b981';
+                  loadSavedWords();
+                }
+              }
+            );
+          };
+        }
       }
     );
   }
 
-  btnQuickLookup.addEventListener('click', performQuickLookup);
+  btnQuickLookup.addEventListener('click', () => performQuickLookup());
   quickLookupInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') performQuickLookup();
   });

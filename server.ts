@@ -2194,13 +2194,83 @@ app.post('/api/ai/article-lookup', async (req, res) => {
     }
   }
 
+  // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先查詢劍橋英漢辭典，若無收錄再交由 AI 生成)
+  try {
+    const cambridgeParsed = await fetchCambridgeMeanings(cleanWord);
+    if (cambridgeParsed && cambridgeParsed.meanings && cambridgeParsed.meanings.length > 0) {
+      const primary = cambridgeParsed.meanings[0];
+      const isInflected = cambridgeParsed.isInflected && !!cambridgeParsed.baseForm;
+
+      // Enrich phonetic & Chinese translation of example sentence if needed
+      let phonetic = '';
+      let exZh = '';
+      try {
+        const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`, {
+          signal: AbortSignal.timeout(2500)
+        });
+        if (dictRes.ok) {
+          const dictData = await dictRes.json();
+          if (Array.isArray(dictData) && dictData[0]) {
+            phonetic = dictData[0].phonetic || (dictData[0].phonetics?.find((p: any) => p.text)?.text) || '';
+          }
+        }
+      } catch {}
+
+      if (primary.ex) {
+        try {
+          const exRes = await fetch(
+            `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(primary.ex)}`,
+            { signal: AbortSignal.timeout(2500) }
+          );
+          if (exRes.ok) {
+            const exData = await exRes.json();
+            exZh = exData[0]?.[0]?.[0] || '';
+          }
+        } catch {}
+      }
+
+      const cambridgePayload = {
+        term: cleanWord,
+        status: isInflected ? 'inflected' : 'valid',
+        baseForm: isInflected ? cambridgeParsed.baseForm : undefined,
+        inflectionType: isInflected ? cambridgeParsed.inflectionType : undefined,
+        pos: primary.pos || 'n.',
+        def: primary.def,
+        defEn: primary.defEn || '',
+        phonetic,
+        ex: primary.ex || (cleanSentence && cleanSentence.length <= 160 ? cleanSentence : `Authentic usage of "${cleanWord}".`),
+        exZh,
+        meanings: cambridgeParsed.meanings,
+        source: 'cambridge',
+        sourceLabel: isInflected
+          ? `劍橋英漢辭典 (偵測為「${cambridgeParsed.baseForm}」之變形)`
+          : '劍橋英漢辭典 (Cambridge Dictionary)'
+      };
+
+      setCacheWithLimit(wordLookupCache, cacheKey, cambridgePayload);
+      return res.json({
+        ...cambridgePayload,
+        fromCache: false
+      });
+    }
+  } catch (camErr: any) {
+    console.warn('Article lookup Cambridge step skipped:', camErr?.message || camErr);
+  }
+
+  // 2. SECOND PRIORITY: Gemini AI (劍橋未收錄時使用 AI 生成解釋)
   const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
   if (!ai) {
     // Intelligent reliable bilingual dictionary lookup
     const fallback = await fetchBilingualWordDetails(cleanWord, sentence);
-    setCacheWithLimit(wordLookupCache, cacheKey, fallback);
-    return res.json({
+    const fallbackWithSource = {
       ...fallback,
+      meanings: [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }],
+      source: 'dictionary',
+      sourceLabel: '雙語辭典備援 (Google Dictionary)'
+    };
+    setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
+    return res.json({
+      ...fallbackWithSource,
       fromCache: false
     });
   }
@@ -2255,12 +2325,23 @@ Provide accurate contextual details in JSON:
 
     const resultToCache = {
       term: parsed.term || cleanWord,
+      status: 'valid',
       pos: parsed.pos || 'n.',
       def: defZh,
       defEn: defEn,
       phonetic: parsed.phonetic || '',
       ex: parsed.ex || `Learning ${cleanWord} helps improve your vocabulary.`,
-      exZh: parsed.exZh || ''
+      exZh: parsed.exZh || '',
+      meanings: [
+        {
+          pos: parsed.pos || 'n.',
+          def: defZh,
+          defEn: defEn,
+          ex: parsed.ex || `Learning ${cleanWord} helps improve your vocabulary.`
+        }
+      ],
+      source: 'ai',
+      sourceLabel: 'Gemini AI 智能解析 (劍橋未收錄 · AI 生成)'
     };
     setCacheWithLimit(wordLookupCache, cacheKey, resultToCache);
 
@@ -2271,9 +2352,15 @@ Provide accurate contextual details in JSON:
   } catch (err: any) {
     console.warn('Word lookup AI error, using bilingual fallback:', err?.message || err);
     const fallback = await fetchBilingualWordDetails(cleanWord, sentence);
-    setCacheWithLimit(wordLookupCache, cacheKey, fallback);
-    return res.json({
+    const fallbackWithSource = {
       ...fallback,
+      meanings: [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }],
+      source: 'dictionary',
+      sourceLabel: '雙語辭典備援 (Google Dictionary)'
+    };
+    setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
+    return res.json({
+      ...fallbackWithSource,
       fromCache: false
     });
   }

@@ -221,7 +221,7 @@
   // Render modal card content
   function renderCardContent(card, data) {
     const term = data.term || currentSelectionData?.text || '';
-    const pos = data.pos || 'other';
+    const pos = data.pos || 'n.';
     const def = data.def || '';
     const defEn = data.defEn || '';
     const phonetic = data.phonetic || '';
@@ -229,14 +229,37 @@
     const exZh = data.exZh || '';
     const sentence = data.sentence || currentSelectionData?.sentence || '';
     const isLoading = data.isLoading;
+    const status = data.status || 'valid';
+    const baseForm = data.baseForm || '';
+    const inflectionType = data.inflectionType || '單字變形';
+    const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+    const meanings = Array.isArray(data.meanings) && data.meanings.length > 0
+      ? data.meanings
+      : (def ? [{ pos, def, defEn, ex, exZh }] : []);
+    const source = data.source || 'cambridge';
+    const sourceLabel =
+      data.sourceLabel ||
+      (source === 'cambridge'
+        ? '劍橋英漢辭典 (Cambridge Dictionary)'
+        : source === 'ai'
+        ? '劍橋未收錄 · 由 Gemini AI 智能生成'
+        : '雙語辭典備援');
 
     const cambridgeUrl = `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(term.toLowerCase())}`;
+
+    const sourceBadgeStyle =
+      source === 'cambridge'
+        ? 'background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;'
+        : source === 'ai'
+        ? 'background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe;'
+        : 'background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;';
+    const sourceIcon = source === 'cambridge' ? '🏛️' : source === 'ai' ? '✨' : '📖';
 
     card.innerHTML = `
       <div class="vbm-header" id="vbm-drag-handle">
         <div class="vbm-header-left">
           <span class="vbm-term-title" title="${escapeHtml(term)}">${escapeHtml(term)}</span>
-          ${pos ? `<span class="vbm-pos-badge">${escapeHtml(pos)}</span>` : ''}
+          ${pos && status !== 'typo' && status !== 'invalid' ? `<span class="vbm-pos-badge">${escapeHtml(pos)}</span>` : ''}
         </div>
         <div class="vbm-header-actions">
           <button class="vbm-icon-btn" id="vbm-audio-header" title="發音朗讀">
@@ -260,46 +283,97 @@
         ${isLoading ? `
           <div class="vbm-loading">
             <div class="vbm-spinner"></div>
-            <span>VocabMin AI 正在檢索精準釋義...</span>
+            <span>優先檢索劍橋英漢辭典 · 若無收錄則由 AI 生成...</span>
           </div>
         ` : activeTabName === 'definition' ? `
-          ${phonetic ? `
-            <div class="vbm-phonetic-row">
-              <span class="vbm-phonetic">${escapeHtml(phonetic)}</span>
-              <button class="vbm-audio-btn" id="vbm-body-pronounce">🔊 美式發音</button>
-            </div>
-          ` : ''}
-
-          <div class="vbm-section">
-            <div class="vbm-label">繁體中文釋義</div>
-            <div class="vbm-def-zh">${escapeHtml(def || '查詢中...')}</div>
+          <!-- Source Badge -->
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:5px 10px; border-radius:8px; font-size:11.5px; font-weight:600; ${sourceBadgeStyle}">
+            <span>${sourceIcon} ${escapeHtml(sourceLabel)}</span>
+            ${meanings.length > 1 ? `<span style="font-size:10.5px; opacity:0.85;">共 ${meanings.length} 項釋義</span>` : ''}
           </div>
 
-          ${defEn ? `
-            <div class="vbm-section">
-              <div class="vbm-label">英英釋義</div>
-              <div class="vbm-def-en">${escapeHtml(defEn)}</div>
+          ${status === 'inflected' && baseForm && baseForm.toLowerCase() !== term.toLowerCase() ? `
+            <div style="display:flex; align-items:center; justify-content:space-between; background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; padding:6px 10px; border-radius:8px; font-size:12px;">
+              <span>🔄 此字為 <b>${escapeHtml(baseForm)}</b> 的${escapeHtml(inflectionType)}</span>
+              <button id="vbm-switch-base-btn" data-base="${escapeHtml(baseForm)}" style="background:#2563eb; color:#fff; border:none; border-radius:6px; padding:2px 8px; font-size:11px; font-weight:600; cursor:pointer;">查原型</button>
             </div>
           ` : ''}
 
-          ${ex ? `
-            <div class="vbm-section">
-              <div class="vbm-label">記憶例句</div>
-              <div class="vbm-box">
-                <div class="vbm-box-en">${escapeHtml(ex)}</div>
-                ${exZh ? `<div class="vbm-box-zh">${escapeHtml(exZh)}</div>` : ''}
+          ${status === 'typo' && suggestions.length > 0 ? `
+            <div style="background:#fffbeb; border:1px solid #fde68a; padding:10px 12px; border-radius:10px;">
+              <div style="font-size:12px; font-weight:700; color:#b45309; margin-bottom:6px;">💡 劍橋與字庫查無「${escapeHtml(term)}」，您是不是要找：</div>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                ${suggestions.map((sug) => `
+                  <button class="vbm-typo-sug-btn" data-sug="${escapeHtml(sug)}" style="background:#ffffff; border:1px solid #f59e0b; color:#b45309; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:600; cursor:pointer;">
+                    ${escapeHtml(sug)}
+                  </button>
+                `).join('')}
               </div>
             </div>
-          ` : ''}
+          ` : status === 'invalid' ? `
+            <div style="background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:12px; border-radius:10px; font-size:12.5px;">
+              ⚠️ ${escapeHtml(data.message || `查無「${term}」之有效英文單字，請檢查拼寫。`)}
+            </div>
+          ` : `
+            ${phonetic ? `
+              <div class="vbm-phonetic-row">
+                <span class="vbm-phonetic">${escapeHtml(phonetic)}</span>
+                <button class="vbm-audio-btn" id="vbm-body-pronounce">🔊 美式發音</button>
+              </div>
+            ` : ''}
 
-          ${sentence && sentence !== ex ? `
-            <div class="vbm-section">
-              <div class="vbm-label">文章上下文</div>
-              <div class="vbm-box" style="border-left-color: #94a3b8; background: #f1f5f9;">
-                <div class="vbm-box-en">${escapeHtml(sentence)}</div>
+            ${meanings.length > 1 ? `
+              <div class="vbm-section">
+                <div class="vbm-label">勾選要收錄的釋義（可複選）</div>
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  ${meanings.map((m, idx) => `
+                    <label style="display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; cursor:pointer;">
+                      <input type="checkbox" class="vbm-meaning-checkbox" data-idx="${idx}" ${idx === 0 ? 'checked' : ''} style="margin-top:3px; accent-color:#4f46e5; cursor:pointer;" />
+                      <div style="flex:1; min-width:0;">
+                        <div style="display:flex; align-items:center; gap:6px; margin-bottom:2px;">
+                          <span class="vbm-pos-badge">${escapeHtml(m.pos || 'n.')}</span>
+                          <span style="font-size:13.5px; font-weight:700; color:#0f172a;">${escapeHtml(m.def)}</span>
+                        </div>
+                        ${m.defEn ? `<div style="font-size:11.5px; color:#475569; font-style:italic;">${escapeHtml(m.defEn)}</div>` : ''}
+                        ${m.ex ? `<div style="font-size:11.5px; color:#64748b; margin-top:3px; border-left:2px solid #818cf8; padding-left:6px;">${escapeHtml(m.ex)}</div>` : ''}
+                      </div>
+                    </label>
+                  `).join('')}
+                </div>
               </div>
-            </div>
-          ` : ''}
+            ` : `
+              <div class="vbm-section">
+                <div class="vbm-label">繁體中文釋義</div>
+                <div class="vbm-def-zh">${escapeHtml(def || '查詢中...')}</div>
+              </div>
+
+              ${defEn ? `
+                <div class="vbm-section">
+                  <div class="vbm-label">英英釋義</div>
+                  <div class="vbm-def-en">${escapeHtml(defEn)}</div>
+                </div>
+              ` : ''}
+
+              ${ex ? `
+                <div class="vbm-section">
+                  <div class="vbm-label">記憶例句</div>
+                  <div class="vbm-box">
+                    <div class="vbm-box-en">${escapeHtml(ex)}</div>
+                    ${exZh ? `<div class="vbm-box-zh">${escapeHtml(exZh)}</div>` : ''}
+                  </div>
+                </div>
+              ` : ''}
+            `}
+
+            ${sentence && sentence !== ex ? `
+              <div class="vbm-section">
+                <div class="vbm-label">文章上下文</div>
+                <div class="vbm-box" style="border-left-color: #94a3b8; background: #f1f5f9;">
+                  <div class="vbm-box-en">${escapeHtml(sentence)}</div>
+                </div>
+              </div>
+            ` : ''}
+          `}
         ` : `
           <!-- AI Grammar Breakdown Tab -->
           ${currentSentenceResult ? `
@@ -331,12 +405,12 @@
       </div>
 
       <div class="vbm-footer">
-        <button class="vbm-save-btn" id="vbm-save-word-btn">
+        <button class="vbm-save-btn" id="vbm-save-word-btn" ${status === 'typo' || status === 'invalid' ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
           <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
           <span>收錄至 VocabMin 單字庫</span>
         </button>
         <a class="vbm-cambridge-btn" href="${cambridgeUrl}" target="_blank" rel="noopener noreferrer">
-          劍橋字典
+          劍橋字典 ↗
         </a>
       </div>
     `;
@@ -350,6 +424,29 @@
 
     const audioBody = card.querySelector('#vbm-body-pronounce');
     if (audioBody) audioBody.onclick = () => playAudio(term);
+
+    // Switch to base form button
+    const switchBaseBtn = card.querySelector('#vbm-switch-base-btn');
+    if (switchBaseBtn) {
+      switchBaseBtn.onclick = () => {
+        const base = switchBaseBtn.getAttribute('data-base');
+        if (base) {
+          renderCardContent(card, { term: base, isLoading: true, sentence });
+          fetchWordAndSentenceData(base, sentence, card);
+        }
+      };
+    }
+
+    // Typo suggestion buttons
+    card.querySelectorAll('.vbm-typo-sug-btn').forEach((btn) => {
+      btn.onclick = () => {
+        const sug = btn.getAttribute('data-sug');
+        if (sug) {
+          renderCardContent(card, { term: sug, isLoading: true, sentence });
+          fetchWordAndSentenceData(sug, sentence, card);
+        }
+      };
+    });
 
     // Tab buttons
     card.querySelectorAll('.vbm-tab').forEach((tabBtn) => {
@@ -366,31 +463,47 @@
       };
     });
 
-    // Save Word button
+    // Save Word(s) button
     const saveBtn = card.querySelector('#vbm-save-word-btn');
-    if (saveBtn) {
+    if (saveBtn && status !== 'typo' && status !== 'invalid') {
       saveBtn.onclick = () => {
-        const payload = {
+        const checkboxes = card.querySelectorAll('.vbm-meaning-checkbox');
+        let selectedMeanings = [];
+        if (checkboxes.length > 0) {
+          checkboxes.forEach((cb) => {
+            if (cb.checked) {
+              const idx = Number(cb.getAttribute('data-idx'));
+              if (meanings[idx]) selectedMeanings.push(meanings[idx]);
+            }
+          });
+        }
+        if (selectedMeanings.length === 0) {
+          selectedMeanings = meanings.length > 0
+            ? [meanings[0]]
+            : [{ pos, def: def || currentSelectionData?.text || '', defEn, ex, exZh }];
+        }
+
+        const wordsToSave = selectedMeanings.map((m) => ({
           term: term,
-          pos: pos,
-          def: def || currentSelectionData?.text || '',
-          defEn: defEn,
+          pos: m.pos || pos || 'n.',
+          def: m.def || def || currentSelectionData?.text || '',
+          defEn: m.defEn || defEn || '',
           phonetic: phonetic,
-          ex: ex,
-          exZh: exZh,
+          ex: m.ex || ex || '',
+          exZh: m.exZh || exZh || '',
           contextSentence: sentence,
           sourceUrl: window.location.href
-        };
+        }));
 
         saveBtn.disabled = true;
         saveBtn.innerHTML = `<span>⏳ 收錄中...</span>`;
 
-        chrome.runtime.sendMessage({ action: 'SAVE_WORD', word: payload }, (res) => {
+        chrome.runtime.sendMessage({ action: 'SAVE_WORDS', words: wordsToSave }, (res) => {
           if (res?.success) {
             saveBtn.classList.add('saved');
             saveBtn.innerHTML = `
               <svg style="width:15px;height:15px;fill:currentColor" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-              <span>✅ 已加入 VocabMin 單字庫！</span>
+              <span>✅ 已加入 VocabMin 單字庫 (${wordsToSave.length} 義)！</span>
             `;
           } else {
             saveBtn.disabled = false;
