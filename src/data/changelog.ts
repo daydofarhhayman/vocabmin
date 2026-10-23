@@ -22,6 +22,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       '🕒 統一本地時區日期計算與完整備份還原：新增 getLocalDateString() 取代全系統 UTC toISOString().slice(0, 10)，解決台灣時區（UTC+8）早上 00:00～08:00 跨日打卡、連續天數（Streak）與 CSV 匯出檔名日期錯位問題；JSON 備份匯出與匯入完整涵蓋 articles（文章閱讀庫）與 homeConfig（首頁排版）。',
       '🤖 AI 模型備援升級、詞性精準辨識與安全性加固：全面升級後端 Gemini 備援鏈為最新世代模型，加入外部網址擷取 SSRF 內網阻擋防護、字典正則特殊字元轉義與伺服器記憶體快取上限；修正全端詞性正規化順序（先檢查 adverb、phrasal verb、pronoun 再檢查 verb、noun），杜絕副詞誤判為動詞、代名詞誤判為名詞；優化 AI 批次補齊（batch_standardize）優先排入缺少英英釋義或例句的單字，並為刪除動作加上意圖隔離與移除重複確認視窗。',
       '🎯 學習中心、單字庫與首頁互動體驗修復：修正測驗開啟「自動下一題」時最後一題因閉包過期（Stale Closure）少算分數與未更新熟練度的問題；修復單字詳情彈窗（WordDetailModal）編輯或刪除單一詞性後即時反應最新狀態；修正批量標準化進度條 0-based 索引顯示。',
+      '🛡️ 設定頁面防誤觸升級（進階選項收合與 API 金鑰鎖定保護）：將「雲端同步手動管理（推播本機 / 重新拉取）」與「Google Gemini API Key 配置」移入預設收合的「進階選項」區塊，並為 API Key 加上雙重鎖定機制（需點擊「解鎖修改」並按「儲存並鎖定」才會變更，清除時具備二次確認防呆），徹底杜絕日常瀏覽設定或瀏覽器自動填入時意外改動金鑰與觸發全量同步。',
       '🌐 全新推出 Microsoft Edge 專屬擴充功能（extension-edge）與 Chrome 套件升級：新增支援 Edge 側邊欄（Side Panel）常駐模式與即時儲存監聽同步的 Edge 擴充套件，並為雙瀏覽器擴充功能補齊 scripting / tabs / web_accessible_resources 權限與自訂伺服器網域同步支援。'
     ]
   },

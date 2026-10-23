@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Sliders,
@@ -15,7 +15,11 @@ import {
   Layout,
   Sparkles,
   CloudUpload,
-  RefreshCw
+  RefreshCw,
+  ShieldAlert,
+  Lock,
+  Unlock,
+  KeyRound
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
@@ -56,8 +60,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isSyncing
 }) => {
   const t = TRANSLATIONS[settings.lang];
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [isEditingApiKey, setIsEditingApiKey] = useState(false);
+  const [draftApiKey, setDraftApiKey] = useState(settings.geminiApiKey || '');
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowAdvanced(false);
+      setIsEditingApiKey(false);
+    }
+    setDraftApiKey(settings.geminiApiKey || '');
+  }, [isOpen, settings.geminiApiKey]);
 
   if (!isOpen) return null;
+
+  const maskedKey = settings.geminiApiKey
+    ? `${settings.geminiApiKey.slice(0, 6)}${'•'.repeat(Math.max(8, Math.min(18, settings.geminiApiKey.length - 10)))}${settings.geminiApiKey.slice(-4)}`
+    : '';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-enter">
@@ -130,7 +149,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                         <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                          雲端連線正常
+                          雲端自動同步已啟用
                         </span>
                         {wordsCount !== undefined && (
                           <span>• 本機單字：{wordsCount} 個</span>
@@ -144,30 +163,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <LogOut className="w-3.5 h-3.5" />
                       <span>登出</span>
                     </button>
-                  </div>
-
-                  <div className="flex items-center gap-2 pt-1">
-                    <button
-                      onClick={onSyncCloud}
-                      disabled={isSyncing}
-                      className="flex-1 py-2 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-600/20 cursor-pointer"
-                      title="將此裝置的單字全量推播至雲端，供手機等其他裝置存取"
-                    >
-                      <CloudUpload className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                      <span>{isSyncing ? '正在同步至雲端...' : '立即同步至雲端 (推播本機)'}</span>
-                    </button>
-
-                    {onPullCloud && (
-                      <button
-                        onClick={onPullCloud}
-                        disabled={isSyncing}
-                        className="py-2 px-3 bg-slate-100 dark:bg-slate-700/70 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
-                        title="自雲端重新下載最新單字庫（適合手機端或新裝置）"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                        <span>重新拉取</span>
-                      </button>
-                    )}
                   </div>
                 </div>
               )
@@ -188,39 +183,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             )}
-            {/* Custom Gemini API Key */}
-            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Google Gemini API Key（選填）</span>
-                </span>
-                <span className="text-[10px] text-slate-400">
-                  {settings.geminiApiKey ? '✅ 已配置專屬金鑰' : '未配置（自動使用內建雙語詞典與伺服器通道）'}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                若您擁有個人 Google AI Studio API Key，可在此貼上以享最高優先級與專屬配額。若未提供，系統亦會自動透過權威雙語詞典與伺服器通道提供繁中與英英釋義。
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="password"
-                  value={settings.geminiApiKey || ''}
-                  onChange={(e) => onUpdateSettings({ geminiApiKey: e.target.value.trim() })}
-                  placeholder="輸入您的 Gemini API Key (AIzaSy...)"
-                  className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-mono text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                {settings.geminiApiKey && (
-                  <button
-                    type="button"
-                    onClick={() => onUpdateSettings({ geminiApiKey: '' })}
-                    className="px-2.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-300 transition"
-                  >
-                    清除
-                  </button>
-                )}
-              </div>
-            </div>
           </div>
 
           {/* ── 2. 閱讀與字典設定 (Reading & Dictionary) ── */}
@@ -608,7 +570,172 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
 
-          {/* ── 5. 關於與更新日誌 (About & Changelog) ── */}
+          {/* ── 5. 進階選項 (Advanced Options: Cloud Sync & API Key) ── */}
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-700/30 border border-slate-200/80 dark:border-slate-700 space-y-3">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAdvanced((v) => !v);
+                if (showAdvanced) setIsEditingApiKey(false);
+              }}
+              className="w-full flex items-center justify-between text-left cursor-pointer group"
+            >
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-amber-500" />
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 block">
+                    進階選項（雲端同步設定 & API 金鑰）
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    手動全量同步、拉取雲端備份與配置專屬 Gemini API Key（預設收合防誤觸）
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                <span>{showAdvanced ? '收起' : '展開'}</span>
+                {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </div>
+            </button>
+
+            {showAdvanced && (
+              <div className="pt-3 border-t border-slate-200/70 dark:border-slate-700/70 space-y-4 animate-enter">
+                {/* 5-1. 手動雲端同步控制 */}
+                <div className="p-3.5 rounded-xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <CloudCheck className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>雲端同步手動管理</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {user && !user.isAnonymous ? `本機共 ${wordsCount ?? 0} 個單字` : '需登入 Google 帳號'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    平時新增或複習單字皆會自動同步。僅在跨裝置首次對齊或需要強制覆寫/拉取雲端資料時才需使用下方按鈕：
+                  </p>
+                  {user && !user.isAnonymous ? (
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={onSyncCloud}
+                        disabled={isSyncing}
+                        className="flex-1 py-2 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-600/20 cursor-pointer"
+                        title="將此裝置的單字全量推播至雲端，供手機等其他裝置存取"
+                      >
+                        <CloudUpload className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                        <span>{isSyncing ? '正在同步至雲端...' : '立即同步至雲端 (推播本機)'}</span>
+                      </button>
+
+                      {onPullCloud && (
+                        <button
+                          type="button"
+                          onClick={onPullCloud}
+                          disabled={isSyncing}
+                          className="py-2 px-3 bg-slate-100 dark:bg-slate-700/70 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                          title="自雲端重新下載最新單字庫（適合手機端或新裝置）"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                          <span>重新拉取</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 rounded-lg border border-amber-200/60 dark:border-amber-800/60">
+                      目前為訪客模式，請先於上方登入 Google 帳號以啟用雲端同步控制。
+                    </div>
+                  )}
+                </div>
+
+                {/* 5-2. Google Gemini API Key (帶鎖定防誤觸機制) */}
+                <div className="p-3.5 rounded-xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Google Gemini API Key 配置（選填）</span>
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300">
+                      {settings.geminiApiKey ? '✅ 已配置專屬金鑰' : '預設內建通道'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    為防止誤觸修改或瀏覽器自動填入覆蓋，金鑰欄位預設為鎖定狀態。若未配置專屬金鑰，系統會自動透過內建雙語詞典與伺服器通道運作。
+                  </p>
+
+                  {!isEditingApiKey ? (
+                    <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-700">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Lock className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                        <span className="text-xs font-mono text-slate-600 dark:text-slate-300 truncate">
+                          {settings.geminiApiKey ? maskedKey : '尚未設定個人 API Key（使用系統預設通道）'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftApiKey(settings.geminiApiKey || '');
+                          setIsEditingApiKey(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-bold transition flex items-center gap-1 flex-shrink-0 cursor-pointer"
+                      >
+                        <Unlock className="w-3.5 h-3.5" />
+                        <span>解鎖修改</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 pt-1">
+                      <input
+                        type="password"
+                        value={draftApiKey}
+                        onChange={(e) => setDraftApiKey(e.target.value)}
+                        placeholder="貼上您的 Gemini API Key (AIzaSy...)"
+                        autoComplete="off"
+                        className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-700 border border-amber-300 dark:border-amber-600 text-xs font-mono text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        {settings.geminiApiKey && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm('確定要清除目前已儲存的專屬 Gemini API Key 嗎？')) {
+                                onUpdateSettings({ geminiApiKey: '' });
+                                setDraftApiKey('');
+                                setIsEditingApiKey(false);
+                              }
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold hover:bg-rose-100 transition mr-auto cursor-pointer"
+                          >
+                            清除金鑰
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDraftApiKey(settings.geminiApiKey || '');
+                            setIsEditingApiKey(false);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold hover:bg-slate-200 transition cursor-pointer"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onUpdateSettings({ geminiApiKey: draftApiKey.trim() });
+                            setIsEditingApiKey(false);
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-xs cursor-pointer"
+                        >
+                          儲存並鎖定
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── 6. 關於與更新日誌 (About & Changelog) ── */}
           <AboutSection />
         </div>
       </div>
