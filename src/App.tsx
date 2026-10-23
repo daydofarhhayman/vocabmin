@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
 import { Word, WordGroup, DailyStats, AppSettings, ViewTab, POS, Article } from './types';
-import { storage, DEFAULT_SETTINGS, DEFAULT_CATEGORIES } from './services/storage';
+import { storage, DEFAULT_SETTINGS, DEFAULT_CATEGORIES, getLocalDateString } from './services/storage';
 import { applySRSDecay } from './services/srs';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
@@ -83,19 +83,42 @@ export default function App() {
     });
   }, [words]);
 
+  // Keep detailWordGroup reactive to changes in words
+  const currentDetailWordGroup = useMemo<WordGroup | null>(() => {
+    if (!detailWordGroup) return null;
+    const clean = detailWordGroup.term.trim().toLowerCase();
+    const matchingEntries = words.filter((w) => w.term.trim().toLowerCase() === clean);
+    if (matchingEntries.length === 0) return null;
+    const minLevel = Math.min(...matchingEntries.map((e) => e.level || 0));
+    const minNextReview = Math.min(...matchingEntries.map((e) => e.nextReview || Date.now()));
+    const maxLastReview = Math.max(...matchingEntries.map((e) => e.lastReview || 0));
+    const avgInterval = Math.round(
+      matchingEntries.reduce((acc, curr) => acc + (curr.interval || 1), 0) / matchingEntries.length
+    );
+    return {
+      term: matchingEntries[0].term,
+      entries: matchingEntries,
+      category: matchingEntries.find((e) => e.category)?.category,
+      minLevel,
+      interval: avgInterval,
+      nextReview: minNextReview,
+      lastReview: maxLastReview
+    };
+  }, [detailWordGroup, words]);
+
   const handleUpdateHomeConfig = useCallback((newConfig: HomeConfig) => {
     setHomeConfig(newConfig);
-    saveHomeConfig(newConfig);
+    saveHomeConfig(newConfig, user?.uid);
     if (user) {
-      storage.saveCloudHomeConfig(newConfig).catch(console.error);
+      storage.saveCloudHomeConfig(newConfig, user.uid).catch(console.error);
     }
   }, [user]);
 
   const handleResetHomeConfig = useCallback(() => {
     setHomeConfig(DEFAULT_HOME_CONFIG);
-    saveHomeConfig(DEFAULT_HOME_CONFIG);
+    saveHomeConfig(DEFAULT_HOME_CONFIG, user?.uid);
     if (user) {
-      storage.saveCloudHomeConfig(DEFAULT_HOME_CONFIG).catch(console.error);
+      storage.saveCloudHomeConfig(DEFAULT_HOME_CONFIG, user.uid).catch(console.error);
     }
   }, [user]);
 
@@ -190,10 +213,12 @@ export default function App() {
         const localStats = storage.getLocalStats(currentUser.uid);
         const localSettings = storage.getLocalSettings(currentUser.uid);
         const localArticles = storage.getLocalArticles(currentUser.uid);
+        const localHome = loadHomeConfig(currentUser.uid);
 
         setSettings(localSettings);
         setDailyStats(localStats);
         setArticles(localArticles);
+        setHomeConfig(localHome);
 
         const { updated } = applySRSDecay(localWords);
         wordsRef.current = updated;
@@ -247,10 +272,10 @@ export default function App() {
             }
             if ((cloudData as any).homeConfig) {
               setHomeConfig((cloudData as any).homeConfig);
-              saveHomeConfig((cloudData as any).homeConfig);
+              saveHomeConfig((cloudData as any).homeConfig, currentUser.uid);
             }
             if ((cloudData as any).readerSettings) {
-              storage.saveLocalReaderSettings((cloudData as any).readerSettings);
+              storage.saveLocalReaderSettings((cloudData as any).readerSettings, currentUser.uid);
             }
           }
         } catch (syncErr) {
@@ -262,6 +287,8 @@ export default function App() {
         setWords([]);
         setDailyStats({});
         setArticles([]);
+        setSettings(DEFAULT_SETTINGS);
+        setHomeConfig(DEFAULT_HOME_CONFIG);
       }
     });
 
@@ -296,7 +323,7 @@ export default function App() {
   // Record daily activity helper
   const recordActivity = useCallback(
     (type: 'added' | 'reviewed' | 'quizzes', increment: number = 1) => {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       setDailyStats((prev) => {
         const current = prev[today] || { added: 0, reviewed: 0, quizzes: 0 };
         const updated = {
@@ -308,7 +335,7 @@ export default function App() {
         };
         storage.saveLocalStats(updated, user?.uid);
         if (user) {
-          storage.saveCloudStats(updated).catch(console.error);
+          storage.saveCloudStats(updated, user.uid).catch(console.error);
         }
         return updated;
       });
@@ -332,7 +359,7 @@ export default function App() {
       if (newSettings.accentColor) {
         setHomeConfig((prevHome) => {
           const updatedHome = { ...prevHome, accentColor: newSettings.accentColor as any };
-          saveHomeConfig(updatedHome);
+          saveHomeConfig(updatedHome, user?.uid);
           return updatedHome;
         });
       }
@@ -398,7 +425,7 @@ export default function App() {
       showToast(`成功新增 ${created.length} 個單字！`);
 
       if (user) {
-        storage.saveCloudWordsOnly(updated, user.uid).catch(console.error);
+        storage.upsertCloudWords(created, user.uid).catch(console.error);
       }
     },
     [user, recordActivity, showToast]
@@ -507,7 +534,7 @@ export default function App() {
       setWords(finalWords);
       storage.saveLocalWords(finalWords, user?.uid);
       if (user) {
-        storage.saveCloudWordsOnly(finalWords, user.uid).catch(console.error);
+        storage.reconcileCloudWordGroup(oldEntries.map((o) => o.id), newEntries, user.uid).catch(console.error);
       }
       showToast('單字修改成功！');
     },
@@ -852,30 +879,37 @@ export default function App() {
 
   // Delete word group
   const handleDeleteWordGroup = useCallback(
-    (term: string) => {
+    (term: string, skipConfirm?: boolean) => {
+      const executeDelete = () => {
+        const clean = term.trim().toLowerCase();
+        const currentWords = wordsRef.current;
+        const updated = currentWords.filter(
+          (w) => w.term.trim().toLowerCase() !== clean
+        );
+        wordsRef.current = updated;
+        setWords(updated);
+        storage.saveLocalWords(updated, user?.uid);
+        if (user) {
+          storage.deleteCloudWordsByTerm(clean, user.uid).catch((err) =>
+            console.error('Cloud delete term error:', err)
+          );
+        }
+        setConfirmConfig((c) => ({ ...c, isOpen: false }));
+        showToast(`已刪除「${term}」`);
+      };
+
+      if (skipConfirm) {
+        executeDelete();
+        return;
+      }
+
       setConfirmConfig({
         isOpen: true,
         title: '刪除單字',
         message: `確定要從單字庫中刪除「${term}」及其所有詞性釋義嗎？`,
         type: 'danger',
         confirmText: '確認刪除',
-        onConfirm: () => {
-          const clean = term.trim().toLowerCase();
-          const currentWords = wordsRef.current;
-          const updated = currentWords.filter(
-            (w) => w.term.trim().toLowerCase() !== clean
-          );
-          wordsRef.current = updated;
-          setWords(updated);
-          storage.saveLocalWords(updated, user?.uid);
-          if (user) {
-            storage.deleteCloudWordsByTerm(clean, user.uid).catch((err) =>
-              console.error('Cloud delete term error:', err)
-            );
-          }
-          setConfirmConfig((c) => ({ ...c, isOpen: false }));
-          showToast(`已刪除「${term}」`);
-        }
+        onConfirm: executeDelete
       });
     },
     [user, showToast]
@@ -916,15 +950,24 @@ export default function App() {
         updatedList.map((u) => [(u.term || '').trim().toLowerCase(), u])
       );
       const currentWords = wordsRef.current;
+      const changedBatch: { id: string; data: Partial<Word> }[] = [];
       const merged = currentWords.map((w) => {
         const u = updateByTerm.get((w.term || '').trim().toLowerCase());
         if (u) {
+          const nextPos = u.pos ? normalizePos(u.pos) : w.pos;
+          const nextDef = (u.def && u.def.trim()) ? u.def.trim() : w.def;
+          const nextDefEn = (u.defEn && u.defEn.trim()) ? u.defEn.trim() : w.defEn;
+          const nextEx = (u.ex && u.ex.trim()) ? u.ex.trim() : w.ex;
+          changedBatch.push({
+            id: w.id,
+            data: { pos: nextPos, def: nextDef, defEn: nextDefEn, ex: nextEx }
+          });
           return {
             ...w,
-            pos: u.pos || w.pos,
-            def: u.def || w.def,
-            defEn: u.defEn !== undefined ? u.defEn : w.defEn,
-            ex: u.ex !== undefined ? u.ex : w.ex
+            pos: nextPos,
+            def: nextDef,
+            defEn: nextDefEn,
+            ex: nextEx
           };
         }
         return w;
@@ -932,8 +975,8 @@ export default function App() {
       wordsRef.current = merged;
       setWords(merged);
       storage.saveLocalWords(merged, user?.uid);
-      if (user) {
-        storage.saveCloudWordsOnly(merged, user.uid).catch(console.error);
+      if (user && changedBatch.length > 0) {
+        storage.batchUpdateCloudWords(changedBatch, user.uid).catch(console.error);
       }
       showToast('成功完成單字庫標準化更新！');
     },
@@ -942,7 +985,7 @@ export default function App() {
 
   // Import / Export
   const handleExportJSON = () => {
-    storage.exportJSON(wordsRef.current, dailyStats, settings);
+    storage.exportJSON(wordsRef.current, dailyStats, settings, articles, homeConfig);
     showToast('備份 JSON 已匯出！');
   };
 
@@ -959,13 +1002,45 @@ export default function App() {
         let count = 0;
         let mergedWordsList: Word[] = wordsRef.current;
         let mergedStatsData: DailyStats = dailyStats;
+        let mergedSettingsData: AppSettings = settings;
+        let mergedArticlesData: Article[] = articles;
+        let mergedHomeConfigData: HomeConfig = homeConfig;
 
         if (data.vocab_data && Array.isArray(data.vocab_data)) {
+          const now = Date.now();
           const currentIds = new Set(wordsRef.current.map((w) => w.id));
+          const currentSemanticKeys = new Set(
+            wordsRef.current.map(
+              (w) =>
+                `${(w.term || '').trim().toLowerCase()}||${(w.pos || '').trim().toLowerCase()}||${(w.def || '').trim().toLowerCase()}`
+            )
+          );
           const merged = [...wordsRef.current];
-          data.vocab_data.forEach((w: Word) => {
-            if (!currentIds.has(w.id)) {
-              merged.unshift(w);
+          data.vocab_data.forEach((raw: Partial<Word>, idx: number) => {
+            const term = (raw.term || '').trim();
+            const def = (raw.def || '').trim();
+            if (!term || !def) return;
+            const pos = normalizePos(raw.pos);
+            const semanticKey = `${term.toLowerCase()}||${pos.toLowerCase()}||${def.toLowerCase()}`;
+            const safeId = (raw.id && String(raw.id).trim()) || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
+            if (!currentIds.has(safeId) && !currentSemanticKeys.has(semanticKey)) {
+              currentIds.add(safeId);
+              currentSemanticKeys.add(semanticKey);
+              merged.unshift({
+                id: safeId,
+                term,
+                pos,
+                def,
+                defEn: raw.defEn ? String(raw.defEn).trim() : undefined,
+                ex: raw.ex ? String(raw.ex).trim() : '',
+                category: raw.category ? String(raw.category).trim() : undefined,
+                level: typeof raw.level === 'number' ? raw.level : 0,
+                interval: typeof raw.interval === 'number' && raw.interval > 0 ? raw.interval : 1,
+                easeFactor: typeof raw.easeFactor === 'number' && raw.easeFactor > 0 ? raw.easeFactor : 2.5,
+                timestamp: raw.timestamp || now,
+                lastReview: raw.lastReview || now,
+                nextReview: raw.nextReview || now + 86400000
+              });
               count++;
             }
           });
@@ -974,15 +1049,42 @@ export default function App() {
           setWords(merged);
           storage.saveLocalWords(merged, user?.uid);
         }
-        if (data.vocab_stats) {
+        if (data.vocab_stats && typeof data.vocab_stats === 'object') {
           const mergedStats = { ...dailyStats, ...data.vocab_stats };
           mergedStatsData = mergedStats;
           setDailyStats(mergedStats);
           storage.saveLocalStats(mergedStats, user?.uid);
         }
+        if (data.settings && typeof data.settings === 'object') {
+          mergedSettingsData = { ...settings, ...data.settings };
+          setSettings(mergedSettingsData);
+          storage.saveLocalSettings(mergedSettingsData, user?.uid);
+        }
+        if (Array.isArray(data.articles) && data.articles.length > 0) {
+          const existingArtIds = new Set(articles.map((a) => a.id));
+          const extraArticles = data.articles.filter((a: Article) => a && a.id && !existingArtIds.has(a.id));
+          if (extraArticles.length > 0) {
+            mergedArticlesData = [...extraArticles, ...articles];
+            setArticles(mergedArticlesData);
+            storage.saveLocalArticles(mergedArticlesData, user?.uid);
+          }
+        }
+        if (data.homeConfig && typeof data.homeConfig === 'object') {
+          mergedHomeConfigData = { ...homeConfig, ...data.homeConfig };
+          setHomeConfig(mergedHomeConfigData);
+          saveHomeConfig(mergedHomeConfigData, user?.uid);
+        }
 
         if (user) {
-          storage.syncToCloud(mergedWordsList, mergedStatsData, settings, articles, homeConfig, undefined, user.uid).catch(console.error);
+          storage.syncToCloud(
+            mergedWordsList,
+            mergedStatsData,
+            mergedSettingsData,
+            mergedArticlesData,
+            mergedHomeConfigData,
+            undefined,
+            user.uid
+          ).catch(console.error);
         }
 
         showToast(`成功匯入 ${count} 個單字，已自動同步至雲端資料庫！`);
@@ -1086,6 +1188,8 @@ export default function App() {
       setWords([]);
       setDailyStats({});
       setArticles([]);
+      setSettings(DEFAULT_SETTINGS);
+      setHomeConfig(DEFAULT_HOME_CONFIG);
       setCurrentTab('home');
       setIsSettingsOpen(false);
       setCambridgeWord(null);
@@ -1128,8 +1232,9 @@ export default function App() {
     setIsSyncing(true);
     try {
       const cloudData = await storage.syncFromCloud(user.uid);
-      if (cloudData && Array.isArray(cloudData.words) && cloudData.words.length > 0) {
-        const { updated } = applySRSDecay(cloudData.words);
+      if (cloudData) {
+        const cloudWords = Array.isArray(cloudData.words) ? cloudData.words : [];
+        const { updated } = applySRSDecay(cloudWords);
         wordsRef.current = updated;
         setWords(updated);
         storage.saveLocalWords(updated, user.uid);
@@ -1141,9 +1246,20 @@ export default function App() {
           setDailyStats(cloudData.stats);
           storage.saveLocalStats(cloudData.stats, user.uid);
         }
-        showToast(`✅ 成功自雲端下載 ${updated.length} 個單字！`);
+        if (cloudData.articles !== undefined) {
+          setArticles(cloudData.articles);
+          storage.saveLocalArticles(cloudData.articles, user.uid);
+        }
+        if (cloudData.homeConfig) {
+          setHomeConfig(cloudData.homeConfig);
+          saveHomeConfig(cloudData.homeConfig, user.uid);
+        }
+        if (cloudData.readerSettings) {
+          storage.saveLocalReaderSettings(cloudData.readerSettings, user.uid);
+        }
+        showToast(`✅ 成功自雲端同步最新資料（共 ${updated.length} 個單字）！`);
       } else {
-        showToast('⚠️ 雲端尚無單字資料，請先在有單字的電腦端點擊「立即同步至雲端」');
+        showToast('⚠️ 無法連線至雲端資料庫，請檢查網路連線');
       }
     } catch (err: any) {
       showToast(`❌ 下載失敗：${err?.message || '發生未知錯誤'}`);
@@ -1307,6 +1423,7 @@ export default function App() {
 
         {currentTab === 'reader' && (
           <ArticleReaderView
+            userUid={user?.uid}
             words={words}
             articles={articles}
             onArticlesChange={handleArticlesChange}
@@ -1321,6 +1438,7 @@ export default function App() {
 
         {currentTab === 'ai' && (
           <AIAssistantView
+            userUid={user?.uid}
             settings={settings}
             existingWords={words}
             existingArticles={articles}
@@ -1364,6 +1482,7 @@ export default function App() {
 
       {/* Floating Contextual AI Assistant Orb & Drawer */}
       <FloatingAIAssistant
+        userUid={user?.uid}
         currentTab={currentTab}
         words={words}
         articles={articles}
@@ -1444,10 +1563,10 @@ export default function App() {
           />
         )}
 
-        {detailWordGroup && (
+        {currentDetailWordGroup && (
           <WordDetailModal
-            group={detailWordGroup}
-            isOpen={!!detailWordGroup}
+            group={currentDetailWordGroup}
+            isOpen={!!currentDetailWordGroup}
             onClose={() => setDetailWordGroup(null)}
             settings={settings}
             onEditWord={(w) => {
@@ -1455,6 +1574,9 @@ export default function App() {
               setEditModalWord(w);
             }}
             onDeleteGroup={handleDeleteWordGroup}
+            onDeleteSingleWord={handleDeleteSingleWord}
+            onAddWords={handleAddWords}
+            onUpdateWordGroup={handleUpdateWordGroup}
             onOpenCambridge={(term) => setCambridgeWord(term)}
           />
         )}

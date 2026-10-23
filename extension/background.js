@@ -117,11 +117,13 @@ async function fallbackDictionaryLookup(word, sentence = '') {
         phonetic = data[0].phonetic || (data[0].phonetics?.find(p => p.text)?.text) || '';
         const meaning = data[0].meanings?.[0];
         if (meaning) {
-          const rawPos = meaning.partOfSpeech || 'n.';
-          pos = rawPos.startsWith('n') ? 'n.' :
-                rawPos.startsWith('v') ? 'v.' :
+          const rawPos = (meaning.partOfSpeech || 'n.').toLowerCase();
+          pos = rawPos.startsWith('adv') ? 'adv.' :
                 rawPos.startsWith('adj') ? 'adj.' :
-                rawPos.startsWith('adv') ? 'adv.' : 'phr.';
+                rawPos.startsWith('phr') ? 'phr.' :
+                rawPos.startsWith('pron') ? 'other' :
+                rawPos.startsWith('v') ? 'v.' :
+                rawPos.startsWith('n') ? 'n.' : 'other';
           const defObj = meaning.definitions?.[0];
           if (defObj) {
             defEn = defObj.definition || '';
@@ -330,9 +332,16 @@ async function handleSaveWord(wordItem) {
 
   // Broadcast to open VocabMin tabs if any
   try {
+    const store = await chrome.storage.local.get('vocabmin_api_url');
+    const customDomain = (store.vocabmin_api_url || '').replace(/\/+$/, '');
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
-      if (tab.url && (tab.url.includes('vocabmin') || tab.url.includes('localhost:3000'))) {
+      if (
+        tab.url &&
+        (tab.url.includes('vocabmin') ||
+          tab.url.includes('localhost:3000') ||
+          (customDomain && tab.url.startsWith(customDomain)))
+      ) {
         chrome.tabs.sendMessage(tab.id, {
           action: 'VOCABMIN_NEW_WORD_ADDED',
           word: entry
@@ -347,12 +356,17 @@ async function handleSaveWord(wordItem) {
 // Sync saved words to active VocabMin tab
 async function handleSyncToVocabMinTab(words) {
   const store = await chrome.storage.local.get('vocabmin_api_url');
-  const targetDomain = store.vocabmin_api_url || 'https://vocabmin.ai.studio';
+  const targetDomain = (store.vocabmin_api_url || 'https://vocabmin.ai.studio').replace(/\/+$/, '');
 
   const tabs = await chrome.tabs.query({});
   let foundTab = null;
   for (const t of tabs) {
-    if (t.url && (t.url.includes('vocabmin') || t.url.includes('localhost:3000'))) {
+    if (
+      t.url &&
+      (t.url.includes('vocabmin') ||
+        t.url.includes('localhost:3000') ||
+        (targetDomain && t.url.startsWith(targetDomain)))
+    ) {
       foundTab = t;
       break;
     }

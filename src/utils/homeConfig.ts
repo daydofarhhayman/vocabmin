@@ -282,9 +282,15 @@ export const DEFAULT_HOME_CONFIG: HomeConfig = {
 
 const STORAGE_KEY_HOME_CONFIG = 'vocabmin_home_config_v2';
 
-export function loadHomeConfig(): HomeConfig {
+function getHomeConfigKey(uid?: string): string {
+  return uid ? `${STORAGE_KEY_HOME_CONFIG}_${uid}` : STORAGE_KEY_HOME_CONFIG;
+}
+
+export function loadHomeConfig(uid?: string): HomeConfig {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_HOME_CONFIG);
+    const raw =
+      (uid ? localStorage.getItem(getHomeConfigKey(uid)) : null) ||
+      localStorage.getItem(STORAGE_KEY_HOME_CONFIG);
     if (!raw) return DEFAULT_HOME_CONFIG;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return DEFAULT_HOME_CONFIG;
@@ -310,9 +316,12 @@ export function loadHomeConfig(): HomeConfig {
   }
 }
 
-export function saveHomeConfig(config: HomeConfig): void {
+export function saveHomeConfig(config: HomeConfig, uid?: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY_HOME_CONFIG, JSON.stringify(config));
+    localStorage.setItem(getHomeConfigKey(uid), JSON.stringify(config));
+    if (!uid) {
+      localStorage.setItem(STORAGE_KEY_HOME_CONFIG, JSON.stringify(config));
+    }
   } catch (e) {
     console.error('Failed to save home config:', e);
   }

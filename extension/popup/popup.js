@@ -331,6 +331,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       .replace(/'/g, '&#039;');
   }
 
+  // Listen for live updates when words are saved from content scripts
+  if (chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'local' && changes.vocabmin_saved_words) {
+        allSavedWords = changes.vocabmin_saved_words.newValue || [];
+        const query = wordsFilterInput.value.trim().toLowerCase();
+        if (query) {
+          renderSavedWords(
+            allSavedWords.filter(
+              (w) =>
+                w.term.toLowerCase().includes(query) ||
+                (w.def && w.def.toLowerCase().includes(query)) ||
+                (w.ex && w.ex.toLowerCase().includes(query))
+            )
+          );
+        } else {
+          renderSavedWords(allSavedWords);
+        }
+      }
+    });
+  }
+
   // Initial load
   loadSavedWords();
   loadSettings();

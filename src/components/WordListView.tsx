@@ -912,10 +912,10 @@ export const WordListView: React.FC<WordListViewProps> = ({
       )}
 
       {/* Word Detail Modal */}
-      {selectedGroup && (
+      {currentSelectedGroup && (
         <WordDetailModal
-          group={selectedGroup}
-          isOpen={!!selectedGroup}
+          group={currentSelectedGroup}
+          isOpen={!!currentSelectedGroup}
           onClose={() => setSelectedGroup(null)}
           settings={settings}
           onEditWord={onEditWord}
@@ -936,7 +936,7 @@ export const WordListView: React.FC<WordListViewProps> = ({
           }}
           hasPrev={selectedIndex > 0}
           hasNext={selectedIndex >= 0 && selectedIndex < filteredGroups.length - 1}
-          currentIndex={selectedIndex >= 0 ? selectedIndex + 1 : undefined}
+          currentIndex={selectedIndex >= 0 ? selectedIndex : undefined}
           totalCount={filteredGroups.length}
         />
       )}

@@ -63,6 +63,7 @@ import confetti from 'canvas-confetti';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ArticleReaderViewProps {
+  userUid?: string;
   words: Word[];
   onAddWords: (newWords: Partial<Word>[]) => void;
   onOpenCambridge: (term: string) => void;
@@ -91,6 +92,7 @@ interface InspectedWordData {
 }
 
 export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
+  userUid,
   words,
   onAddWords,
   onOpenCambridge,
@@ -102,10 +104,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   onArticlesChange,
   appSettings
 }) => {
-  const effectiveApiKey = appSettings?.geminiApiKey || storage.getLocalSettings()?.geminiApiKey;
+  const effectiveApiKey = appSettings?.geminiApiKey || storage.getLocalSettings(userUid)?.geminiApiKey;
 
   // State: Articles List & Active Article
-  const [articles, setArticles] = useState<Article[]>(() => externalArticles || storage.getLocalArticles());
+  const [articles, setArticles] = useState<Article[]>(() => externalArticles || storage.getLocalArticles(userUid));
   const [activeArticleId, setActiveArticleId] = useState<string | null>(initialArticleId || null);
 
   // Sync active reading article with parent App so AI assistant knows exactly what is being read
@@ -121,16 +123,19 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
   useEffect(() => {
     if (initialArticleId) {
-      const list = externalArticles || storage.getLocalArticles();
+      const list = externalArticles || storage.getLocalArticles(userUid);
       setArticles(list);
       setActiveArticleId(initialArticleId);
     }
-  }, [initialArticleId, externalArticles]);
+  }, [initialArticleId, externalArticles, userUid]);
 
   // State: Reader Settings
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>(() =>
-    storage.getLocalReaderSettings()
+    storage.getLocalReaderSettings(userUid)
   );
+  useEffect(() => {
+    setReaderSettings(storage.getLocalReaderSettings(userUid));
+  }, [userUid]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTopBarCollapsed, setIsTopBarCollapsed] = useState(false);
 
@@ -252,8 +257,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const updateSettings = (newSettings: Partial<ReaderSettings>) => {
     setReaderSettings((prev) => {
       const updated = { ...prev, ...newSettings };
-      storage.saveLocalReaderSettings(updated);
-      storage.saveCloudReaderSettings(updated).catch(console.error);
+      storage.saveLocalReaderSettings(updated, userUid);
+      storage.saveCloudReaderSettings(updated, userUid).catch(console.error);
       return updated;
     });
   };
@@ -316,7 +321,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
   // Update Article in Local Storage & State
   const handleUpdateArticle = (updatedArticle: Article) => {
-    const updatedList = storage.saveArticle(updatedArticle);
+    const updatedList = storage.saveArticle(updatedArticle, userUid);
     setArticles(updatedList);
     onArticlesChange?.(updatedList);
   };
@@ -1087,7 +1092,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
       if (res.ok) {
         const newArt: Article = await res.json();
-        const updatedList = storage.saveArticle(newArt);
+        const updatedList = storage.saveArticle(newArt, userUid);
         setArticles(updatedList);
         onArticlesChange?.(updatedList);
         setActiveArticleId(newArt.id);
@@ -1128,7 +1133,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       isCustom: true
     };
 
-    const updated = storage.saveArticle(newArt);
+    const updated = storage.saveArticle(newArt, userUid);
     setArticles(updated);
     onArticlesChange?.(updated);
     setActiveArticleId(newArt.id);
@@ -3666,7 +3671,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           if (confirm(`確定要刪除「${art.title}」嗎？`)) {
-                            const updated = storage.deleteArticle(art.id);
+                            const updated = storage.deleteArticle(art.id, userUid);
                             setArticles(updated);
                             onArticlesChange?.(updated);
                           }

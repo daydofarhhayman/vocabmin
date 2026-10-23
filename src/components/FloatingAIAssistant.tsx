@@ -30,12 +30,13 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ViewTab, Word, Article, DailyStats, AppSettings } from '../types';
-import { DEFAULT_CATEGORIES, getAllWordCategories } from '../services/storage';
+import { DEFAULT_CATEGORIES, getAllWordCategories, getLocalDateString } from '../services/storage';
 import { AIArticleCard } from './AIArticleCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import type { ActiveStudyQuestion } from './StudyHubView';
 
 interface FloatingAIAssistantProps {
+  userUid?: string;
   currentTab: ViewTab;
   words: Word[];
   articles: Article[];
@@ -52,7 +53,7 @@ interface FloatingAIAssistantProps {
   onClearAllArticles?: () => void;
   onDeleteArticle?: (titleOrId: string) => void;
   onClearAllWords?: () => void;
-  onDeleteWordGroup?: (term: string) => void;
+  onDeleteWordGroup?: (term: string, skipConfirm?: boolean) => void;
   onBatchStandardizeWords?: (words: Partial<Word>[]) => void;
   onDeduplicateWords?: () => void;
   onResetAllMastery?: () => void;
@@ -241,6 +242,7 @@ const SCENARIO_CONFIGS: Record<ViewTab, ScenarioConfig> = {
 };
 
 export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
+  userUid,
   currentTab,
   words,
   articles,
@@ -272,15 +274,25 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const FLOATING_AI_STORAGE_KEY = 'vocabmin_floating_ai_history';
+  const FLOATING_AI_STORAGE_KEY = userUid
+    ? `vocabmin_floating_ai_history_${userUid}`
+    : 'vocabmin_floating_ai_history';
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
-      const saved = localStorage.getItem('vocabmin_floating_ai_history');
+      const saved = localStorage.getItem(FLOATING_AI_STORAGE_KEY);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(FLOATING_AI_STORAGE_KEY);
+      setMessages(saved ? JSON.parse(saved) : []);
+    } catch {
+      setMessages([]);
+    }
+  }, [FLOATING_AI_STORAGE_KEY]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [addedWordsMap, setAddedWordsMap] = useState<Record<string, boolean>>({});
@@ -435,6 +447,30 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     return articles.find((a) => a.id === activeReaderArticleId) || null;
   }, [currentTab, activeReaderArticleId, articles]);
 
+  // Compute real learnedToday and dailyStreak from dailyStats date keys
+  const { learnedTodayCount, computedStreak } = useMemo(() => {
+    if (!dailyStats) return { learnedTodayCount: 0, computedStreak: 0 };
+    const todayKey = getLocalDateString();
+    const todayRec = dailyStats[todayKey];
+    const learned = todayRec ? (todayRec.added || 0) + (todayRec.reviewed || 0) : 0;
+
+    let streak = 0;
+    const d = new Date();
+    for (let i = 0; i < 365; i++) {
+      const checkDate = new Date(d);
+      checkDate.setDate(d.getDate() - i);
+      const k = getLocalDateString(checkDate);
+      const rec = dailyStats[k];
+      const active = rec && (rec.added > 0 || rec.reviewed > 0 || rec.quizzes > 0);
+      if (active) {
+        streak++;
+      } else if (i > 0) {
+        break;
+      }
+    }
+    return { learnedTodayCount: learned, computedStreak: streak };
+  }, [dailyStats]);
+
   // Active scenario config dynamically tailored to user's live screen state
   const scenario = useMemo(() => {
     const base = SCENARIO_CONFIGS[currentTab] || SCENARIO_CONFIGS.home;
@@ -472,7 +508,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     if (currentTab === 'home') {
       return {
         ...base,
-        desc: `連續打卡 ${dailyStats?.streak || 0} 天・待複習 ${dueWordsCount} 字・今日已學 ${dailyStats?.learnedToday || 0} 字`,
+        desc: `連續打卡 ${computedStreak} 天・待複習 ${dueWordsCount} 字・今日已學 ${learnedTodayCount} 字`,
         chips: [
           '根據我今日的待複習狀況，為我規劃最高效的學習順序',
           '分析我目前最常遺忘的生疏單字，並給予深度記憶建議',
@@ -618,7 +654,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           type: 'danger',
           confirmText: '確定刪除',
           onConfirm: () => {
-            if (term) onDeleteWordGroup?.(term);
+            if (term) onDeleteWordGroup?.(term, true);
             setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
             setMessages((prev) => [
               ...prev,
@@ -633,7 +669,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           }
         });
       } else {
-        if (term) onDeleteWordGroup?.(term);
+        if (term) onDeleteWordGroup?.(term, true);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
     } else if (actionType === 'reset_mastery') {
@@ -1143,8 +1179,8 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         totalWordsCount: words.length,
         totalArticlesCount: articles.length,
         dueWordsCount,
-        dailyStreak: dailyStats?.streak || 0,
-        learnedToday: dailyStats?.learnedToday || 0,
+        dailyStreak: computedStreak,
+        learnedToday: learnedTodayCount,
         isReadingArticle: !!currentArticle,
         activeArticleTitle: currentArticle?.title || null,
         activeStudyQuestion: (currentTab === 'review' || currentTab === 'quiz') ? activeStudyQuestion : null,
@@ -1187,14 +1223,23 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           }
         : undefined;
 
-      // Sample of user words for vocabulary relevance
-      const existingWordsSummary = words.slice(0, 30).map((w) => ({
-        term: w.term,
-        pos: w.pos,
-        def: w.def,
-        level: w.level,
-        category: w.category || '未分類'
-      }));
+      // Sample of user words for vocabulary relevance (prioritize words missing defEn or ex so batch_standardize works across large libraries)
+      const existingWordsSummary = [...words]
+        .sort((a, b) => {
+          const aMissing = (!a.defEn?.trim() || !a.ex?.trim()) ? 0 : 1;
+          const bMissing = (!b.defEn?.trim() || !b.ex?.trim()) ? 0 : 1;
+          return aMissing - bMissing;
+        })
+        .slice(0, 60)
+        .map((w) => ({
+          term: w.term,
+          pos: w.pos,
+          def: w.def,
+          defEn: w.defEn,
+          ex: w.ex,
+          level: w.level,
+          category: w.category || '未分類'
+        }));
 
       // Existing articles summary across the library
       const existingArticlesSummary = articles.slice(0, 20).map((a) => ({
@@ -1287,9 +1332,14 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
       // Detect category context
       const isCategoryContext = /(?:分類|自訂分類)/i.test(trimmedLower) || (botAction && String(botAction.type).includes('category'));
 
-      // Check for delete category intent (PRIORITIZED before clear_all_words)
+      // Check for delete category intent (PRIORITIZED before clear_all_words, but NOT when deleting a word inside a category)
+      const isDeletingWordInCat =
+        /(?:分類).*(?:中的|裡的|裏的|裡面的)?.*(?:單字|單詞|生詞)/i.test(trimmedLower) ||
+        /(?:刪除|移除|清掉|拿掉)\s*(?:單字|單詞|生詞)/i.test(trimmedLower);
+
       const isUserAskingDeleteCat =
         !isQuestionOrHowTo &&
+        !isDeletingWordInCat &&
         (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(trimmedLower) ||
          /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(trimmedLower));
 
@@ -1347,12 +1397,11 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         }
       }
 
-      // Quarantine: Block invalid delete_word when term is a category or in category context
+      // Quarantine: Block invalid delete_word when term is a category or user is deleting a category
       if (botAction?.type === 'delete_word') {
         const term = (botAction.deleteWord?.term || '').toLowerCase();
         const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
         if (
-          isCategoryContext ||
           isUserAskingDeleteCat ||
           term.includes('分類') ||
           allKnownCats.some((c) => c.toLowerCase() === term)
@@ -1539,7 +1588,14 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
               .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
               .map((w) => w.term);
           } else {
-            termsList = words.map((w) => w.term);
+            const mentioned = words
+              .filter((w) => searchSource.toLowerCase().includes(w.term.toLowerCase()))
+              .map((w) => w.term);
+            if (mentioned.length > 0) {
+              termsList = mentioned;
+            } else if (/(?:所有|全部|整庫|全庫|整個字庫)/.test(searchSource)) {
+              termsList = words.map((w) => w.term);
+            }
           }
         }
 

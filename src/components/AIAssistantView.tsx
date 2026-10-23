@@ -57,12 +57,13 @@ interface Message {
 }
 
 interface AIAssistantViewProps {
+  userUid?: string;
   settings: AppSettings;
   existingWords: Word[];
   existingArticles: Article[];
   onAddWords: (newWords: Partial<Word>[]) => void;
   onUpdateWordGroup: (term: string, updatedEntries: Word[]) => void;
-  onDeleteWordGroup: (term: string) => void;
+  onDeleteWordGroup: (term: string, skipConfirm?: boolean) => void;
   onBatchStandardizeWords: (words: Partial<Word>[]) => void;
   onDeduplicateWords: () => void;
   onClearAllWords: () => void;
@@ -161,6 +162,7 @@ const SCENARIOS = [
 ];
 
 export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
+  userUid,
   settings,
   existingWords,
   existingArticles,
@@ -186,16 +188,26 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   onDeleteCategory,
   onRequestConfirm
 }) => {
-  const AI_VIEW_STORAGE_KEY = 'vocabmin_ai_assistant_view_history';
+  const AI_VIEW_STORAGE_KEY = userUid
+    ? `vocabmin_ai_assistant_view_history_${userUid}`
+    : 'vocabmin_ai_assistant_view_history';
   const [activeScenario, setActiveScenario] = useState<AIScenario>('all');
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
-      const saved = localStorage.getItem('vocabmin_ai_assistant_view_history');
+      const saved = localStorage.getItem(AI_VIEW_STORAGE_KEY);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(AI_VIEW_STORAGE_KEY);
+      setMessages(saved ? JSON.parse(saved) : []);
+    } catch {
+      setMessages([]);
+    }
+  }, [AI_VIEW_STORAGE_KEY]);
   const [inputPrompt, setInputPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -339,14 +351,23 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         wordsWithCategories: existingWords.map((w) => ({ term: w.term, category: w.category || '未分類' }))
       };
 
-      // Summary samples of existing words and articles
-      const existingWordsSummary = existingWords.slice(0, 50).map((w) => ({
-        term: w.term,
-        pos: w.pos,
-        def: w.def,
-        level: w.level,
-        category: w.category || '未分類'
-      }));
+      // Summary samples of existing words and articles (prioritize words missing defEn or ex so batch_standardize works across large libraries)
+      const existingWordsSummary = [...existingWords]
+        .sort((a, b) => {
+          const aMissing = (!a.defEn?.trim() || !a.ex?.trim()) ? 0 : 1;
+          const bMissing = (!b.defEn?.trim() || !b.ex?.trim()) ? 0 : 1;
+          return aMissing - bMissing;
+        })
+        .slice(0, 60)
+        .map((w) => ({
+          term: w.term,
+          pos: w.pos,
+          def: w.def,
+          defEn: w.defEn,
+          ex: w.ex,
+          level: w.level,
+          category: w.category || '未分類'
+        }));
 
       const existingArticlesSummary = existingArticles.slice(0, 20).map((a) => ({
         id: a.id,
@@ -426,9 +447,14 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
       // Detect category context
       const isCategoryContext = /(?:分類|自訂分類)/i.test(trimmedLower) || (botAction && String(botAction.type).includes('category'));
 
-      // Check for delete category intent (PRIORITIZED before clear_all_words)
+      // Check for delete category intent (PRIORITIZED before clear_all_words, but NOT when deleting a word inside a category)
+      const isDeletingWordInCat =
+        /(?:分類).*(?:中的|裡的|裏的|裡面的)?.*(?:單字|單詞|生詞)/i.test(trimmedLower) ||
+        /(?:刪除|移除|清掉|拿掉)\s*(?:單字|單詞|生詞)/i.test(trimmedLower);
+
       const isUserAskingDeleteCat =
         !isQuestionOrHowTo &&
+        !isDeletingWordInCat &&
         (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(trimmedLower) ||
          /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(trimmedLower));
 
@@ -485,12 +511,11 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         }
       }
 
-      // Quarantine: Block invalid delete_word when term is a category or in category context
+      // Quarantine: Block invalid delete_word when term is a category or user is deleting a category
       if (botAction?.type === 'delete_word') {
         const term = (botAction.deleteWord?.term || '').toLowerCase();
         const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
         if (
-          isCategoryContext ||
           isUserAskingDeleteCat ||
           term.includes('分類') ||
           allKnownCats.some((c) => c.toLowerCase() === term)
@@ -677,7 +702,14 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
               .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
               .map((w) => w.term);
           } else {
-            termsList = existingWords.map((w) => w.term);
+            const mentioned = existingWords
+              .filter((w) => searchSource.toLowerCase().includes(w.term.toLowerCase()))
+              .map((w) => w.term);
+            if (mentioned.length > 0) {
+              termsList = mentioned;
+            } else if (/(?:所有|全部|整庫|全庫|整個字庫)/.test(searchSource)) {
+              termsList = existingWords.map((w) => w.term);
+            }
           }
         }
 
@@ -877,7 +909,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           type: 'danger',
           confirmText: '確定刪除',
           onConfirm: () => {
-            onDeleteWordGroup(term);
+            onDeleteWordGroup(term, true);
             setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
             setMessages((prev) => [
               ...prev,
@@ -891,7 +923,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           }
         });
       } else {
-        onDeleteWordGroup(term);
+        onDeleteWordGroup(term, true);
         setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
       }
     } else if (action.type === 'delete_article') {

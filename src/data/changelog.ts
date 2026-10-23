@@ -13,6 +13,19 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.7.8',
+    date: '2026-10-23',
+    type: 'fix',
+    changes: [
+      '☁️ 徹底修復雲端同步崩潰與競態條件（Cloud Sync & Race Conditions）：修復 syncFromCloud 中未宣告變數 cloudArticles 引發的 ReferenceError 導致初次登入雲端文章、統計與設定同步中斷；新增 cloudSyncQueue 佇列序列化機制，並導入增量寫入 upsertCloudWords 與群組對齊 reconcileCloudWordGroup，徹底解決快速新增/編輯單字時的讀寫覆蓋競態；修正清空統計時 { merge: true } 無法清空雲端 stats 的缺陷。',
+      '🔐 多帳號本機資料完全隔離與快取容量保護（Multi-Account Local Isolation）：將首頁版面配置（HomeConfig）、閱讀器設定與文章（ArticleReaderView）、以及 AI 助手對話紀錄與背景任務（AIAssistantView / FloatingAIAssistant）全面改為依 userUid 獨立隔離儲存，登出或切換帳號絕不混用殘留；同時為句子解析與單字查詢快取加上最近 300 筆容量上限，防止長期累積觸發 localStorage QuotaExceededError。',
+      '🕒 統一本地時區日期計算與完整備份還原：新增 getLocalDateString() 取代全系統 UTC toISOString().slice(0, 10)，解決台灣時區（UTC+8）早上 00:00～08:00 跨日打卡、連續天數（Streak）與 CSV 匯出檔名日期錯位問題；JSON 備份匯出與匯入完整涵蓋 articles（文章閱讀庫）與 homeConfig（首頁排版）。',
+      '🤖 AI 模型備援升級、詞性精準辨識與安全性加固：全面升級後端 Gemini 備援鏈為最新世代模型，加入外部網址擷取 SSRF 內網阻擋防護、字典正則特殊字元轉義與伺服器記憶體快取上限；修正全端詞性正規化順序（先檢查 adverb、phrasal verb、pronoun 再檢查 verb、noun），杜絕副詞誤判為動詞、代名詞誤判為名詞；優化 AI 批次補齊（batch_standardize）優先排入缺少英英釋義或例句的單字，並為刪除動作加上意圖隔離與移除重複確認視窗。',
+      '🎯 學習中心、單字庫與首頁互動體驗修復：修正測驗開啟「自動下一題」時最後一題因閉包過期（Stale Closure）少算分數與未更新熟練度的問題；修復單字詳情彈窗（WordDetailModal）編輯或刪除單一詞性後即時反應最新狀態；修正批量標準化進度條 0-based 索引顯示。',
+      '🌐 全新推出 Microsoft Edge 專屬擴充功能（extension-edge）與 Chrome 套件升級：新增支援 Edge 側邊欄（Side Panel）常駐模式與即時儲存監聽同步的 Edge 擴充套件，並為雙瀏覽器擴充功能補齊 scripting / tabs / web_accessible_resources 權限與自訂伺服器網域同步支援。'
+    ]
+  },
+  {
     version: '1.7.7',
     date: '2026-10-21',
     type: 'fix',

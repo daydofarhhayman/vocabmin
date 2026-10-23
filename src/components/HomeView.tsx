@@ -42,7 +42,7 @@ import confetti from 'canvas-confetti';
 import { Word, ViewTab, AppSettings, DailyStats, POS } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { tts } from '../services/tts';
-import { storage } from '../services/storage';
+import { storage, getLocalDateString } from '../services/storage';
 import {
   getWordDisplayDef,
   generateSafeQuizOptions,
@@ -108,7 +108,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
 
   // Home Screen Customization Configuration
-  const [localHomeConfig, setLocalHomeConfig] = useState<HomeConfig>(() => loadHomeConfig());
+  const [localHomeConfig, setLocalHomeConfig] = useState<HomeConfig>(() => loadHomeConfig(user?.uid));
   const [internalEditMode, setInternalEditMode] = useState(false);
   const [isWidgetGalleryOpen, setIsWidgetGalleryOpen] = useState(false);
 
@@ -136,7 +136,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const handleUpdateHomeConfig = (newConfig: HomeConfig) => {
     setLocalHomeConfig(newConfig);
-    saveHomeConfig(newConfig);
+    saveHomeConfig(newConfig, user?.uid);
     if (onUpdateHomeConfig) {
       onUpdateHomeConfig(newConfig);
     }
@@ -144,7 +144,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const handleResetHomeConfig = () => {
     setLocalHomeConfig(DEFAULT_HOME_CONFIG);
-    saveHomeConfig(DEFAULT_HOME_CONFIG);
+    saveHomeConfig(DEFAULT_HOME_CONFIG, user?.uid);
     if (onUpdateHomeConfig) {
       onUpdateHomeConfig(DEFAULT_HOME_CONFIG);
     }
@@ -304,7 +304,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [pomoIsActive, setPomoIsActive] = useState<boolean>(false);
   const [pomoSessionsCompleted, setPomoSessionsCompleted] = useState<number>(() => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       const saved = localStorage.getItem(`vocabmin_pomo_${today}`);
       return saved ? parseInt(saved, 10) : 0;
     } catch {
@@ -322,7 +322,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             const nextCompleted = pomoSessionsCompleted + 1;
             setPomoSessionsCompleted(nextCompleted);
             try {
-              const today = new Date().toISOString().split('T')[0];
+              const today = getLocalDateString();
               localStorage.setItem(`vocabmin_pomo_${today}`, nextCompleted.toString());
               confetti({ particleCount: 40, spread: 70 });
             } catch {}
@@ -365,9 +365,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
     const now = new Date();
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
+      const d = new Date(now);
       d.setDate(now.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = getLocalDateString(d);
       const stat = dailyStats?.[dateStr];
       const count = (stat?.reviewed || 0) + (stat?.added || 0) + (stat?.quizzes || 0);
       const isCompleted = count > 0;
@@ -432,30 +432,30 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, [searchTerm, words]);
 
   // Today's stats & streak
-  const todayKey = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayKey = useMemo(() => getLocalDateString(), []);
   const todayStat = dailyStats?.[todayKey] || { added: 0, reviewed: 0, quizzes: 0 };
 
   // Calculate learning streak
   const streakDays = useMemo(() => {
-    if (!dailyStats) return 1;
+    if (!dailyStats) return 0;
     let count = 0;
-    const date = new Date();
+    const now = new Date();
 
-    for (let i = 0; i < 30; i++) {
-      const dKey = date.toISOString().split('T')[0];
+    for (let i = 0; i < 365; i++) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const dKey = getLocalDateString(d);
       const s = dailyStats[dKey];
       if (s && (s.reviewed > 0 || s.added > 0 || (s.quizzes || 0) > 0)) {
         count++;
-        date.setDate(date.getDate() - 1);
       } else {
         if (i === 0) {
-          date.setDate(date.getDate() - 1);
           continue;
         }
         break;
       }
     }
-    return Math.max(1, count);
+    return count;
   }, [dailyStats]);
 
   const dateFormatted = useMemo(() => {

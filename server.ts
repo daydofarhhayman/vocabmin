@@ -176,10 +176,9 @@ async function generateWithModelFallback(
   config: any,
   contents: any,
   preferredModels = [
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
     'gemini-3.8-flash',
-    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
     'gemini-3.1-pro-preview'
   ]
 ) {
@@ -299,11 +298,12 @@ async function fetchBilingualWordDetails(
         for (const group of data[12]) {
           if (group[0]) {
             const p = String(group[0]).toLowerCase();
-            if (p.includes('noun')) pos = 'n.';
-            else if (p.includes('verb')) pos = 'v.';
+            if (p.includes('adverb')) pos = 'adv.';
             else if (p.includes('adjective')) pos = 'adj.';
-            else if (p.includes('adverb')) pos = 'adv.';
-            else if (p.includes('preposition') || p.includes('phrase')) pos = 'phr.';
+            else if (p.includes('phrasal') || p.includes('preposition') || p.includes('phrase') || p.includes('idiom')) pos = 'phr.';
+            else if (p.includes('pronoun')) pos = 'other';
+            else if (p.includes('verb')) pos = 'v.';
+            else if (p.includes('noun')) pos = 'n.';
           }
           if (Array.isArray(group[1]) && group[1][0] && group[1][0][0]) {
             defEn = String(group[1][0][0]).trim();
@@ -314,9 +314,9 @@ async function fetchBilingualWordDetails(
 
       if (pos === 'n.' && Array.isArray(data[1]) && data[1][0] && data[1][0][0]) {
         const p = String(data[1][0][0]).toLowerCase();
-        if (p.includes('verb')) pos = 'v.';
+        if (p.includes('adverb')) pos = 'adv.';
         else if (p.includes('adjective')) pos = 'adj.';
-        else if (p.includes('adverb')) pos = 'adv.';
+        else if (p.includes('verb')) pos = 'v.';
       }
     }
   } catch (e) {
@@ -390,7 +390,8 @@ async function fetchBilingualWordDetails(
       ex = s;
     } else {
       const sentences = s.split(/(?<=[.!?])\s+/);
-      const matched = sentences.find((sub) => new RegExp(`\\b${cleanWord}\\b`, 'i').test(sub));
+      const escapedWord = cleanWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const matched = sentences.find((sub) => new RegExp(`\\b${escapedWord}\\b`, 'i').test(sub));
       ex = matched && matched.length <= 160 ? matched : s.slice(0, 140) + '...';
     }
   } else {
@@ -476,9 +477,39 @@ ${JSON.stringify(wordList.map((w) => ({ term: w.term, pos: w.pos, def: w.def }))
   }
 }
 
+// Helper: Validate external URL to prevent SSRF against private/loopback networks
+function isSafeExternalUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (
+      host === 'localhost' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Helper: Fetch and extract clean article text from external URL
 async function fetchExternalUrlContent(url: string): Promise<{ title: string; text: string } | null> {
   try {
+    if (!isSafeExternalUrl(url)) {
+      console.warn('Blocked unsafe external URL:', url);
+      return null;
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8500);
     const res = await fetch(url, {
@@ -1338,9 +1369,15 @@ You must strictly output JSON matching this schema:
       : (Array.isArray(screenContext?.customCategories) ? screenContext.customCategories : []);
     const sortedCats = [...customCats].sort((a, b) => b.length - a.length);
 
-    // Intent: Delete category (PRIORITIZED FIRST to protect against misidentifying as word/article deletion)
+    // Intent: Delete category (PRIORITIZED FIRST to protect against misidentifying as word/article deletion,
+    // but DO NOT match when the user is deleting a specific word inside a category, e.g. "刪除分類 X 中的單字 Y")
+    const isDeletingWordInCategory =
+      /(?:分類).*(?:中的|裡的|裏的|裡面的)?.*(?:單字|單詞|生詞)/i.test(promptClean) ||
+      /(?:刪除|移除|清掉|拿掉)\s*(?:單字|單詞|生詞)/i.test(promptClean);
+
     const isDeleteCategory =
       !isQuestionOrHowTo &&
+      !isDeletingWordInCategory &&
       (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(promptClean) ||
        /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(promptClean));
 
@@ -1433,12 +1470,12 @@ You must strictly output JSON matching this schema:
       }
     }
 
-    // Intent: Delete specific word (MUST REQUIRE EXPLICIT 單字/生詞/單詞 OR QUOTES, NEVER MATCH IN CATEGORY CONTEXT)
+    // Intent: Delete specific word (MUST REQUIRE EXPLICIT 單字/生詞/單詞 OR QUOTES, NEVER MATCH IN CATEGORY DELETION)
     let deleteWordMatch: RegExpMatchArray | null = null;
-    if (!isQuestionOrHowTo && !isExplicitClearWords && !isExplicitClearArticles && !isCategoryContext && !isDeleteCategory) {
+    if (!isQuestionOrHowTo && !isExplicitClearWords && !isExplicitClearArticles && !isDeleteCategory) {
       deleteWordMatch =
         promptClean.match(/(?:刪除|移除|刪掉)\s*(?:單字|單詞|生詞)\s*[《「"']?([a-zA-Z\-\s]{2,40})[》」"']?/i) ||
-        promptClean.match(/(?:刪除|移除|刪掉)\s*[「"']([a-zA-Z\-\s]{2,40})[」"']/i);
+        (!isCategoryContext ? promptClean.match(/(?:刪除|移除|刪掉)\s*[「"']([a-zA-Z\-\s]{2,40})[」"']/i) : null);
 
       if (deleteWordMatch) {
         const wordCand = deleteWordMatch[1].trim().toLowerCase();
@@ -1539,35 +1576,44 @@ You must strictly output JSON matching this schema:
       }
     } else if (isExplicitBatchEnrich && (!parsedData.action || parsedData.action.type === 'batch_standardize')) {
       const wordsToEnrich = Array.isArray(existingWordsSummary) ? existingWordsSummary : [];
-      const updatedWords: any[] = [];
-      for (const w of wordsToEnrich) {
-        let def = (w.def || '').trim();
-        let defEn = (w.defEn || '').trim();
-        let ex = (w.ex || '').trim();
-        let pos = w.pos || 'n.';
+      // Prioritize words that actually lack def, defEn, or ex, and cap network calls per request to avoid HTTP timeout
+      const candidates = wordsToEnrich.filter((w) => {
+        const def = (w.def || '').trim();
+        const defEn = (w.defEn || '').trim();
+        const ex = (w.ex || '').trim();
+        return !def || def.toLowerCase() === (w.term || '').toLowerCase() || !defEn || !ex;
+      });
+      const targetBatch = (candidates.length > 0 ? candidates : wordsToEnrich).slice(0, 20);
 
-        // Enrich missing definitions or examples via reliable bilingual dictionary
-        if (!def || def.toLowerCase() === w.term.toLowerCase() || !defEn || !ex) {
-          try {
-            const details = await fetchBilingualWordDetails(w.term);
-            if (!def || def.toLowerCase() === w.term.toLowerCase()) def = details.def || def;
-            if (!defEn) defEn = details.defEn || defEn;
-            if (!ex) ex = details.ex || `Review how "${w.term}" is used in context.`;
-            if (pos === 'other' && details.pos) pos = details.pos;
-          } catch {}
-        }
-        updatedWords.push({
-          ...w,
-          pos,
-          def: def || `【${w.term}】`,
-          defEn: defEn || `English definition for ${w.term}`,
-          ex: ex || `Review how "${w.term}" is used in context.`
-        });
-      }
+      const updatedWords = await Promise.all(
+        targetBatch.map(async (w) => {
+          let def = (w.def || '').trim();
+          let defEn = (w.defEn || '').trim();
+          let ex = (w.ex || '').trim();
+          let pos = w.pos || 'n.';
+
+          if (!def || def.toLowerCase() === w.term.toLowerCase() || !defEn || !ex) {
+            try {
+              const details = await fetchBilingualWordDetails(w.term);
+              if (!def || def.toLowerCase() === w.term.toLowerCase()) def = details.def || def;
+              if (!defEn) defEn = details.defEn || defEn;
+              if (!ex) ex = details.ex || `Review how "${w.term}" is used in context.`;
+              if (pos === 'other' && details.pos) pos = details.pos;
+            } catch {}
+          }
+          return {
+            ...w,
+            pos,
+            def: def || `【${w.term}】`,
+            defEn: defEn || `English definition for ${w.term}`,
+            ex: ex || `Review how "${w.term}" is used in context.`
+          };
+        })
+      );
 
       parsedData.action = {
         type: 'batch_standardize',
-        summary: `為單字庫中現有的 ${updatedWords.length} 個單字補齊繁體中文釋義、英英定義與例句`,
+        summary: `為單字庫中的 ${updatedWords.length} 個單字補齊繁體中文釋義、英英定義與例句`,
         words: updatedWords,
         batchStandardize: {
           originalCount: wordsToEnrich.length,
@@ -2101,6 +2147,19 @@ app.post('/api/ai/enrich-library', async (req, res) => {
   }
 });
 
+// Bounded cache helper to prevent unbounded memory growth
+function setCacheWithLimit<K, V>(map: Map<K, V>, key: K, val: V, maxEntries = 500): void {
+  if (map.has(key)) {
+    map.delete(key);
+  } else if (map.size >= maxEntries) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey !== undefined) {
+      map.delete(oldestKey);
+    }
+  }
+  map.set(key, val);
+}
+
 // In-memory cache for word lookups to save AI quota
 const wordLookupCache = new Map<string, any>();
 
@@ -2139,7 +2198,7 @@ app.post('/api/ai/article-lookup', async (req, res) => {
   if (!ai) {
     // Intelligent reliable bilingual dictionary lookup
     const fallback = await fetchBilingualWordDetails(cleanWord, sentence);
-    wordLookupCache.set(cacheKey, fallback);
+    setCacheWithLimit(wordLookupCache, cacheKey, fallback);
     return res.json({
       ...fallback,
       fromCache: false
@@ -2203,7 +2262,7 @@ Provide accurate contextual details in JSON:
       ex: parsed.ex || `Learning ${cleanWord} helps improve your vocabulary.`,
       exZh: parsed.exZh || ''
     };
-    wordLookupCache.set(cacheKey, resultToCache);
+    setCacheWithLimit(wordLookupCache, cacheKey, resultToCache);
 
     return res.json({
       ...resultToCache,
@@ -2212,7 +2271,7 @@ Provide accurate contextual details in JSON:
   } catch (err: any) {
     console.warn('Word lookup AI error, using bilingual fallback:', err?.message || err);
     const fallback = await fetchBilingualWordDetails(cleanWord, sentence);
-    wordLookupCache.set(cacheKey, fallback);
+    setCacheWithLimit(wordLookupCache, cacheKey, fallback);
     return res.json({
       ...fallback,
       fromCache: false
@@ -2443,11 +2502,12 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
 
   const detectPos = (str: string): string | null => {
     const lower = str.toLowerCase();
-    if (lower.startsWith('noun') || lower.includes('noun')) return 'n.';
-    if (lower.startsWith('verb') || lower.includes('verb')) return 'v.';
-    if (lower.startsWith('adjective') || lower.includes('adjective')) return 'adj.';
-    if (lower.startsWith('adverb') || lower.includes('adverb')) return 'adv.';
     if (lower.includes('phrasal verb') || lower.includes('idiom') || lower.includes('preposition')) return 'phr.';
+    if (lower.startsWith('adverb') || lower.includes('adverb')) return 'adv.';
+    if (lower.startsWith('adjective') || lower.includes('adjective')) return 'adj.';
+    if (lower.startsWith('pronoun') || lower.includes('pronoun')) return 'other';
+    if (lower.startsWith('verb') || lower.includes('verb')) return 'v.';
+    if (lower.startsWith('noun') || lower.includes('noun')) return 'n.';
     return null;
   };
 
@@ -2663,7 +2723,7 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
 
       const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
       if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
-        cambridgeMeaningsCache.set(cleanWord, parsedResult);
+        setCacheWithLimit(cambridgeMeaningsCache, cleanWord, parsedResult);
         return parsedResult;
       }
     } catch (err: any) {
@@ -2739,7 +2799,7 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
           ? `劍橋英漢辭典 (偵測為「${cambridgeParsed.baseForm}」之變形)`
           : '劍橋英漢辭典 (Cambridge Dictionary)'
       };
-      wordAllMeaningsCache.set(cacheKey, payload);
+      setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
       return res.json({
         ...payload,
         fromCache: false
@@ -2841,7 +2901,7 @@ Return a JSON object conforming to the schema.`;
           sourceLabel: '查無此單字',
           message: `查無「${cleanWord}」之英文單字，可能包含拼寫錯誤或無意義字母組合。`
         };
-        wordAllMeaningsCache.set(cacheKey, payload);
+        setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
       }
 
@@ -2857,7 +2917,7 @@ Return a JSON object conforming to the schema.`;
           source: 'ai',
           sourceLabel: '拼寫建議 (Did you mean)'
         };
-        wordAllMeaningsCache.set(cacheKey, payload);
+        setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
       }
 
@@ -2877,7 +2937,7 @@ Return a JSON object conforming to the schema.`;
           source: 'ai',
           sourceLabel: `Gemini AI 智能解析 (偵測為「${(parsed.baseForm || cleanWord).toLowerCase()}」之變形)`
         };
-        wordAllMeaningsCache.set(cacheKey, payload);
+        setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
       }
 
@@ -2895,7 +2955,7 @@ Return a JSON object conforming to the schema.`;
             source: 'ai',
             sourceLabel: 'Gemini AI 智能解析 (參照劍橋辭典標準)'
           };
-          wordAllMeaningsCache.set(cacheKey, payload);
+          setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
           return res.json({ ...payload, fromCache: false });
         }
       }
@@ -2940,7 +3000,7 @@ Return a JSON object conforming to the schema.`;
           source: 'validator',
           sourceLabel: '拼寫建議 (Did you mean)'
         };
-        wordAllMeaningsCache.set(cacheKey, payload);
+        setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
       } else {
         // Pure gibberish / non-word detected (e.g. denomonananana)!
@@ -2953,7 +3013,7 @@ Return a JSON object conforming to the schema.`;
           sourceLabel: '查無此單字',
           message: `查無「${cleanWord}」之英文單字，請檢查拼寫是否正確。`
         };
-        wordAllMeaningsCache.set(cacheKey, payload);
+        setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
       }
     }
@@ -2976,11 +3036,12 @@ Return a JSON object conforming to the schema.`;
         for (const posGroup of data[1]) {
           const rawPos = String(posGroup[0] || '').toLowerCase();
           let posTag = 'n.';
-          if (rawPos.includes('verb')) posTag = 'v.';
-          else if (rawPos.includes('noun')) posTag = 'n.';
+          if (rawPos.includes('adverb')) posTag = 'adv.';
           else if (rawPos.includes('adjective')) posTag = 'adj.';
-          else if (rawPos.includes('adverb')) posTag = 'adv.';
-          else if (rawPos.includes('preposition') || rawPos.includes('phrase')) posTag = 'phr.';
+          else if (rawPos.includes('phrasal') || rawPos.includes('preposition') || rawPos.includes('phrase') || rawPos.includes('idiom')) posTag = 'phr.';
+          else if (rawPos.includes('pronoun')) posTag = 'other';
+          else if (rawPos.includes('verb')) posTag = 'v.';
+          else if (rawPos.includes('noun')) posTag = 'n.';
           else posTag = 'other';
 
           const defsList = Array.isArray(posGroup[1]) ? posGroup[1].slice(0, 2) : [];
@@ -3022,7 +3083,7 @@ Return a JSON object conforming to the schema.`;
         source: 'dictionary',
         sourceLabel: '雙語辭典備援 (Google Dictionary)'
       };
-      wordAllMeaningsCache.set(cacheKey, payload);
+      setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
       return res.json({
         ...payload,
         fromCache: false
@@ -3143,7 +3204,7 @@ Provide detailed, insightful structural breakdown in Traditional Chinese (繁體
       vocabularyNotes: parsed.vocabularyNotes || [],
       learningTip: parsed.learningTip || ''
     };
-    sentenceAnalysisCache.set(cacheKey, resultToCache);
+    setCacheWithLimit(sentenceAnalysisCache, cacheKey, resultToCache);
 
     return res.json({
       ...resultToCache,

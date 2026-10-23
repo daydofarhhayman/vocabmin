@@ -106,7 +106,13 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   // 2. Proficiency Level Filter Checkboxes (0: 陌生, 1: 學習中, 2: 熟悉, 3: 精通)
   // Default to [0, 1] to focus on unfamiliar words, but user can freely toggle any
   const [selectedLevels, setSelectedLevels] = useState<number[]>([0, 1]);
-  const [reviewLimit, setReviewLimit] = useState<number>(20);
+  const [reviewLimit, setReviewLimit] = useState<number>(settings.reviewLimit || 20);
+
+  useEffect(() => {
+    if (settings.reviewLimit) {
+      setReviewLimit(settings.reviewLimit);
+    }
+  }, [settings.reviewLimit]);
 
   // 2.5 Category Filter ('all' = 全部, 'uncategorized' = 未分類, or custom category name)
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -477,16 +483,17 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
         newLevel
       };
 
-      setSessionRecords((prev) => [...prev, record]);
+      const nextRecords = [...sessionRecords, record];
+      setSessionRecords(nextRecords);
 
       // If correct and user doesn't click next, auto-advance after 1.8s
       if (isCorrect) {
         autoNextTimerRef.current = setTimeout(() => {
-          handleNextQuestion();
+          handleNextQuestion(nextRecords);
         }, 1800);
       }
     },
-    [currentQ, isAnswered, startTime, reviewMode, onUpdateWordReview]
+    [currentQ, isAnswered, startTime, reviewMode, onUpdateWordReview, sessionRecords, currentIndex, questions.length]
   );
 
   // Handle Option Click (Choice Mode)
@@ -525,7 +532,7 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   };
 
   // Advance to Next Question or Finish
-  const handleNextQuestion = () => {
+  const handleNextQuestion = (overrideRecords?: QuestionRecord[] | any) => {
     if (autoNextTimerRef.current) clearTimeout(autoNextTimerRef.current);
 
     if (currentIndex + 1 >= questions.length) {
@@ -533,9 +540,10 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
       setIsSessionFinished(true);
       setIsSessionActive(false);
 
-      // Record daily stats
-      const correctCount = sessionRecords.filter((r) => r.isCorrect).length;
-      onFinishReviewSession(sessionRecords.length);
+      // Record daily stats using the latest records (avoiding stale closure on auto-advance)
+      const finalRecords = Array.isArray(overrideRecords) ? overrideRecords : sessionRecords;
+      const correctCount = finalRecords.filter((r) => r.isCorrect).length;
+      onFinishReviewSession(finalRecords.length);
       onRecordQuizActivity(correctCount * 10);
 
       try {

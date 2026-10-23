@@ -1,6 +1,10 @@
-# 🚀 VocabMin Companion (Chrome 擴充功能)
+# 🚀 VocabMin Companion (Chrome / Edge 擴充功能)
 
-專為**英文閱讀與 PDF 文件**量身打造的 Chrome 擴充功能（Manifest V3），將 VocabMin 的即時查詞、發音、長難句 AI 語法拆解與「一鍵收錄生字」超能力無縫帶入您的 Chrome 瀏覽器！
+專為**英文閱讀與 PDF 文件**量身打造的瀏覽器擴充功能（Manifest V3），將 VocabMin 的即時查詞、發音、長難句 AI 語法拆解與「一鍵收錄生字」超能力無縫帶入您的 **Google Chrome** 與 **Microsoft Edge** 瀏覽器！
+
+> 💡 **提示**：本專案同時提供兩個擴充功能資料夾：
+> - **Chrome 版**：`c:\Users\user\Desktop\Apps\vocabmin\extension`
+> - **Microsoft Edge 專屬版（含側邊欄常駐支援）**：`c:\Users\user\Desktop\Apps\vocabmin\extension-edge`
 
 ---
 
@@ -25,31 +29,28 @@
 
 ## 🛠️ 安裝教學（30 秒完成）
 
-### 步驟 1：開啟 Chrome 擴充功能管理頁面
-1. 在 Chrome 網址列輸入：
-   ```text
-   chrome://extensions/
-   ```
+### 方案 A：在 Google Chrome 安裝
+1. 在 Chrome 網址列輸入：`chrome://extensions/`
 2. 開啟右上角的 **「開發人員模式 (Developer mode)」** 開關。
+3. 點擊左上角的 **「載入未封裝項目 (Load unpacked)」** 按鈕。
+4. 選擇資料夾：`c:\Users\user\Desktop\Apps\vocabmin\extension`
 
-### 步驟 2：載入擴充功能
-1. 點擊左上角的 **「載入未封裝項目 (Load unpacked)」** 按鈕。
-2. 選擇本專案中的 `extension` 資料夾：
-   ```text
-   c:\Users\user\Desktop\Apps\vocabmin\extension
-   ```
-3. 成功載入！您會在擴充功能清單中看到 **「VocabMin Companion - 智慧英文閱讀與單字隨選助手」**。
+### 方案 B：在 Microsoft Edge 安裝
+1. 在 Edge 網址列輸入：`edge://extensions/`
+2. 開啟左側（或右上角）的 **「開發人員模式 (Developer mode)」** 開關。
+3. 點擊上方的 **「載入解壓縮的擴充功能 (Load unpacked)」** 按鈕。
+4. 選擇資料夾：`c:\Users\user\Desktop\Apps\vocabmin\extension-edge`
 
 ---
 
 ## 📑 閱讀本地 PDF 檔案特別設定（關鍵！）
 
-若您想在 Chrome 中開啟電腦本機的 PDF 檔案（例如 `file:///C:/Users/.../paper.pdf`）並使用查詞功能：
+若您想在 Chrome 或 Edge 中開啟電腦本機的 PDF 檔案（例如 `file:///C:/Users/.../paper.pdf`）並使用查詞功能：
 
-1. 在 `chrome://extensions/` 頁面找到 **VocabMin Companion**。
-2. 點擊 **「詳細資訊 (Details)」**。
-3. 向下捲動並開啟 **「允許存取檔案網址 (Allow access to file URLs)」**。
-4. 將您的 PDF 檔案直接拖進 Chrome 瀏覽器分頁中，即可開始劃詞查單字！
+1. 在 `chrome://extensions/` 或 `edge://extensions/` 頁面找到 **VocabMin Companion**。
+2. 點擊 **「詳細資訊 / 詳細資料 (Details)」**。
+3. 向下捲動並開啟 **「允許存取檔案網址 / 允許存取檔案 URL (Allow access to file URLs)」**。
+4. 將您的 PDF 檔案直接拖進瀏覽器分頁中，即可開始劃詞查單字！
 
 ---
 
