@@ -2,85 +2,63 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Sparkles,
   Send,
-  Trash2,
   Plus,
-  BookOpen,
-  Volume2,
-  Copy,
   Check,
-  RotateCcw,
-  AlertTriangle,
-  Lightbulb,
-  ExternalLink,
-  ChevronRight,
-  ShieldCheck,
-  BookmarkCheck,
-  Compass,
+  Loader2,
+  BookOpen,
+  Trash2,
+  Bot,
+  User,
+  Volume2,
+  Microscope,
   PenTool,
-  GraduationCap,
   Layers,
+  Target,
+  Wrench,
+  Copy,
+  ArrowRight,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  FolderPlus,
+  RefreshCw,
   HelpCircle,
-  X,
-  Square,
-  Dices,
-  AlertCircle
+  Lightbulb,
+  Award,
+  Flame,
+  ExternalLink
 } from 'lucide-react';
-import { Word, AppSettings, Article, POS } from '../types';
-import { DEFAULT_CATEGORIES, getAllWordCategories } from '../services/storage';
-import { AIArticleCard } from './AIArticleCard';
+import { Word, POS, AppSettings, Article, ViewTab } from '../types';
+import { tts } from '../services/tts';
+import { storage } from '../services/storage';
+import { normalizePos } from '../utils/pos';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
-export type AIScenario = 'all' | 'library' | 'writing' | 'practice';
-
-export interface AIErrorInfo {
-  userMessage: string;
-  reason?: string;
-  details?: string;
-  suggestion?: string;
-  statusCode?: number;
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-  scenario?: AIScenario;
-  words?: Partial<Word>[];
-  article?: Partial<Article>;
-  action?: {
-    type: string;
-    summary?: string;
-    [key: string]: any;
-  };
-  errorInfo?: AIErrorInfo;
-}
-
 interface AIAssistantViewProps {
-  userUid?: string;
-  settings: AppSettings;
+  userUid?: string | null;
+  settings?: AppSettings;
   existingWords: Word[];
-  existingArticles: Article[];
-  onAddWords: (newWords: Partial<Word>[]) => void;
-  onUpdateWordGroup: (term: string, updatedEntries: Word[]) => void;
-  onDeleteWordGroup: (term: string, skipConfirm?: boolean) => void;
-  onBatchStandardizeWords: (words: Partial<Word>[]) => void;
-  onDeduplicateWords: () => void;
-  onClearAllWords: () => void;
-  onResetAllMastery: () => void;
+  existingArticles?: Article[];
+  onAddWords: (newWords: Partial<Word>[]) => any;
+  onUpdateWordGroup: (oldTerm: string, updatedList: Partial<Word>[], category?: string) => any;
+  onDeleteWordGroup: (term: string, skipConfirm?: boolean) => any;
+  onBatchStandardizeWords: (updatedWords: Partial<Word>[]) => any;
+  onDeduplicateWords: () => any;
+  onClearAllWords?: () => any;
+  onResetAllMastery?: () => any;
   onOpenCambridge: (term: string) => void;
-  initialPrompt?: { id: string; text: string } | null;
+  initialPrompt?: { id: string; text: string } | string | null;
   onClearInitialPrompt?: () => void;
-  onSaveArticle?: (article: Article) => void;
-  onOpenArticleInReader?: (article: Article) => void;
-  onClearAllArticles?: () => void;
-  onDeleteArticle?: (titleOrId: string) => void;
-  onNavigateToTab?: (tab: any) => void;
-  onUpdateTermCategory?: (term: string, newCategory?: string) => void;
-  onBatchUpdateTermsCategory?: (terms: string[], newCategory?: string) => void;
-  onAddCategory?: (categoryName: string) => void;
-  onRenameCategory?: (oldName: string, newName: string) => void;
-  onDeleteCategory?: (categoryName: string) => void;
+  onSaveArticle?: (article: Article) => any;
+  onOpenArticleInReader?: (article: Article) => any;
+  onClearAllArticles?: () => any;
+  onDeleteArticle?: (titleOrId: string) => any;
+  onNavigateToTab?: (tab: ViewTab) => void;
+  onUpdateTermCategory?: (term: string, category?: string) => any;
+  onBatchUpdateTermsCategory?: (terms: string[], category?: string) => any;
+  onAddCategory?: (cat: string) => any;
+  onRenameCategory?: (oldCat: string, newCat: string) => any;
+  onDeleteCategory?: (cat: string) => any;
   onRequestConfirm?: (config: {
     title: string;
     message: string;
@@ -90,1628 +68,843 @@ interface AIAssistantViewProps {
   }) => void;
 }
 
-const SCENARIOS = [
-  {
-    id: 'all' as AIScenario,
-    name: '全能英語語伴',
-    desc: '單字辨析、文法疑難、生活文化與口語諮詢',
-    icon: Compass,
-    accent: 'from-purple-600 to-indigo-600',
-    border: 'border-purple-500/30',
-    tag: '萬能問答',
-    chips: [
-      '請解析「serendipity」的精準語感與常見搭配詞',
-      '「affect」與「effect」究竟該如何正確區分？',
-      '請給我 3 句在地美式口語中表達「太贊同你了」的道地說法',
-      '請為我拆解「nuance」與「subtlety」在文意中的細微差別',
-      '外商商務信件中，如何優雅且堅定地催促合作夥伴回覆進度？',
-      '請分享 3 個英美日常文化背景中非常有趣的俚語故事'
-    ]
-  },
-  {
-    id: 'library' as AIScenario,
-    name: '單字庫智慧擴充',
-    desc: '特定主題/考試生詞批量提取與客製化擴充',
-    icon: Layers,
-    accent: 'from-blue-600 to-cyan-600',
-    border: 'border-blue-500/30',
-    tag: '字庫拓展',
-    chips: [
-      '請為我推薦 5 個多益（TOEIC）高頻商務談判單字並附英英雙解',
-      '我想學習 4 個描述心理學「認知偏誤」的高級詞彙',
-      '請幫我生成 5 個雅思（IELTS）寫作 7 分必備的學術替換動詞',
-      '請推薦 5 個在科技創新與 AI 領域最前沿的專業英文生詞',
-      '請生成 4 個日常生活高頻、但台灣學習者常講錯的地道片語',
-      '為我整理 5 個描述情緒「喜怒哀樂」高階 CEFR C1 精準形容詞'
-    ]
-  },
-  {
-    id: 'writing' as AIScenario,
-    name: '寫作診斷與潤飾',
-    desc: '逐句病句診斷、時態修訂與 CEFR C1/C2 母語級昇華',
-    icon: PenTool,
-    accent: 'from-emerald-600 to-teal-600',
-    border: 'border-emerald-500/30',
-    tag: '文法診斷',
-    chips: [
-      '請幫我仔細診斷這句話的文法，並提供母語者高階潤飾版本：',
-      '請將以下段落改寫為學術期刊（Academic English）正式風格：',
-      '請幫我拆解這個長難句的主幹與從屬子句結構：',
-      '如何將這句簡單句昇華為含有分詞構句與倒裝句的高級複合金句？',
-      '請幫我把這封請假/延期 Email 潤飾得更客氣且符合外商商務禮儀：',
-      '請檢查這段英文中介係詞使用是否精準自然：'
-    ]
-  },
-  {
-    id: 'practice' as AIScenario,
-    name: '考題與模擬實戰',
-    desc: '隨機克漏字破題、多益托福實戰測驗與面試 STAR 模擬',
-    icon: GraduationCap,
-    accent: 'from-amber-600 to-orange-600',
-    border: 'border-amber-500/30',
-    tag: '實戰模擬',
-    chips: [
-      '請為我出一題托福學術閱讀克漏字選擇題，附繁體中文破題思維',
-      '請進行一場外商產品經理的英文面試模擬提問（STAR原則）',
-      '請隨機出一題關於假設語氣（Subjunctive Mood）的進階測驗題',
-      '請為我設計一題多益聽力 Part 3 常見的職場情境對話理解題',
-      '請出一題易混淆動詞片語（Phrasal Verbs）測驗題附解析',
-      '請為我提供一場雅思口說 Part 2 的一分鐘即席演講題目與架構提示'
-    ]
-  }
-];
+type StudioTab = 'tutor' | 'xray' | 'clinic' | 'workshop' | 'quiz' | 'toolkit';
+
+interface RecommendedWordItem {
+  term: string;
+  pos: POS;
+  def: string;
+  defEn: string;
+  ex: string;
+  exZh?: string;
+  memoryTip?: string;
+  cefrLevel?: string;
+  category?: string;
+}
+
+interface TutorMessage {
+  id: string;
+  role: 'user' | 'model';
+  content: string;
+  recommendedWords?: RecommendedWordItem[];
+  followUpSuggestions?: string[];
+  isError?: boolean;
+}
+
+interface WordXRayResult {
+  term: string;
+  phonetic: string;
+  pos: string;
+  cefrLevel: string;
+  coreDefZh: string;
+  coreDefEn: string;
+  nuanceAndVibe: string;
+  etymology: string;
+  memoryHook: string;
+  collocations: { phrase: string; meaningZh: string; exampleEn: string }[];
+  synonymsComparison: { word: string; nuanceZh: string; exampleEn: string }[];
+  wordFamily: { term: string; pos: string; defZh: string }[];
+  exampleSentences: { contextTag: string; en: string; zh: string }[];
+}
+
+interface WritingClinicResult {
+  overallScore: number;
+  overallCommentZh: string;
+  correctedVersion: { text: string; translationZh: string; keyFixesNote: string };
+  nativeNaturalVersion: { text: string; translationZh: string; highlightNote: string };
+  advancedC1Version: { text: string; translationZh: string; highlightNote: string };
+  diagnostics: {
+    originalSpan: string;
+    fixedSpan: string;
+    issueType: string;
+    explanationZh: string;
+  }[];
+  upgradedVocabulary: RecommendedWordItem[];
+}
+
+interface QuizQuestionItem {
+  targetTerm: string;
+  questionType: string;
+  stemEn: string;
+  stemTranslationZh: string;
+  options: string[];
+  correctIndex: number;
+  explanationZh: string;
+  collocationTip: string;
+}
+
+interface SmartCategoryGroup {
+  category: string;
+  terms: string[];
+  reasonZh: string;
+}
+
+const DEFAULT_TUTOR_WELCOME: TutorMessage = {
+  id: 'welcome-v2',
+  role: 'model',
+  content:
+    '您好！我是全新升級的 **VocabMin AI 語言學習智囊**。\n\n為了提供您最精準、零幻覺的學習體驗，我現在具備五大專業模組：\n- **💬 智慧家教**：解答任何英文文法、句型結構、翻譯與語感問題\n- **🔬 單字 X 光室**：一鍵拆解字根字首、母語搭配詞、近義詞比較與記憶口訣\n- **✍️ 寫作潤飾門診**：中式英文診斷 + 母語自然版 / C1 高階學術版三階改寫\n- **🧪 主題生詞工坊**：依考試或情境量身打造專屬單字包，自動過濾已學單字\n- **🎯 弱點隨堂考官**：直接從您的待複習單字即時生成情境克漏字特訓',
+  followUpSuggestions: [
+    '分辨 affect 與 effect 的用法差異',
+    '商業書信中「期待您的回覆」有哪些道地說法？',
+    '過去完成式與現在完成式怎麼區分？'
+  ]
+};
 
 export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   userUid,
   settings,
   existingWords,
-  existingArticles,
+  existingArticles = [],
   onAddWords,
-  onUpdateWordGroup,
-  onDeleteWordGroup,
   onBatchStandardizeWords,
   onDeduplicateWords,
-  onClearAllWords,
-  onResetAllMastery,
   onOpenCambridge,
   initialPrompt,
   onClearInitialPrompt,
-  onSaveArticle,
-  onOpenArticleInReader,
-  onClearAllArticles,
-  onDeleteArticle,
-  onNavigateToTab,
-  onUpdateTermCategory,
   onBatchUpdateTermsCategory,
-  onAddCategory,
-  onRenameCategory,
-  onDeleteCategory,
-  onRequestConfirm
+  onAddCategory
 }) => {
-  const AI_VIEW_STORAGE_KEY = userUid
-    ? `vocabmin_ai_assistant_view_history_${userUid}`
-    : 'vocabmin_ai_assistant_view_history';
-  const [activeScenario, setActiveScenario] = useState<AIScenario>('all');
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const saved = localStorage.getItem(AI_VIEW_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(AI_VIEW_STORAGE_KEY);
-      setMessages(saved ? JSON.parse(saved) : []);
-    } catch {
-      setMessages([]);
-    }
-  }, [AI_VIEW_STORAGE_KEY]);
-  const [inputPrompt, setInputPrompt] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [addedWordsMap, setAddedWordsMap] = useState<Record<string, boolean>>({});
-  const [savedArticlesMap, setSavedArticlesMap] = useState<Record<string, boolean>>({});
-  const [executedActions, setExecutedActions] = useState<Record<string, boolean>>({});
-  const [chipOffsets, setChipOffsets] = useState<Record<string, number>>({});
+  const storageScope = userUid || 'guest';
+  const tutorStorageKey = `vocabmin_ai_studio_tutor_v2_${storageScope}`;
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [activeTab, setActiveTab] = useState<StudioTab>('tutor');
+  const [savedTermsToast, setSavedTermsToast] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // Auto-persist messages to localStorage
-  useEffect(() => {
+  // Set of lowercase terms already in user's vocabulary
+  const existingTermsSet = useMemo(() => {
+    const set = new Set<string>();
+    existingWords.forEach((w) => {
+      if (w.term) set.add(w.term.trim().toLowerCase());
+    });
+    return set;
+  }, [existingWords]);
+
+  // Unique words summary for context
+  const uniqueExistingWords = useMemo(() => {
+    const map = new Map<string, Word>();
+    existingWords.forEach((w) => {
+      const key = w.term.trim().toLowerCase();
+      if (!map.has(key)) map.set(key, w);
+    });
+    return Array.from(map.values());
+  }, [existingWords]);
+
+  const uncategorizedWords = useMemo(() => {
+    return uniqueExistingWords.filter(
+      (w) => !w.category || w.category === '未分類' || w.category.trim() === ''
+    );
+  }, [uniqueExistingWords]);
+
+  // ==========================================================================
+  // 1. TUTOR STATE
+  // ==========================================================================
+  const [messages, setMessages] = useState<TutorMessage[]>(() => {
     try {
-      if (messages.length > 0) {
-        localStorage.setItem(AI_VIEW_STORAGE_KEY, JSON.stringify(messages.slice(-30)));
-      } else {
-        localStorage.removeItem(AI_VIEW_STORAGE_KEY);
+      const saved = localStorage.getItem(tutorStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
-    } catch (e) {
-      console.error('Failed to save AI assistant view history:', e);
-    }
-  }, [messages]);
+    } catch {}
+    return [DEFAULT_TUTOR_WELCOME];
+  });
+  const [tutorInput, setTutorInput] = useState('');
+  const [isTutorLoading, setIsTutorLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Cancel generation handler
-  const handleCancelGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-      setIsLoading(false);
-    }
-  };
+  useEffect(() => {
+    try {
+      localStorage.setItem(tutorStorageKey, JSON.stringify(messages.slice(-30)));
+    } catch {}
+  }, [messages, tutorStorageKey]);
 
-  // Rotate recommended chips
-  const handleNextChips = (scId: string) => {
-    setChipOffsets((prev) => {
-      const allChips = currentScenario.chips || [];
-      const current = prev[scId] || 0;
-      return {
-        ...prev,
-        [scId]: (current + 3) % (allChips.length || 1)
-      };
+  useEffect(() => {
+    if (activeTab === 'tutor') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isTutorLoading, activeTab]);
+
+  // ==========================================================================
+  // 2. WORD X-RAY STATE
+  // ==========================================================================
+  const [xrayInput, setXrayInput] = useState('');
+  const [xrayContext, setXrayContext] = useState('');
+  const [isXrayLoading, setIsXrayLoading] = useState(false);
+  const [xrayResult, setXrayResult] = useState<WordXRayResult | null>(null);
+  const [xrayError, setXrayError] = useState<string | null>(null);
+
+  // ==========================================================================
+  // 3. WRITING CLINIC STATE
+  // ==========================================================================
+  const [clinicInput, setClinicInput] = useState('');
+  const [clinicGoal, setClinicGoal] = useState<'general' | 'business' | 'academic' | 'casual'>('general');
+  const [isClinicLoading, setIsClinicLoading] = useState(false);
+  const [clinicResult, setClinicResult] = useState<WritingClinicResult | null>(null);
+  const [clinicError, setClinicError] = useState<string | null>(null);
+
+  // ==========================================================================
+  // 4. VOCAB WORKSHOP STATE
+  // ==========================================================================
+  const [workshopTopic, setWorkshopTopic] = useState('TOEIC 商務談判與職場溝通');
+  const [workshopLevel, setWorkshopLevel] = useState<'A2' | 'B1' | 'B2' | 'C1' | 'C2'>('B2');
+  const [workshopCount, setWorkshopCount] = useState<number>(6);
+  const [isWorkshopLoading, setIsWorkshopLoading] = useState(false);
+  const [workshopResult, setWorkshopResult] = useState<{
+    themeTitle: string;
+    themeSummary: string;
+    SuggestedCategory: string;
+    words: RecommendedWordItem[];
+  } | null>(null);
+  const [workshopError, setWorkshopError] = useState<string | null>(null);
+
+  // ==========================================================================
+  // 5. QUIZ COACH STATE
+  // ==========================================================================
+  const [quizSourceMode, setQuizSourceMode] = useState<'library' | 'custom'>('library');
+  const [customQuizTopic, setCustomQuizTopic] = useState('CEFR B2 核心高頻字彙');
+  const [isQuizLoading, setIsQuizLoading] = useState(false);
+  const [quizTitle, setQuizTitle] = useState('');
+  const [quizCoachIntro, setQuizCoachIntro] = useState('');
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestionItem[]>([]);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
+  const [quizError, setQuizError] = useState<string | null>(null);
+
+  // ==========================================================================
+  // 6. SMART TOOLKIT STATE
+  // ==========================================================================
+  const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categoryPlan, setCategoryPlan] = useState<{
+    summaryZh: string;
+    groups: SmartCategoryGroup[];
+  } | null>(null);
+  const [appliedCategoryGroups, setAppliedCategoryGroups] = useState<Record<string, boolean>>({});
+  const [isEnrichingLibrary, setIsEnrichingLibrary] = useState(false);
+  const [toolkitStatusMsg, setToolkitStatusMsg] = useState<string | null>(null);
+
+  const speak = (text: string) => {
+    tts.speak(text, {
+      rate: settings?.speechRate ?? 1.0,
+      voiceURI: settings?.voiceURI
     });
   };
 
-  // Auto scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+  const apiFetch = async (url: string, options: RequestInit = {}) => {
+    const currentSettings = settings || storage.getLocalSettings(userUid || undefined);
+    const apiKey = currentSettings?.geminiApiKey?.trim();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options.headers as Record<string, string>) || {})
+    };
+    if (apiKey) {
+      headers['x-gemini-api-key'] = apiKey;
+    }
+    return fetch(url, {
+      ...options,
+      headers
+    });
+  };
 
-  // Handle external initial prompt if provided
+  // Handle initialPrompt if jumped from another screen
   useEffect(() => {
-    if (initialPrompt?.text) {
-      sendMessage(initialPrompt.text);
+    const promptStr =
+      typeof initialPrompt === 'string'
+        ? initialPrompt.trim()
+        : initialPrompt?.text?.trim() || '';
+    if (promptStr) {
+      setActiveTab('tutor');
+      handleSendTutorPrompt(promptStr);
       onClearInitialPrompt?.();
     }
   }, [initialPrompt]);
 
-  // Current active scenario config
-  const currentScenario = useMemo(() => {
-    return SCENARIOS.find((s) => s.id === activeScenario) || SCENARIOS[0];
-  }, [activeScenario]);
-
-  // Speech helper
-  const handleSpeak = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
-  };
-
-  // Copy helper
-  const handleCopy = (id: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  // Send message to AI endpoint
-  const sendMessage = async (promptToSend: string) => {
-    const text = promptToSend.trim();
-    if (!text || isLoading) return;
-
-    // Check if user is confirming a pending action
-    const trimmedConfirm = text.toLowerCase().trim();
-    const STANDALONE_CONFIRMS = ['確認', '確定', '執行', '好', '是', 'yes', 'ok', 'confirm', '好的', '對', '沒錯'];
-    const isStandaloneConfirm = STANDALONE_CONFIRMS.includes(trimmedConfirm);
-
-    if (isStandaloneConfirm) {
-      const pendingMsg = [...messages].reverse().find((m) => m.action && !executedActions[m.id]);
-      if (pendingMsg && pendingMsg.action) {
-        handleExecuteAction(pendingMsg.action, pendingMsg.id);
-        setInputPrompt('');
-        return;
+  const handleSaveSingleWord = (item: RecommendedWordItem) => {
+    const cleanTerm = item.term.trim();
+    if (!cleanTerm) return;
+    onAddWords([
+      {
+        term: cleanTerm,
+        pos: normalizePos(item.pos),
+        def: item.def.trim(),
+        defEn: (item.defEn || '').trim(),
+        ex: (item.ex || '').trim(),
+        category: item.category || '未分類'
       }
-    }
+    ]);
+    setSavedTermsToast((prev) => ({ ...prev, [cleanTerm.toLowerCase()]: true }));
+  };
 
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
+  const handleCopyText = (key: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
 
-    const userMsgId = `user-${Date.now()}`;
-    const newMsg: Message = {
-      id: userMsgId,
+  // --------------------------------------------------------------------------
+  // HANDLER 1: Tutor Chat
+  // --------------------------------------------------------------------------
+  const handleSendTutorPrompt = async (overrideText?: string) => {
+    const promptText = (overrideText ?? tutorInput).trim();
+    if (!promptText || isTutorLoading) return;
+
+    if (!overrideText) setTutorInput('');
+
+    const userMsg: TutorMessage = {
+      id: `u-${Date.now()}`,
       role: 'user',
-      content: text,
-      timestamp: Date.now(),
-      scenario: activeScenario
+      content: promptText
     };
 
-    setMessages((prev) => [...prev, newMsg]);
-    setInputPrompt('');
-    setIsLoading(true);
+    const historyForApi = messages
+      .filter((m) => !m.isError && m.id !== 'welcome-v2')
+      .slice(-8)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    setMessages((prev) => [...prev, userMsg]);
+    setIsTutorLoading(true);
 
     try {
-      // Build comprehensive database state awareness so AI can completely read user's data
-      const screenContext = {
-        currentTab: 'ai',
-        scenarioTitle: '全能英語智囊與字庫管家',
-        scenarioDesc: '具備全庫即時讀取、智能問答、字庫管理與文法寫作批改之全能 AI 助理',
-        totalWordsCount: existingWords.length,
-        totalArticlesCount: existingArticles.length,
-        dueWordsCount: existingWords.filter((w) => (w.nextReview || 0) <= Date.now()).length,
-        allWordTerms: existingWords.map((w) => w.term),
-        allArticleTitles: existingArticles.map((a) => a.title),
-        masteryStats: {
-          level0: existingWords.filter((w) => (w.level || 0) === 0).length,
-          level1: existingWords.filter((w) => w.level === 1).length,
-          level2: existingWords.filter((w) => w.level === 2).length,
-          level3: existingWords.filter((w) => (w.level || 0) >= 3).length
-        },
-        allCategories: getAllWordCategories(existingWords, settings),
-        customCategories: getAllWordCategories(existingWords, settings),
-        categoryStats: getAllWordCategories(existingWords, settings).reduce((acc: any, cat: string) => {
-          acc[cat] = existingWords.filter((w) => w.category === cat).length;
-          return acc;
-        }, { '未分類': existingWords.filter((w) => !w.category || w.category === '未分類').length }),
-        wordsWithCategories: existingWords.map((w) => ({ term: w.term, category: w.category || '未分類' }))
-      };
-
-      // Summary samples of existing words and articles (prioritize words missing defEn or ex so batch_standardize works across large libraries)
-      const existingWordsSummary = [...existingWords]
-        .sort((a, b) => {
-          const aMissing = (!a.defEn?.trim() || !a.ex?.trim()) ? 0 : 1;
-          const bMissing = (!b.defEn?.trim() || !b.ex?.trim()) ? 0 : 1;
-          return aMissing - bMissing;
-        })
-        .slice(0, 60)
-        .map((w) => ({
-          term: w.term,
-          pos: w.pos,
-          def: w.def,
-          defEn: w.defEn,
-          ex: w.ex,
-          level: w.level,
-          category: w.category || '未分類'
-        }));
-
-      const existingArticlesSummary = existingArticles.slice(0, 20).map((a) => ({
-        id: a.id,
-        title: a.title,
-        level: a.level,
-        category: a.category,
-        wordCount: a.wordCount,
-        summary: a.summary
-      }));
-
-      // Map chat messages for conversation history
-      const historyToSend = messages.slice(-8).map((m) => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        content: m.content
-      }));
-
-      const res = await fetch('/api/ai/chat', {
+      const response = await apiFetch('/api/ai/assistant', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings?.geminiApiKey ? { 'x-gemini-api-key': settings.geminiApiKey } : {})
-        },
-        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userPrompt: text,
-          scenario: currentScenario.name,
-          scenarioDesc: currentScenario.desc,
-          messages: historyToSend,
-          screenContext,
-          existingWordsSummary,
-          existingArticlesSummary,
-          apiKey: settings?.geminiApiKey
+          mode: 'tutor',
+          userPrompt: promptText,
+          messages: historyForApi,
+          screenContext: {
+            currentTab: 'ai',
+            totalWordsCount: uniqueExistingWords.length,
+            totalArticlesCount: existingArticles.length,
+            allCategories: settings?.customCategories || []
+          }
         })
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => null);
-        const errObj: any = new Error(errorData?.error || `伺服器回應錯誤 (${res.status})`);
-        errObj.errorInfo = {
-          userMessage: errorData?.error || `伺服器回應錯誤 (${res.status})`,
-          reason: errorData?.reason,
-          details: errorData?.details,
-          suggestion: errorData?.suggestion,
-          statusCode: res.status
-        };
-        throw errObj;
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'AI 服務暫時無回應');
       }
 
-      const data = await res.json();
-      const botMsgId = `bot-${Date.now()}`;
-      let botAction = data.action;
-      let botContent = data.reply || '處理完成。';
-
-      // CLIENT-SIDE HALLUCINATION INTERCEPTION & SAFETY SHIELD:
-      const trimmedLower = (text || '').trim().toLowerCase();
-      const isQuestionOrHowTo = /(?:如何|怎麼|怎樣|教我|什麼是|能不能|可以嗎|如果|為甚麼|為什麼)/.test(trimmedLower);
-
-      // Check for clear all articles intent or claim
-      const claimsClearArticles = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:文章|短文|閱讀庫|書架)/i.test(botContent);
-      const isUserAskingClearArticles =
-        !isQuestionOrHowTo &&
-        (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(trimmedLower) ||
-         /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
-         /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(trimmedLower));
-
-      if (botAction?.type === 'clear_all_articles' || (!botAction && (claimsClearArticles || isUserAskingClearArticles))) {
-        botAction = {
-          type: 'clear_all_articles',
-          summary: `清空文章閱讀庫中的所有文章（共 ${existingArticles.length} 篇）`,
-          clearAllArticles: { count: existingArticles.length }
-        };
-        if (claimsClearArticles || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
-          botContent = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${existingArticles.length} 篇文章）。`;
-        }
-      }
-
-      // Detect category context
-      const isCategoryContext = /(?:分類|自訂分類)/i.test(trimmedLower) || (botAction && String(botAction.type).includes('category'));
-
-      // Check for delete category intent (PRIORITIZED before clear_all_words, but NOT when deleting a word inside a category)
-      const isDeletingWordInCat =
-        /(?:分類).*(?:中的|裡的|裏的|裡面的)?.*(?:單字|單詞|生詞)/i.test(trimmedLower) ||
-        /(?:刪除|移除|清掉|拿掉)\s*(?:單字|單詞|生詞)/i.test(trimmedLower);
-
-      const isUserAskingDeleteCat =
-        !isQuestionOrHowTo &&
-        !isDeletingWordInCat &&
-        (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(trimmedLower) ||
-         /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(trimmedLower));
-
-      if (
-        isUserAskingDeleteCat ||
-        botAction?.type === 'delete_category' ||
-        botAction?.type === 'deleteCategory'
-      ) {
-        let catName = (
-          botAction?.deleteCategory?.name ||
-          botAction?.deleteCategory?.category ||
-          botAction?.name ||
-          botAction?.category ||
-          ''
-        ).trim();
-
-        if (!catName) {
-          const allKnownCats = getAllWordCategories(existingWords, settings);
-          const sortedCats = [...allKnownCats].sort((a, b) => b.length - a.length);
-          const foundKnown = sortedCats.find((c) =>
-            trimmedLower.includes(c.toLowerCase()) || (botContent || '').toLowerCase().includes(c.toLowerCase())
-          );
-          if (foundKnown) {
-            catName = foundKnown;
-          } else {
-            const match =
-              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*[「『"']([^「『"'」』\n\r]+?)[」』"']\s*(?:自訂)?分類/i) ||
-              trimmedLower.match(/(?:刪除|移除|清掉|拿掉)\s*(?:自訂)?分類\s*[「『"']([^「『"'」』\n\r]+?)[」』"']/i);
-            if (match) catName = match[1].trim();
-          }
-        }
-
-        if (catName) {
-          botAction = {
-            type: 'delete_category',
-            summary: `刪除自訂分類「${catName}」（原單字保留並設為未分類）`,
-            deleteCategory: { name: catName }
-          };
-          botContent = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
-        }
-      }
-
-      // Quarantine: Block invalid delete_article when in category context or title contains 分類
-      if (botAction?.type === 'delete_article') {
-        const artTitle = (botAction.deleteArticle?.title || '').toLowerCase();
-        const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
-        if (
-          isCategoryContext ||
-          isUserAskingDeleteCat ||
-          artTitle.includes('分類') ||
-          allKnownCats.some((c) => c.toLowerCase() === artTitle)
-        ) {
-          botAction = null;
-        }
-      }
-
-      // Quarantine: Block invalid delete_word when term is a category or user is deleting a category
-      if (botAction?.type === 'delete_word') {
-        const term = (botAction.deleteWord?.term || '').toLowerCase();
-        const allKnownCats = settings.customCategories || DEFAULT_CATEGORIES;
-        if (
-          isUserAskingDeleteCat ||
-          term.includes('分類') ||
-          allKnownCats.some((c) => c.toLowerCase() === term)
-        ) {
-          botAction = null;
-        }
-      }
-
-      // Check for clear all words intent or claim (ONLY when NOT in category context!)
-      const claimsClearWords =
-        !isCategoryContext &&
-        !isUserAskingDeleteCat &&
-        !botContent.includes('分類') &&
-        /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(botContent);
-
-      const isUserAskingClearWords =
-        !isCategoryContext &&
-        !isUserAskingDeleteCat &&
-        !isUserAskingClearArticles &&
-        !isQuestionOrHowTo &&
-        (/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(trimmedLower) ||
-         /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(trimmedLower) ||
-         /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(trimmedLower));
-
-      // If Gemini accidentally returned clear_all_words during a category command, suppress it!
-      if (botAction?.type === 'clear_all_words' && (isCategoryContext || isUserAskingDeleteCat)) {
-        botAction = null;
-      }
-
-      if (botAction?.type === 'clear_all_words' || (!botAction && (claimsClearWords || isUserAskingClearWords))) {
-        botAction = {
-          type: 'clear_all_words',
-          summary: `清空單字庫中的所有單字（共 ${existingWords.length} 個）`,
-          clearAllWords: { count: existingWords.length }
-        };
-        if (claimsClearWords || botContent.includes('已為您清除') || botContent.includes('已刪除')) {
-          botContent = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${existingWords.length} 個單字）。`;
-        }
-      }
-
-      // Check for batch set category intent or claim
-      const uncatWords = existingWords.filter(
-        (w) => !w.category || w.category === '未分類' || w.category.trim() === ''
-      );
-
-      const isUserAskingUncategorizedBatch =
-        !isQuestionOrHowTo &&
-        (/(?:尚未分類|未分類).*(?:歸納|歸類|分類|配置|整理)|(?:歸納|歸類|分類|整理).*(?:尚未分類|未分類)/i.test(trimmedLower) ||
-          ((trimmedLower === '確認' || trimmedLower === '好的' || trimmedLower === '確定' || trimmedLower === '執行') &&
-           messages.some((m: any) => /(?:未分類|尚未分類).*(?:歸類|分類|需求)/.test(m.content || ''))));
-
-      const claimsNoUncategorized =
-        uncatWords.length > 0 &&
-        /(?:沒有任何單字|已經成功分好類|為 0 個|沒有尚未分類|皆已分類)/i.test(botContent);
-
-      const isLazyDeflectionWithoutAction =
-        !botAction &&
-        /(?:我已為您發起|請確認此操作|進行智慧歸類的需求)/i.test(botContent);
-
-      if (
-        uncatWords.length > 0 &&
-        (isUserAskingUncategorizedBatch || claimsNoUncategorized || isLazyDeflectionWithoutAction)
-      ) {
-        if (!botAction) {
-          const catMatch =
-            botContent.match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
-            trimmedLower.match(/(?:加入|歸類至|移至|設為|放到)\s*([a-zA-Z0-9\u4e00-\u9fa5\s_-]+?)\s*分類/i);
-          const availableCats = (settings?.customCategories || []).filter((c: string) => c !== '未分類');
-          const targetCategory = catMatch ? catMatch[1].trim() : (availableCats[0] || 'General');
-
-          botAction = {
-            type: 'batch_set_category',
-            summary: `批次將 ${uncatWords.length} 個未分類單字歸類至「${targetCategory}」`,
-            batchSetCategory: {
-              terms: uncatWords.map((w) => w.term),
-              category: targetCategory
-            }
-          };
-        }
-
-        if (claimsNoUncategorized || isLazyDeflectionWithoutAction || !botContent || botContent.length < 20) {
-          const catTarget = botAction?.batchSetCategory?.category || '指定分類';
-          botContent = `為您分析單字庫中現有的 ${uncatWords.length} 個未分類單字：[${uncatWords.map((w) => w.term).join(', ')}]。已為您建立批次分類操作確認卡片，請點擊下方卡片確認按鈕以將其歸類至「${catTarget}」！`;
-        }
-      }
-
-      const claimsBatchCategory =
-        !botAction &&
-        ((/(?:已為您|已成功|已經|已幫您).*(?:建立|整理).*(?:批次歸類|歸類至|加入.*分類|移至.*分類|設定.*分類|操作確認卡片)/i.test(botContent) ||
-          /(?:建立|產生).*(?:操作確認卡片)/i.test(botContent)));
-
-      const isUserAskingBatchCategory =
-        !isQuestionOrHowTo &&
-        ((/(?:批次|全部|所有|除了).*(?:歸類|加入|移至|放到|設為).*(?:分類)/i.test(trimmedLower) ||
-          /(?:歸類至|加入.*分類|移到.*分類|放到.*分類|設為.*分類).*(?:分類)/i.test(trimmedLower)));
-
-      if (botAction?.type === 'batch_set_category' || (!botAction && (claimsBatchCategory || isUserAskingBatchCategory))) {
-        if (!botAction) {
-          const catMatch =
-            botContent.match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
-            trimmedLower.match(/(?:加入|歸類至|移至|設為|放到)\s*([a-zA-Z0-9\u4e00-\u9fa5\s_-]+?)\s*分類/i);
-          const targetCategory = catMatch ? catMatch[1].trim() : '';
-
-          const excludeMatch =
-            trimmedLower.match(/(?:除了|排除)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類.*(?:以外|之外|的單字)/i) ||
-            botContent.match(/(?:除了|排除)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類.*(?:以外|之外|的單字)/i);
-          const excludedCat = excludeMatch ? excludeMatch[1].trim().toLowerCase() : null;
-
-          let targetTerms: string[] = [];
-          if (excludedCat) {
-            targetTerms = existingWords
-              .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
-              .map((w) => w.term);
-          } else {
-            targetTerms = existingWords
-              .filter((w) =>
-                trimmedLower.includes(w.term.toLowerCase()) ||
-                botContent.includes(w.term)
-              )
-              .map((w) => w.term);
-            if (targetTerms.length === 0 && /(?:所有|全部|整庫|全庫)/.test(trimmedLower)) {
-              targetTerms = existingWords.map((w) => w.term);
-            }
-          }
-
-          if (targetCategory && targetTerms.length > 0) {
-            botAction = {
-              type: 'batch_set_category',
-              summary: `批次將 ${targetTerms.length} 個單字歸類至「${targetCategory}」`,
-              batchSetCategory: {
-                terms: targetTerms,
-                category: targetCategory
-              }
-            };
-            if (!botContent.includes('操作確認卡片')) {
-              botContent = `已為您建立「批次分類」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行此變更（共 ${targetTerms.length} 個單字歸類至「${targetCategory}」）。`;
-            }
-          }
-        }
-      }
-
-      // Normalize botAction for batch_set_category ensuring category, terms, and summary exist
-      if (
-        botAction &&
-        (botAction.type === 'batch_set_category' ||
-          botAction.type === 'batchSetCategory' ||
-          botAction.type === 'batch_category')
-      ) {
-        let cat = (
-          botAction.batchSetCategory?.category ||
-          botAction.batchSetCategory?.targetCategory ||
-          botAction.category ||
-          botAction.targetCategory ||
-          botAction.categoryName ||
-          botAction.name ||
-          ''
-        ).trim();
-
-        let termsList: string[] = Array.isArray(botAction.batchSetCategory?.terms)
-          ? botAction.batchSetCategory.terms
-          : Array.isArray(botAction.batchSetCategory?.words)
-          ? botAction.batchSetCategory.words
-          : Array.isArray(botAction.terms)
-          ? botAction.terms
-          : Array.isArray(botAction.words)
-          ? botAction.words
-          : [];
-
-        if (!cat) {
-          const catMatch =
-            (botAction.summary || '').match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
-            botContent.match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
-            (botAction.summary || '').match(/「([^」]+)」/) ||
-            botContent.match(/「([^」]+)」/);
-          if (catMatch) cat = catMatch[1].trim();
-        }
-
-        if (termsList.length === 0) {
-          const searchSource = `${botAction.summary || ''} ${botContent || ''} ${trimmedLower}`;
-          const excludeMatch = searchSource.match(/(?:非|除了|排除)[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?分類/i);
-          if (excludeMatch) {
-            const excludedCat = excludeMatch[1].trim().toLowerCase();
-            termsList = existingWords
-              .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
-              .map((w) => w.term);
-          } else {
-            const mentioned = existingWords
-              .filter((w) => searchSource.toLowerCase().includes(w.term.toLowerCase()))
-              .map((w) => w.term);
-            if (mentioned.length > 0) {
-              termsList = mentioned;
-            } else if (/(?:所有|全部|整庫|全庫|整個字庫)/.test(searchSource)) {
-              termsList = existingWords.map((w) => w.term);
-            }
-          }
-        }
-
-        botAction.type = 'batch_set_category';
-        botAction.batchSetCategory = {
-          terms: termsList,
-          category: cat
-        };
-        botAction.category = cat;
-        botAction.terms = termsList;
-        if (!botAction.summary) {
-          botAction.summary = `批次將 ${termsList.length} 個單字歸類至「${cat || '指定分類'}」`;
-        }
-      }
-
-      // Check for add category intent
-      const isUserAskingAddCat =
-        !isQuestionOrHowTo &&
-        trimmedLower.match(/(?:新增|建立|創建|添加)\s*(?:自訂)?分類\s*[「『"']?([^「『"'」』\n\r]+?)[」』"']?$/i);
-      if (!botAction && isUserAskingAddCat) {
-        const catName = isUserAskingAddCat[1].trim();
-        botAction = {
-          type: 'add_category',
-          summary: `新增自訂分類「${catName}」`,
-          addCategory: { name: catName }
-        };
-        botContent = `已為您建立「新增自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以新增分類「${catName}」。`;
-      }
-
-      // Suppress accidental vocabulary word cards whenever a database/category operation is active
-      if (botAction && botAction.type !== 'add_words') {
-        data.words = undefined;
-      }
-
-      const articleData = data.article || botAction?.saveArticle;
-
-      const botMsg: Message = {
-        id: botMsgId,
-        role: 'assistant',
-        content: botContent,
-        timestamp: Date.now(),
-        words: Array.isArray(data.words) && data.words.length > 0 ? data.words : undefined,
-        article: articleData,
-        action: botAction
+      const modelMsg: TutorMessage = {
+        id: `m-${Date.now()}`,
+        role: 'model',
+        content: data.reply || '已為您整理分析結果。',
+        recommendedWords: Array.isArray(data.recommendedWords) ? data.recommendedWords : [],
+        followUpSuggestions: Array.isArray(data.followUpSuggestions) ? data.followUpSuggestions : []
       };
 
-      setMessages((prev) => [...prev, botMsg]);
-
-      // If user specifically asked to add an article and an article was returned, auto-save to library
-      const promptLower = text.toLowerCase();
-      if (
-        articleData &&
-        (promptLower.includes('加入文章') ||
-          promptLower.includes('新增文章') ||
-          promptLower.includes('收錄文章') ||
-          promptLower.includes('加文章') ||
-          promptLower.includes('加一篇'))
-      ) {
-        onSaveArticle?.(articleData as Article);
-        setSavedArticlesMap((prev) => ({ ...prev, [articleData.id || botMsgId]: true }));
-      }
+      setMessages((prev) => [...prev, modelMsg]);
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        const botMsgId = `bot-abort-${Date.now()}`;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: botMsgId,
-            role: 'assistant',
-            content: '⏹️ 已停止生成回答。',
-            timestamp: Date.now()
-          }
-        ]);
-        return;
-      }
-      console.error('AI chat failed:', err);
-      const errorInfo: AIErrorInfo = err?.errorInfo || {
-        userMessage: err?.message || 'AI 助手暫時無法連線，請確認網路或稍後重試。',
-        details: err?.stack || String(err),
-        suggestion: '請確認伺服器連線正常，或於「設定」中重新檢查 API Key。',
-        statusCode: 500
-      };
-
-      const errMsgId = `bot-err-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
         {
-          id: errMsgId,
-          role: 'assistant',
-          content: `⚠️ ${errorInfo.userMessage}`,
-          errorInfo,
-          timestamp: Date.now()
+          id: `err-${Date.now()}`,
+          role: 'model',
+          content: `⚠️ **連線或金鑰提示**：${err.message || '請檢查網路連線或至右上角「設定」確認您的 Gemini API Key。'}`,
+          isError: true
         }
       ]);
     } finally {
-      abortControllerRef.current = null;
-      setIsLoading(false);
+      setIsTutorLoading(false);
     }
   };
 
-  // Handle adding words to user library
-  const handleAddSingleWord = (word: Partial<Word>, key: string) => {
-    if (addedWordsMap[key]) return;
-    onAddWords([word]);
-    setAddedWordsMap((prev) => ({ ...prev, [key]: true }));
-  };
+  // --------------------------------------------------------------------------
+  // HANDLER 2: Word X-Ray
+  // --------------------------------------------------------------------------
+  const handleRunWordXRay = async (overrideWord?: string) => {
+    const wordToAnalyze = (overrideWord ?? xrayInput).trim();
+    if (!wordToAnalyze || isXrayLoading) return;
+    if (overrideWord) setXrayInput(overrideWord);
 
-  const handleAddAllWords = (wordsList: Partial<Word>[], batchKey: string) => {
-    if (!wordsList || wordsList.length === 0) return;
-    if (onRequestConfirm) {
-      onRequestConfirm({
-        title: '📥 新增單字確認',
-        message: `確定要將以下 ${wordsList.length} 個單字新增至單字庫嗎？\n\n${wordsList.map((w) => `• ${w.term} (${w.pos || 'n.'})：${w.def || ''}`).slice(0, 6).join('\n')}${wordsList.length > 6 ? `\n...等共 ${wordsList.length} 個單字` : ''}`,
-        type: 'info',
-        confirmText: '確認新增',
-        onConfirm: () => {
-          onAddWords(wordsList);
-          const updated = { ...addedWordsMap };
-          wordsList.forEach((_, idx) => {
-            updated[`${batchKey}-${idx}`] = true;
-          });
-          setAddedWordsMap(updated);
-        }
+    setIsXrayLoading(true);
+    setXrayError(null);
+
+    try {
+      const response = await apiFetch('/api/ai/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'word_xray',
+          targetWord: wordToAnalyze,
+          contextSentence: xrayContext.trim()
+        })
       });
-    } else {
-      onAddWords(wordsList);
-      const updated = { ...addedWordsMap };
-      wordsList.forEach((_, idx) => {
-        updated[`${batchKey}-${idx}`] = true;
+      const data = await response.json();
+      if (!response.ok || !data.xray) {
+        throw new Error(data.error || '無法剖析該單字，請稍後再試');
+      }
+      setXrayResult(data.xray);
+    } catch (err: any) {
+      setXrayError(err.message || '剖析失敗，請確認 API Key 設定');
+    } finally {
+      setIsXrayLoading(false);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // HANDLER 3: Writing Clinic
+  // --------------------------------------------------------------------------
+  const handleRunWritingClinic = async () => {
+    const text = clinicInput.trim();
+    if (!text || isClinicLoading) return;
+
+    setIsClinicLoading(true);
+    setClinicError(null);
+
+    try {
+      const response = await apiFetch('/api/ai/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'writing_clinic',
+          writingText: text,
+          writingGoal: clinicGoal
+        })
       });
-      setAddedWordsMap(updated);
+      const data = await response.json();
+      if (!response.ok || !data.clinic) {
+        throw new Error(data.error || '寫作門診分析失敗，請稍後再試');
+      }
+      setClinicResult(data.clinic);
+    } catch (err: any) {
+      setClinicError(err.message || '分析失敗，請確認 API Key 設定');
+    } finally {
+      setIsClinicLoading(false);
     }
   };
 
-  // Handle explicit database action card execution
-  const handleExecuteAction = (action: any, actionId: string) => {
-    if (!action || executedActions[actionId]) return;
+  // --------------------------------------------------------------------------
+  // HANDLER 4: Vocab Workshop
+  // --------------------------------------------------------------------------
+  const handleRunWorkshop = async (overrideTopic?: string) => {
+    const topic = (overrideTopic ?? workshopTopic).trim();
+    if (!topic || isWorkshopLoading) return;
+    if (overrideTopic) setWorkshopTopic(overrideTopic);
 
-    if (action.type === 'clear_all_words') {
-      const wordCount = existingWords.length;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🚨 清空單字庫確認',
-          message: `確定要清空單字庫中的所有 ${wordCount} 個單字嗎？\n此操作將永久清除所有單字卡片與複習記錄，無法復原。`,
-          type: 'danger',
-          confirmText: '確定全部清空',
-          onConfirm: () => {
-            onClearAllWords();
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功為您清空單字庫中的所有單字！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onClearAllWords();
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'clear_all_articles') {
-      const artCount = existingArticles.length;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🚨 清空文章閱讀庫確認',
-          message: `確定要清空文章閱讀庫中的所有 ${artCount} 篇文章嗎？\n此操作將永久清除所有閱讀文章與筆記，無法復原。`,
-          type: 'danger',
-          confirmText: '確定全部清空',
-          onConfirm: () => {
-            onClearAllArticles?.();
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功為您清空文章閱讀庫中的所有文章！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onClearAllArticles?.();
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'delete_word' && action.deleteWord?.term) {
-      const term = action.deleteWord.term;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🗑️ 刪除單字確認',
-          message: `確定要從單字庫中刪除「${term}」及其所有釋義嗎？`,
-          type: 'danger',
-          confirmText: '確定刪除',
-          onConfirm: () => {
-            onDeleteWordGroup(term, true);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已從單字庫中刪除單字「${term}」！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onDeleteWordGroup(term, true);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'delete_article') {
-      const target = action.deleteArticle?.title || action.deleteArticle?.id;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🗑️ 刪除文章確認',
-          message: `確定要從閱讀庫中刪除《${target || '這篇文章'}》嗎？`,
-          type: 'danger',
-          confirmText: '確定刪除',
-          onConfirm: () => {
-            if (target) onDeleteArticle?.(target);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功刪除文章《${target}》！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        if (target) onDeleteArticle?.(target);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'add_words' && Array.isArray(action.addWords || action.words)) {
-      const wordsToAdd = action.addWords || action.words || [];
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '📥 新增單字確認',
-          message: `確定要將以下 ${wordsToAdd.length} 個單字新增至單字庫嗎？\n\n${wordsToAdd.map((w: any) => `• ${w.term} (${w.pos || 'n.'})：${w.def || ''}`).slice(0, 6).join('\n')}${wordsToAdd.length > 6 ? `\n...等共 ${wordsToAdd.length} 個單字` : ''}`,
-          type: 'info',
-          confirmText: '確認新增',
-          onConfirm: () => {
-            onAddWords(wordsToAdd);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功為您將 ${wordsToAdd.length} 個新單字新增至單字庫！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onAddWords(wordsToAdd);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'update_word' && action.updateWord) {
-      const { term, newEntries } = action.updateWord;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '✏️ 修改單字確認',
-          message: `確定要更新單字庫中「${term}」的條目資料嗎？`,
-          type: 'warning',
-          confirmText: '確認更新',
-          onConfirm: () => {
-            if (term && newEntries) {
-              onUpdateWordGroup?.(term, newEntries);
-            }
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功更新單字「${term}」的條目！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        if (term && newEntries) {
-          onUpdateWordGroup?.(term, newEntries);
-        }
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'deduplicate_words') {
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '✨ 合併重複單字確認',
-          message: `確定要掃描單字庫並合併所有重複詞條嗎？`,
-          type: 'info',
-          confirmText: '確認合併',
-          onConfirm: () => {
-            onDeduplicateWords();
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 單字庫重複項目已成功合併整理！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onDeduplicateWords();
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'reset_mastery') {
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🔄 重置熟練度確認',
-          message: `確定要將所有單字的熟練度全部歸零、重新進入艾賓浩斯記憶複習週期嗎？`,
-          type: 'warning',
-          confirmText: '確定重置',
-          onConfirm: () => {
-            onResetAllMastery();
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功將所有單字的熟練度重置為完全不熟練！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onResetAllMastery();
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'batch_standardize' && (Array.isArray(action.words) || Array.isArray(action.batchStandardize?.updatedWords))) {
-      const listToUpdate = action.words || action.batchStandardize?.updatedWords;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '✨ 單字庫批量標準化確認',
-          message: `確定要為單字庫中的單字補齊英英釋義與標準化排版嗎？`,
-          type: 'info',
-          confirmText: '確認執行',
-          onConfirm: () => {
-            onBatchStandardizeWords(listToUpdate);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功完成單字庫標準化更新！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onBatchStandardizeWords(listToUpdate);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (action.type === 'save_article' && action.saveArticle) {
-      const art: Article = {
-        id: action.saveArticle.id || `art-${Date.now()}`,
-        title: action.saveArticle.title || '無標題文章',
-        level: action.saveArticle.level || 'B1',
-        category: action.saveArticle.category || 'Custom',
-        content: action.saveArticle.content || '',
-        translationZh: action.saveArticle.translationZh || '',
-        summary: action.saveArticle.summary || '',
-        wordCount: (action.saveArticle.content || '').split(/\s+/).filter(Boolean).length,
-        readTimeMinutes: Math.max(1, Math.round((action.saveArticle.content || '').split(/\s+/).filter(Boolean).length / 180)),
-        savedWordTerms: []
-      };
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '📖 收錄文章確認',
-          message: `確定要將文章《${art.title}》收錄至您的文章閱讀庫嗎？`,
-          type: 'info',
-          confirmText: '確認收錄',
-          onConfirm: () => {
-            onSaveArticle?.(art);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功將文章《${art.title}》收錄至文章閱讀庫！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onSaveArticle?.(art);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (
-      action.type === 'set_word_category' ||
-      action.type === 'setWordCategory'
-    ) {
-      const term = (
-        action.setWordCategory?.term ||
-        action.setWordCategory?.word ||
-        action.term ||
-        action.word ||
-        ''
-      ).trim();
-      const targetCat = (
-        action.setWordCategory?.category ||
-        action.setWordCategory?.targetCategory ||
-        action.category ||
-        action.targetCategory ||
-        ''
-      ).trim();
-      const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🏷️ 單字分類調整確認',
-          message: `確定要將單字「${term}」的分類調整為 ${catLabel} 嗎？`,
-          type: 'info',
-          confirmText: '確認調整',
-          onConfirm: () => {
-            onUpdateTermCategory?.(term, targetCat);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功將單字「${term}」歸類至 ${catLabel}！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onUpdateTermCategory?.(term, targetCat);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (
-      action.type === 'batch_set_category' ||
-      action.type === 'batchSetCategory' ||
-      action.type === 'batch_category'
-    ) {
-      let targetCat = (
-        action.batchSetCategory?.category ||
-        action.batchSetCategory?.targetCategory ||
-        action.category ||
-        action.targetCategory ||
-        action.categoryName ||
-        action.name ||
-        ''
-      ).trim();
+    setIsWorkshopLoading(true);
+    setWorkshopError(null);
 
-      let termList: string[] = Array.isArray(action.batchSetCategory?.terms)
-        ? action.batchSetCategory.terms
-        : Array.isArray(action.batchSetCategory?.words)
-        ? action.batchSetCategory.words
-        : Array.isArray(action.terms)
-        ? action.terms
-        : Array.isArray(action.words)
-        ? action.words
-        : [];
-
-      if (!targetCat) {
-        const catMatch =
-          (action.summary || '').match(/(?:歸類至|加入|移至|設定為)[「『"']?([^「『"'」』\n\r]+?)[」』"']?分類/i) ||
-          (action.summary || '').match(/「([^」]+)」/);
-        if (catMatch) targetCat = catMatch[1].trim();
+    try {
+      const response = await apiFetch('/api/ai/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'vocab_workshop',
+          workshopTopic: topic,
+          workshopLevel,
+          workshopCount,
+          existingWordsSummary: uniqueExistingWords.map((w) => w.term)
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.workshop) {
+        throw new Error(data.error || '生成主題單字失敗，請稍後再試');
       }
-
-      if (termList.length === 0) {
-        const msgObj = messages.find((m) => m.id === actionId);
-        const searchSource = `${action.summary || ''} ${msgObj?.content || ''}`;
-        const excludeMatch = searchSource.match(/(?:非|除了|排除)[「『"']?([^「『"'」』\n\r\s]+?)[」』"']?分類/i);
-        if (excludeMatch) {
-          const excludedCat = excludeMatch[1].trim().toLowerCase();
-          termList = existingWords
-            .filter((w) => (w.category || '未分類').toLowerCase() !== excludedCat)
-            .map((w) => w.term);
-        } else if (/(?:未分類)/.test(searchSource)) {
-          termList = existingWords
-            .filter((w) => !w.category || w.category.trim() === '' || w.category.trim() === '未分類')
-            .map((w) => w.term);
-        } else {
-          termList = existingWords.map((w) => w.term);
-        }
-      }
-
-      const catLabel = !targetCat || targetCat === '未分類' ? '未分類' : `「${targetCat}」`;
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🏷️ 批次單字分類確認',
-          message: `確定要將以下 ${termList.length} 個單字批次分類至 ${catLabel} 嗎？\n\n${termList.slice(0, 15).join(', ')}${termList.length > 15 ? '...等' : ''}`,
-          type: 'info',
-          confirmText: '確認批次分類',
-          onConfirm: () => {
-            onBatchUpdateTermsCategory?.(termList, targetCat);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功將 ${termList.length} 個單字批次歸類至 ${catLabel}！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onBatchUpdateTermsCategory?.(termList, targetCat);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (
-      action.type === 'add_category' ||
-      action.type === 'addCategory'
-    ) {
-      const name = (
-        action.addCategory?.name ||
-        action.addCategory?.category ||
-        action.name ||
-        action.category ||
-        ''
-      ).trim();
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '📁 新增單字分類確認',
-          message: `確定要建立新的自訂分類「${name}」嗎？`,
-          type: 'info',
-          confirmText: '確認新增',
-          onConfirm: () => {
-            onAddCategory?.(name);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功建立自訂分類「${name}」！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onAddCategory?.(name);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (
-      action.type === 'rename_category' ||
-      action.type === 'renameCategory'
-    ) {
-      const oldName = (
-        action.renameCategory?.oldName ||
-        action.oldName ||
-        ''
-      ).trim();
-      const newName = (
-        action.renameCategory?.newName ||
-        action.newName ||
-        ''
-      ).trim();
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '✏️ 更名單字分類確認',
-          message: `確定要將分類「${oldName}」更名為「${newName}」嗎？\n該分類下的所有單字將自動同步更新。`,
-          type: 'info',
-          confirmText: '確認更名',
-          onConfirm: () => {
-            onRenameCategory?.(oldName, newName);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功將分類「${oldName}」更名為「${newName}」！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onRenameCategory?.(oldName, newName);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else if (
-      action.type === 'delete_category' ||
-      action.type === 'deleteCategory'
-    ) {
-      const name = (
-        action.deleteCategory?.name ||
-        action.deleteCategory?.category ||
-        action.name ||
-        action.category ||
-        ''
-      ).trim();
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '🗑️ 刪除單字分類確認',
-          message: `確定要刪除分類「${name}」嗎？\n原屬於此分類的單字將安全保留並重設為「未分類」。`,
-          type: 'danger',
-          confirmText: '確認刪除',
-          onConfirm: () => {
-            onDeleteCategory?.(name);
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `bot-done-${Date.now()}`,
-                role: 'assistant',
-                content: `✅ 已成功刪除分類「${name}」，原單字已設為未分類！`,
-                timestamp: Date.now()
-              }
-            ]);
-          }
-        });
-      } else {
-        onDeleteCategory?.(name);
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
-    } else {
-      const fallbackSummary = action.summary || '確定要執行此項系統操作嗎？';
-      if (onRequestConfirm) {
-        onRequestConfirm({
-          title: '⚡ 系統操作確認',
-          message: fallbackSummary,
-          type: 'warning',
-          confirmText: '確定執行',
-          onConfirm: () => {
-            setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-          }
-        });
-      } else {
-        setExecutedActions((prev) => ({ ...prev, [actionId]: true }));
-      }
+      setWorkshopResult(data.workshop);
+    } catch (err: any) {
+      setWorkshopError(err.message || '生成失敗，請確認 API Key 設定');
+    } finally {
+      setIsWorkshopLoading(false);
     }
   };
+
+  // --------------------------------------------------------------------------
+  // HANDLER 5: Quiz Coach
+  // --------------------------------------------------------------------------
+  const handleStartQuizCoach = async () => {
+    if (isQuizLoading) return;
+    setIsQuizLoading(true);
+    setQuizError(null);
+    setSelectedAnswers({});
+
+    // Pick lowest-level / due words from user's library
+    const candidateWords = [...uniqueExistingWords]
+      .sort((a, b) => (a.level || 0) - (b.level || 0))
+      .slice(0, 8)
+      .map((w) => ({ term: w.term, pos: w.pos, def: w.def }));
+
+    try {
+      const response = await apiFetch('/api/ai/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'quiz_coach',
+          quizWords: quizSourceMode === 'library' && candidateWords.length >= 2 ? candidateWords : [],
+          userPrompt: quizSourceMode === 'custom' || candidateWords.length < 2 ? customQuizTopic : ''
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.quiz || !Array.isArray(data.quiz.questions)) {
+        throw new Error(data.error || '生成特訓題目失敗');
+      }
+      setQuizTitle(data.quiz.quizTitle || 'AI 弱點實戰隨堂特訓');
+      setQuizCoachIntro(data.quiz.coachIntroZh || '');
+      setQuizQuestions(data.quiz.questions);
+    } catch (err: any) {
+      setQuizError(err.message || '無法產生隨堂測驗，請檢查設定');
+    } finally {
+      setIsQuizLoading(false);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // HANDLER 6: Smart Toolkit (Categorize & Enrich)
+  // --------------------------------------------------------------------------
+  const handleRunSmartCategorize = async () => {
+    if (isCategorizing || uncategorizedWords.length === 0) return;
+    setIsCategorizing(true);
+    setToolkitStatusMsg(null);
+    setAppliedCategoryGroups({});
+
+    try {
+      const response = await apiFetch('/api/ai/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'smart_categorize',
+          existingWordsSummary: uncategorizedWords.slice(0, 45).map((w) => ({
+            term: w.term,
+            pos: w.pos,
+            def: w.def
+          })),
+          screenContext: {
+            allCategories: settings?.customCategories || []
+          }
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.categorization) {
+        throw new Error(data.error || '智慧分類分析失敗');
+      }
+      setCategoryPlan(data.categorization);
+    } catch (err: any) {
+      setToolkitStatusMsg(`⚠️ ${err.message || '分析失敗'}`);
+    } finally {
+      setIsCategorizing(false);
+    }
+  };
+
+  const handleApplyCategoryGroup = (group: SmartCategoryGroup) => {
+    if (!group.category || !Array.isArray(group.terms) || group.terms.length === 0) return;
+    onAddCategory?.(group.category);
+    onBatchUpdateTermsCategory?.(group.terms, group.category);
+    setAppliedCategoryGroups((prev) => ({ ...prev, [group.category]: true }));
+  };
+
+  const handleApplyAllCategoryGroups = () => {
+    if (!categoryPlan?.groups) return;
+    categoryPlan.groups.forEach((group) => {
+      if (!appliedCategoryGroups[group.category]) {
+        onAddCategory?.(group.category);
+        onBatchUpdateTermsCategory?.(group.terms, group.category);
+      }
+    });
+    const nextMap: Record<string, boolean> = {};
+    categoryPlan.groups.forEach((g) => {
+      nextMap[g.category] = true;
+    });
+    setAppliedCategoryGroups(nextMap);
+    setToolkitStatusMsg('✅ 已成功將所有建議分類套用至您的單字庫！');
+  };
+
+  const handleBatchEnrichMissing = async () => {
+    const incompleteWords = existingWords.filter(
+      (w) => !w.defEn || !w.ex || !w.def || w.def.trim().toLowerCase() === w.term.trim().toLowerCase()
+    );
+    if (incompleteWords.length === 0) {
+      setToolkitStatusMsg('✨ 您的單字庫中所有單字皆已具備完整中英釋義與例句！');
+      return;
+    }
+
+    setIsEnrichingLibrary(true);
+    setToolkitStatusMsg(null);
+    try {
+      const response = await apiFetch('/api/ai/enrich-library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          words: incompleteWords.slice(0, 25)
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data.words)) {
+        throw new Error(data.error || '補齊失敗');
+      }
+      onBatchStandardizeWords(data.words);
+      setToolkitStatusMsg(`✅ 已成功為 ${data.words.length} 個單字補齊道地英英釋義與例句！`);
+    } catch (err: any) {
+      setToolkitStatusMsg(`⚠️ ${err.message || '補齊過程發生錯誤'}`);
+    } finally {
+      setIsEnrichingLibrary(false);
+    }
+  };
+
+  const STUDIO_TABS: {
+    id: StudioTab;
+    label: string;
+    sub: string;
+    icon: React.ReactNode;
+    badge?: string | number;
+  }[] = [
+    {
+      id: 'tutor',
+      label: '智慧家教',
+      sub: '文法・翻譯・精準問答',
+      icon: <Bot className="w-4 h-4" />
+    },
+    {
+      id: 'xray',
+      label: '單字 X 光室',
+      sub: '字根・搭配詞・近義辨析',
+      icon: <Microscope className="w-4 h-4" />
+    },
+    {
+      id: 'clinic',
+      label: '寫作潤飾門診',
+      sub: '去中式英文・三階改寫',
+      icon: <PenTool className="w-4 h-4" />
+    },
+    {
+      id: 'workshop',
+      label: '主題生詞工坊',
+      sub: '情境詞包・一鍵收錄',
+      icon: <Layers className="w-4 h-4" />
+    },
+    {
+      id: 'quiz',
+      label: '弱點隨堂考官',
+      sub: '個人字庫實戰出題',
+      icon: <Target className="w-4 h-4" />
+    },
+    {
+      id: 'toolkit',
+      label: '字庫智慧整理',
+      sub: 'AI 自動分類・補齊釋義',
+      icon: <Wrench className="w-4 h-4" />,
+      badge: uncategorizedWords.length > 0 ? uncategorizedWords.length : undefined
+    }
+  ];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4.25rem)] max-w-6xl mx-auto px-3 sm:px-6 py-4">
-      {/* Top Header & Unified Status */}
-      <div className="flex-shrink-0 mb-3 space-y-3">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
-              <Sparkles className="w-5 h-5 animate-pulse" />
+    <div className="max-w-6xl mx-auto px-3 sm:px-6 pb-24 pt-2 animate-enter">
+      {/* Studio Hero Header & Mode Switcher */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-sm p-4 sm:p-6 mb-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/25 shrink-0">
+              <Sparkles className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-tight">
-                  VocabMin 全能 AI 智囊
-                </h2>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-800/50 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span>已連線雲端資料庫</span>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight">
+                  VocabMin AI 語言學習工作台
+                </h1>
+                <span className="px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
+                  Zero-Hallucination Engine
                 </span>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5 flex-wrap">
-                <span>單字庫現有 <strong className="text-indigo-600 dark:text-indigo-400 font-bold">{existingWords.length}</strong> 個單字</span>
-                <span>•</span>
-                <span>收藏文章 <strong className="text-purple-600 dark:text-purple-400 font-bold">{existingArticles.length}</strong> 篇</span>
-                <span>•</span>
-                <span>今日待複習 <strong className="text-amber-600 dark:text-amber-400 font-bold">{existingWords.filter((w) => (w.nextReview || 0) <= Date.now()).length}</strong> 字</span>
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                專為台灣學習者打造的五大專屬 AI 模組 — 語意清晰、繁體中文精準解析、零幻覺干擾
               </p>
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            {messages.length > 0 && (
-              <button
-                onClick={() => setMessages([])}
-                className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 shadow-sm"
-                title="清除目前對話紀錄"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-slate-400" />
-                <span>清空對話</span>
-              </button>
+          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60 px-3.5 py-2 rounded-2xl border border-slate-200/60 dark:border-slate-700/60 self-start md:self-auto">
+            <BookOpen className="w-4 h-4 text-indigo-500 shrink-0" />
+            <span>
+              個人字庫：<strong className="text-slate-800 dark:text-slate-200">{uniqueExistingWords.length}</strong> 字
+            </span>
+            {uncategorizedWords.length > 0 && (
+              <>
+                <span className="text-slate-300 dark:text-slate-600">•</span>
+                <button
+                  onClick={() => setActiveTab('toolkit')}
+                  className="text-amber-600 dark:text-amber-400 font-semibold hover:underline"
+                >
+                  {uncategorizedWords.length} 字未分類
+                </button>
+              </>
             )}
           </div>
         </div>
 
-        {/* Quick Inspiration Category Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
-          <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 shrink-0 mr-1 flex items-center gap-1">
-            <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
-            <span>靈感話題：</span>
-          </span>
-          {SCENARIOS.map((sc) => {
-            const Icon = sc.icon;
-            const isActive = activeScenario === sc.id;
+        {/* 6-Mode Navigation Pills */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {STUDIO_TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
             return (
               <button
-                key={sc.id}
-                onClick={() => setActiveScenario(sc.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 shrink-0 whitespace-nowrap active:scale-95 ${
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`relative flex flex-col items-start p-3 rounded-2xl border text-left transition-all ${
                   isActive
-                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-transparent shadow-sm shadow-indigo-500/20'
-                    : 'bg-white/80 dark:bg-slate-800/80 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-500/20'
+                    : 'bg-slate-50/70 dark:bg-slate-800/50 text-slate-700 dark:text-slate-300 border-slate-200/70 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-800'
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-indigo-500 dark:text-indigo-400'}`} />
-                <span>{sc.name}</span>
+                <div className="flex items-center justify-between w-full mb-1">
+                  <div
+                    className={`p-1.5 rounded-xl ${
+                      isActive ? 'bg-white/20 text-white' : 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400'
+                    }`}
+                  >
+                    {tab.icon}
+                  </div>
+                  {tab.badge !== undefined && (
+                    <span
+                      className={`px-1.5 py-0.5 text-[10px] font-bold rounded-full ${
+                        isActive
+                          ? 'bg-white text-indigo-700'
+                          : 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300'
+                      }`}
+                    >
+                      {tab.badge}
+                    </span>
+                  )}
+                </div>
+                <div className="font-bold text-xs sm:text-sm leading-tight">{tab.label}</div>
+                <div
+                  className={`text-[10px] mt-0.5 line-clamp-1 ${
+                    isActive ? 'text-indigo-100' : 'text-slate-400 dark:text-slate-500'
+                  }`}
+                >
+                  {tab.sub}
+                </div>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Main Chat Stream Container */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar rounded-2xl bg-white/40 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/60 p-4 sm:p-5 space-y-4">
-        {messages.length === 0 ? (
-          /* Honest, Clean Initial State (ZERO Hallucinated Pre-canned Dialogues) */
-          <div className="flex flex-col items-center justify-center min-h-[300px] text-center max-w-xl mx-auto py-8">
-            <div className={`w-14 h-14 rounded-3xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-lg shadow-indigo-500/20 mb-4`}>
-              <Sparkles className="w-7 h-7 animate-pulse" />
+      {/* ==================================================================== */}
+      {/* TAB 1: 智慧家教 (AI TUTOR CHAT)                                       */}
+      {/* ==================================================================== */}
+      {activeTab === 'tutor' && (
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-sm flex flex-col h-[calc(100vh-290px)] min-h-[520px] overflow-hidden">
+          {/* Top Bar */}
+          <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                一對一英語家教（支援文法拆解、中英精譯、同義詞比較、例句造句）
+              </span>
             </div>
-
-            <h3 className="text-base sm:text-lg font-bold text-slate-800 dark:text-slate-100 mb-1">
-              您好！我是您的 VocabMin 全能 AI 智囊
-            </h3>
-
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 max-w-md">
-              已連線讀取您的個人資料庫（目前單字庫共 <span className="font-semibold text-indigo-600 dark:text-indigo-400">{existingWords.length}</span> 個單字、<span className="font-semibold text-purple-600 dark:text-purple-400">{existingArticles.length}</span> 篇閱讀文章）。
-              請隨時提出任何問題或操作指令，我將精準理解您的意圖並提供專業協助。
-            </p>
-
-            {/* Smart Scenario Starter Chips */}
-            <div className="w-full text-left space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                  <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
-                  <span>場景推薦靈感快速發送：</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleNextChips(currentScenario.id)}
-                  className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center gap-1 px-2 py-0.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition active:scale-95"
-                  title="換一批推薦靈感"
-                >
-                  <Dices className="w-3.5 h-3.5" />
-                  <span>換一批</span>
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                {(() => {
-                  const offset = chipOffsets[currentScenario.id] || 0;
-                  const allChips = currentScenario.chips || [];
-                  const displayed = allChips.slice(offset, offset + 3);
-                  const finalChips = displayed.length < 3 ? [...displayed, ...allChips.slice(0, 3 - displayed.length)] : displayed;
-                  return finalChips.map((chip, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => {
-                        setInputPrompt(chip);
-                        inputRef.current?.focus();
-                      }}
-                      className="p-3 rounded-xl text-xs font-medium text-left bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm text-slate-700 dark:text-slate-200 transition flex items-center justify-between group active:scale-[0.99]"
-                    >
-                      <span>{chip}</span>
-                      <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-indigo-500 group-hover:translate-x-0.5 transition shrink-0 ml-2" />
-                    </button>
-                  ));
-                })()}
-              </div>
-            </div>
+            <button
+              onClick={() => setMessages([DEFAULT_TUTOR_WELCOME])}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+              title="清除對話紀錄"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>清除對話</span>
+            </button>
           </div>
-        ) : (
-          /* Render Messages Stream */
-          messages.map((msg) => {
-            const isUser = msg.role === 'user';
-            return (
+
+          {/* Messages Stream */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+            {messages.map((msg) => (
               <div
                 key={msg.id}
-                className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
+                className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                {!isUser && (
-                  <div className={`w-8 h-8 rounded-xl bg-gradient-to-tr ${currentScenario.accent} text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm`}>
-                    <Sparkles className="w-4 h-4" />
+                {msg.role === 'model' && (
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+                    <Bot className="w-4 h-4" />
                   </div>
                 )}
 
-                <div className={`max-w-[85%] sm:max-w-[75%] space-y-3 ${isUser ? 'items-end' : 'items-start'}`}>
-                  {/* Detailed Error Card or Bubble Content */}
-                  {!isUser && msg.errorInfo ? (
-                    <div className="p-4 rounded-2xl bg-rose-50/90 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-slate-800 dark:text-slate-100 space-y-3 shadow-xs rounded-tl-none">
-                      <div className="flex items-start gap-2.5">
-                        <div className="w-7 h-7 rounded-lg bg-rose-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
-                          <AlertCircle className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-sm text-rose-700 dark:text-rose-400">
-                              {msg.errorInfo.userMessage}
-                            </h4>
-                            {msg.errorInfo.statusCode && (
-                              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-200/80 dark:bg-rose-900/80 text-rose-800 dark:text-rose-300">
-                                HTTP {msg.errorInfo.statusCode}
-                              </span>
-                            )}
-                          </div>
-                          {msg.errorInfo.suggestion && (
-                            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
-                              💡 {msg.errorInfo.suggestion}
-                            </p>
-                          )}
-                        </div>
-                      </div>
+                <div
+                  className={`max-w-[88%] sm:max-w-[78%] space-y-3 ${
+                    msg.role === 'user' ? 'items-end' : 'items-start'
+                  }`}
+                >
+                  <div
+                    className={`rounded-2xl px-4 py-3.5 text-sm leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-indigo-600 text-white rounded-br-sm shadow-sm'
+                        : msg.isError
+                        ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-200 border border-rose-200 dark:border-rose-800/60'
+                        : 'bg-slate-50 dark:bg-slate-800/70 text-slate-800 dark:text-slate-100 border border-slate-200/60 dark:border-slate-700/60 rounded-bl-sm'
+                    }`}
+                  >
+                    {msg.role === 'user' ? (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    ) : (
+                      <MarkdownRenderer content={msg.content} />
+                    )}
+                  </div>
 
-                      {/* Action Buttons */}
-                      <div className="flex items-center gap-2 pt-1 border-t border-rose-200/60 dark:border-rose-900/40">
-                        {(msg.errorInfo.reason === 'API_KEY_INVALID' || msg.errorInfo.reason === 'NO_API_KEY') && onNavigateToTab && (
-                          <button
-                            onClick={() => onNavigateToTab('settings')}
-                            className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
-                          >
-                            <span>前往設定 API Key</span>
-                          </button>
-                        )}
+                  {/* Recommended Words Cards (if any) */}
+                  {msg.recommendedWords && msg.recommendedWords.length > 0 && (
+                    <div className="bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/70 dark:border-indigo-800/50 rounded-2xl p-3.5 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          推薦收錄單字 ({msg.recommendedWords.length})
+                        </span>
                         <button
                           onClick={() => {
-                            const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-                            if (lastUserMsg) {
-                              sendMessage(lastUserMsg.content);
-                            }
+                            msg.recommendedWords?.forEach((w) => handleSaveSingleWord(w));
                           }}
-                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100/50 text-xs font-semibold flex items-center gap-1.5 transition"
+                          className="text-xs font-bold px-2.5 py-1 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
                         >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>重新嘗試</span>
+                          全部加入字庫
                         </button>
                       </div>
-
-                      {/* Collapsible Technical Error Details */}
-                      {msg.errorInfo.details && (
-                        <details className="text-xs text-slate-500 dark:text-slate-400 group">
-                          <summary className="cursor-pointer select-none text-rose-600 dark:text-rose-400 hover:underline font-mono text-[11px]">
-                            ▶ 展開技術錯誤細節 (Technical Details)
-                          </summary>
-                          <div className="mt-1.5 p-2.5 rounded-xl bg-slate-900 text-slate-200 font-mono text-[11px] break-all max-h-36 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                            {msg.errorInfo.details}
-                          </div>
-                        </details>
-                      )}
-                    </div>
-                  ) : (
-                    /* Bubble Content with Markdown rendering */
-                    <div
-                      className={`p-3.5 sm:p-4 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-sm ${
-                        isUser
-                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-tr-none whitespace-pre-wrap'
-                          : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-tl-none'
-                      }`}
-                    >
-                      {isUser ? (
-                        msg.content
-                      ) : (
-                        <MarkdownRenderer content={msg.content} isUser={false} />
-                      )}
-                    </div>
-                  )}
-
-                  {/* Rich Article Card (If AI Generated / Imported an Article) */}
-                  {!isUser && msg.article && (
-                    <AIArticleCard
-                      article={msg.article}
-                      onSave={(art) => {
-                        onSaveArticle?.(art);
-                        setSavedArticlesMap((prev) => ({
-                          ...prev,
-                          [msg.article?.id || msg.id]: true
-                        }));
-                      }}
-                      onOpenInReader={(art) => {
-                        onOpenArticleInReader?.(art);
-                      }}
-                      isSaved={
-                        !!savedArticlesMap[msg.article?.id || msg.id] ||
-                        existingArticles.some(
-                          (a) =>
-                            (msg.article?.id && a.id === msg.article.id) ||
-                            (msg.article?.title && a.title === msg.article.title)
-                        )
-                      }
-                      onAddWords={onAddWords}
-                      onOpenCambridge={onOpenCambridge}
-                    />
-                  )}
-
-                  {/* Vocabulary Cards (If AI Recommended/Generated Words) */}
-                  {!isUser && msg.words && msg.words.length > 0 && (
-                    <div className="p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300">
-                          <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                          <span>推薦生詞卡片 ({msg.words.length} 字)</span>
-                        </div>
-
-                        <button
-                          onClick={() => handleAddAllWords(msg.words!, msg.id)}
-                          className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow transition"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>一鍵全部收錄</span>
-                        </button>
-                      </div>
-
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {msg.words.map((w, idx) => {
-                          const itemKey = `${msg.id}-${idx}`;
-                          const isAdded = !!addedWordsMap[itemKey];
-
+                        {msg.recommendedWords.map((w, idx) => {
+                          const key = w.term.trim().toLowerCase();
+                          const isSaved = existingTermsSet.has(key) || savedTermsToast[key];
                           return (
                             <div
-                              key={idx}
-                              className="p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 shadow-xs flex flex-col justify-between space-y-2"
+                              key={`${w.term}-${idx}`}
+                              className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200/80 dark:border-slate-700/70 flex flex-col justify-between gap-2"
                             >
                               <div>
-                                <div className="flex items-center justify-between gap-1 mb-1">
+                                <div className="flex items-center justify-between gap-2">
                                   <div className="flex items-center gap-1.5">
-                                    <span className="font-extrabold text-sm text-slate-900 dark:text-white capitalize">
+                                    <span className="font-bold text-sm text-slate-900 dark:text-white">
                                       {w.term}
                                     </span>
-                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono">
-                                      {w.pos || 'n.'}
+                                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-mono">
+                                      {w.pos}
                                     </span>
-                                  </div>
-
-                                  <div className="flex items-center gap-1">
                                     <button
-                                      onClick={() => w.term && handleSpeak(w.term)}
-                                      className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition"
+                                      onClick={() => speak(w.term)}
+                                      className="p-1 text-slate-400 hover:text-indigo-600 rounded"
                                       title="發音"
                                     >
                                       <Volume2 className="w-3.5 h-3.5" />
                                     </button>
-                                    <button
-                                      onClick={() => w.term && onOpenCambridge(w.term)}
-                                      className="p-1 rounded-md text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
-                                      title="劍橋字典查詢"
-                                    >
-                                      <ExternalLink className="w-3.5 h-3.5" />
-                                    </button>
                                   </div>
+                                  <button
+                                    onClick={() => handleSaveSingleWord(w)}
+                                    disabled={isSaved}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 transition-all ${
+                                      isSaved
+                                        ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                                        : 'bg-indigo-50 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-600 hover:text-white'
+                                    }`}
+                                  >
+                                    {isSaved ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                                    <span>{isSaved ? '已收錄' : '收錄'}</span>
+                                  </button>
                                 </div>
-
-                                <p className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200 mt-1">
                                   {w.def}
-                                </p>
-
+                                </div>
                                 {w.defEn && (
-                                  <p className="text-[11px] text-slate-500 dark:text-slate-400 italic line-clamp-2 mt-0.5">
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-1">
                                     {w.defEn}
-                                  </p>
-                                )}
-
-                                {w.ex && (
-                                  <p className="text-[10px] text-slate-400 line-clamp-2 mt-1 border-l-2 border-indigo-400/50 pl-1.5">
-                                    {w.ex}
-                                  </p>
+                                  </div>
                                 )}
                               </div>
-
-                              <button
-                                onClick={() => handleAddSingleWord(w, itemKey)}
-                                disabled={isAdded}
-                                className={`w-full py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition ${
-                                  isAdded
-                                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 cursor-default'
-                                    : 'bg-slate-100 dark:bg-slate-700/80 hover:bg-indigo-600 hover:text-white text-slate-700 dark:text-slate-200'
-                                }`}
-                              >
-                                {isAdded ? (
-                                  <>
-                                    <Check className="w-3 h-3 text-emerald-500" />
-                                    <span>已加入字庫</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Plus className="w-3 h-3" />
-                                    <span>加入單字庫</span>
-                                  </>
-                                )}
-                              </button>
+                              {w.ex && (
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400 italic border-t border-slate-100 dark:border-slate-800 pt-1.5">
+                                  "{w.ex}"
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1719,144 +912,1211 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
                     </div>
                   )}
 
-                  {/* Explicit Action Proposal Card (Requires User Confirmation, No Surprises) */}
-                  {!isUser && msg.action && msg.action.type !== 'save_article' && (
-                    <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-900/60 space-y-2.5">
-                      <div className="flex items-center gap-2 text-xs font-bold text-amber-800 dark:text-amber-300">
-                        <AlertTriangle className="w-4 h-4 text-amber-600" />
-                        <span>操作提案確認</span>
+                  {/* Follow-up Suggestion Pills */}
+                  {msg.role === 'model' &&
+                    msg.followUpSuggestions &&
+                    msg.followUpSuggestions.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {msg.followUpSuggestions.map((sug, i) => (
+                          <button
+                            key={i}
+                            onClick={() => handleSendTutorPrompt(sug)}
+                            disabled={isTutorLoading}
+                            className="text-xs px-3 py-1.5 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors flex items-center gap-1"
+                          >
+                            <span>{sug}</span>
+                            <ArrowRight className="w-3 h-3 opacity-60" />
+                          </button>
+                        ))}
                       </div>
+                    )}
+                </div>
 
-                      <p className="text-xs text-amber-900 dark:text-amber-200">
-                        {msg.action.summary || 'AI 為您擬定了一項單字庫或系統操作，請在確認後點擊執行。'}
-                      </p>
+                {msg.role === 'user' && (
+                  <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 flex items-center justify-center shrink-0 mt-0.5">
+                    <User className="w-4 h-4" />
+                  </div>
+                )}
+              </div>
+            ))}
 
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          onClick={() => handleExecuteAction(msg.action, msg.id)}
-                          disabled={!!executedActions[msg.id]}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition ${
-                            executedActions[msg.id]
-                              ? 'bg-emerald-600 text-white cursor-default'
-                              : 'bg-amber-600 hover:bg-amber-700 active:scale-95 text-white'
-                          }`}
-                        >
-                          {executedActions[msg.id] ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>已成功執行</span>
-                            </>
-                          ) : (
-                            <>
-                              <ShieldCheck className="w-3.5 h-3.5" />
-                              <span>確認並立即執行</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Message Bottom Toolbar (Copy / Time) */}
-                  {!isUser && (
-                    <div className="flex items-center gap-2 text-[10px] text-slate-400 pl-1">
-                      <button
-                        onClick={() => handleCopy(msg.id, msg.content)}
-                        className="hover:text-slate-600 dark:hover:text-slate-200 flex items-center gap-1 transition"
-                      >
-                        {copiedId === msg.id ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-500" />
-                            <span className="text-emerald-500 font-bold">已複製</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" />
-                            <span>複製</span>
-                          </>
-                        )}
-                      </button>
-                      <span>•</span>
-                      <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    </div>
-                  )}
+            {isTutorLoading && (
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-800/70 border border-slate-200/60 dark:border-slate-700/60 rounded-2xl px-4 py-3 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  正在思考並整理繁體中文詳解...
                 </div>
               </div>
-            );
-          })
-        )}
+            )}
 
-        {/* Loading Indicator */}
-        {isLoading && (
-          <div className="flex gap-3 justify-start items-center animate-pulse">
-            <div className={`w-8 h-8 rounded-xl bg-gradient-to-tr ${currentScenario.accent} text-white flex items-center justify-center shrink-0`}>
-              <Sparkles className="w-4 h-4 animate-spin" />
-            </div>
-            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></span>
-              <span>AI 思考分析中，正在根據【{currentScenario.name}】精準處理您的需求...</span>
-            </div>
+            <div ref={chatEndRef} />
           </div>
-        )}
 
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input Form Bar */}
-      <div className="flex-shrink-0 mt-3">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            sendMessage(inputPrompt);
-          }}
-          className="relative flex items-center"
-        >
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={inputPrompt}
-            onChange={(e) => setInputPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                sendMessage(inputPrompt);
-              }
+          {/* Input Bar */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSendTutorPrompt();
             }}
-            placeholder={`在【${currentScenario.name}】模式下輸入您的提問、英文句子或指令 (Enter 發送，Shift+Enter 換行)...`}
-            className="w-full py-3.5 pl-4 pr-24 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm focus:border-indigo-500 dark:focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 outline-none text-xs sm:text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 resize-none transition"
-          />
-
-          <div className="absolute right-2 flex items-center gap-1.5">
-            {isLoading ? (
-              <button
-                type="button"
-                onClick={handleCancelGeneration}
-                className="p-2 rounded-xl text-white bg-rose-500 hover:bg-rose-600 active:scale-95 transition shadow-sm flex items-center justify-center animate-pulse"
-                title="停止生成 (Cancel)"
-              >
-                <Square className="w-4 h-4 fill-current" />
-              </button>
-            ) : (
+            className="p-3 sm:p-4 border-t border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900"
+          >
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={tutorInput}
+                onChange={(e) => setTutorInput(e.target.value)}
+                placeholder="詢問任何英文問題，例如：「怎麼區分借東西 borrow 跟 lend？」或「幫我查 meticulous」..."
+                className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+              />
               <button
                 type="submit"
-                disabled={!inputPrompt.trim() || isLoading}
-                className={`p-2 rounded-xl text-white transition shadow-sm flex items-center justify-center ${
-                  !inputPrompt.trim() || isLoading
-                    ? 'bg-slate-300 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed'
-                    : `bg-gradient-to-r ${currentScenario.accent} hover:opacity-95 active:scale-95`
-                }`}
-                title="發送訊息"
+                disabled={!tutorInput.trim() || isTutorLoading}
+                className="px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-sm flex items-center gap-2 shadow-sm transition-all shrink-0"
               >
-                <Send className="w-4 h-4" />
+                {isTutorLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                <span className="hidden sm:inline">發送</span>
               </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* TAB 2: 單字 X 光室 (WORD X-RAY)                                      */}
+      {/* ==================================================================== */}
+      {activeTab === 'xray' && (
+        <div className="space-y-5">
+          {/* Search & Quick Pick Bar */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm">
+            <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2 mb-3">
+              <Microscope className="w-5 h-5 text-indigo-600" />
+              <span>單字深度 X 光剖析室</span>
+            </h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleRunWordXRay();
+              }}
+              className="grid grid-cols-1 md:grid-cols-12 gap-3"
+            >
+              <div className="md:col-span-5">
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">
+                  目標英文單字或片語 *
+                </label>
+                <input
+                  type="text"
+                  value={xrayInput}
+                  onChange={(e) => setXrayInput(e.target.value)}
+                  placeholder="例如：ubiquitous, mitigate, take for granted..."
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                />
+              </div>
+              <div className="md:col-span-5">
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">
+                  出現的句子語境（選填，有助於一字多義精準定位）
+                </label>
+                <input
+                  type="text"
+                  value={xrayContext}
+                  onChange={(e) => setXrayContext(e.target.value)}
+                  placeholder="貼上您讀到這個單字的原句（選填）..."
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                />
+              </div>
+              <div className="md:col-span-2 flex items-end">
+                <button
+                  type="submit"
+                  disabled={!xrayInput.trim() || isXrayLoading}
+                  className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm transition-all"
+                >
+                  {isXrayLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Microscope className="w-4 h-4" />
+                  )}
+                  <span>立即剖析</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Quick pick from user's own library */}
+            {uniqueExistingWords.length > 0 && (
+              <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-slate-400">從您的字庫快速點選：</span>
+                {uniqueExistingWords.slice(0, 10).map((w) => (
+                  <button
+                    key={w.id}
+                    onClick={() => handleRunWordXRay(w.term)}
+                    disabled={isXrayLoading}
+                    className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-950/60 dark:hover:text-indigo-300 transition-colors"
+                  >
+                    {w.term}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
-        </form>
 
-        <p className="text-[10px] text-slate-400 dark:text-slate-500 text-center mt-2">
-          VocabMin AI 採用專屬教育語境調優。任何單字庫修改皆需使用者確認後才執行，絕不擅自竄改。
-        </p>
-      </div>
+          {xrayError && (
+            <div className="bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-2xl p-4 text-sm text-rose-700 dark:text-rose-200 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{xrayError}</span>
+            </div>
+          )}
+
+          {isXrayLoading && (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-12 text-center space-y-3">
+              <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
+              <div className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                正在進行語言學 X 光掃描（字根拆解、母語搭配詞、近義詞語感比較）...
+              </div>
+            </div>
+          )}
+
+          {xrayResult && !isXrayLoading && (
+            <div className="space-y-4 animate-enter">
+              {/* Hero Word Card */}
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-6 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100 dark:border-slate-800">
+                  <div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <h3 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">
+                        {xrayResult.term}
+                      </h3>
+                      <span className="text-sm font-mono text-slate-500 dark:text-slate-400">
+                        {xrayResult.phonetic}
+                      </span>
+                      <button
+                        onClick={() => speak(xrayResult.term)}
+                        className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 transition-colors"
+                        title="聆聽發音"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+                      <span className="px-2.5 py-0.5 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        {xrayResult.pos}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-lg text-xs font-bold bg-violet-100 dark:bg-violet-950/80 text-violet-700 dark:text-violet-300">
+                        CEFR {xrayResult.cefrLevel}
+                      </span>
+                    </div>
+                    <div className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 mt-2">
+                      {xrayResult.coreDefZh}
+                    </div>
+                    <div className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                      {xrayResult.coreDefEn}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start sm:self-center">
+                    <button
+                      onClick={() => onOpenCambridge(xrayResult.term)}
+                      className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-1.5"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>劍橋字典</span>
+                    </button>
+                    <button
+                      onClick={() =>
+                        handleSaveSingleWord({
+                          term: xrayResult.term,
+                          pos: normalizePos(xrayResult.pos),
+                          def: xrayResult.coreDefZh,
+                          defEn: xrayResult.coreDefEn,
+                          ex: xrayResult.exampleSentences?.[0]?.en || ''
+                        })
+                      }
+                      disabled={
+                        existingTermsSet.has(xrayResult.term.trim().toLowerCase()) ||
+                        savedTermsToast[xrayResult.term.trim().toLowerCase()]
+                      }
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                    >
+                      {existingTermsSet.has(xrayResult.term.trim().toLowerCase()) ||
+                      savedTermsToast[xrayResult.term.trim().toLowerCase()] ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          <span>已收錄於字庫</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4" />
+                          <span>加入單字庫</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3 Core Pillars: Etymology, Memory Hook, Nuance */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
+                  <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-800/50 rounded-2xl p-4">
+                    <div className="text-xs font-black text-amber-800 dark:text-amber-300 flex items-center gap-1.5 mb-1.5">
+                      <Lightbulb className="w-4 h-4" />
+                      <span>秒記口訣與記憶錨點</span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 leading-relaxed">
+                      {xrayResult.memoryHook}
+                    </p>
+                  </div>
+
+                  <div className="bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/70 dark:border-indigo-800/50 rounded-2xl p-4">
+                    <div className="text-xs font-black text-indigo-800 dark:text-indigo-300 flex items-center gap-1.5 mb-1.5">
+                      <Layers className="w-4 h-4" />
+                      <span>字根字首與構詞拆解</span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 leading-relaxed">
+                      {xrayResult.etymology}
+                    </p>
+                  </div>
+
+                  <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/50 rounded-2xl p-4">
+                    <div className="text-xs font-black text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5 mb-1.5">
+                      <Sparkles className="w-4 h-4" />
+                      <span>母語者語感與常見誤區</span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-200 leading-relaxed">
+                      {xrayResult.nuanceAndVibe}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Collocations & Synonyms Comparison */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Collocations */}
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm">
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+                    <Flame className="w-4 h-4 text-orange-500" />
+                    <span>母語高頻搭配詞 (Collocations)</span>
+                  </h4>
+                  <div className="space-y-2.5">
+                    {xrayResult.collocations?.map((col, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-sm text-indigo-600 dark:text-indigo-400">
+                            {col.phrase}
+                          </span>
+                          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                            {col.meaningZh}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">
+                          "{col.exampleEn}"
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Synonyms Nuance Comparison */}
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm">
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-violet-500" />
+                    <span>近義詞微妙語感辨析</span>
+                  </h4>
+                  <div className="space-y-2.5">
+                    {xrayResult.synonymsComparison?.map((syn, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <button
+                            onClick={() => handleRunWordXRay(syn.word)}
+                            className="font-bold text-sm text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
+                          >
+                            <span>{syn.word}</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-700 dark:text-slate-200">{syn.nuanceZh}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">
+                          "{syn.exampleEn}"
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Example Sentences & Word Family */}
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4">
+                <div>
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white mb-3">
+                    多語境實戰例句
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {xrayResult.exampleSentences?.map((ex, i) => (
+                      <div
+                        key={i}
+                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 flex flex-col justify-between"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">
+                              {ex.contextTag}
+                            </span>
+                            <button
+                              onClick={() => speak(ex.en)}
+                              className="text-slate-400 hover:text-indigo-600"
+                              title="朗讀例句"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="text-xs sm:text-sm font-medium text-slate-800 dark:text-slate-100">
+                            {ex.en}
+                          </p>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+                          {ex.zh}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {xrayResult.wordFamily && xrayResult.wordFamily.length > 0 && (
+                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-400">衍生詞性家族：</span>
+                    {xrayResult.wordFamily.map((wf, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleRunWordXRay(wf.term)}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 transition-colors"
+                      >
+                        <strong className="text-slate-800 dark:text-slate-200">{wf.term}</strong>{' '}
+                        <span className="text-slate-400 font-mono">({wf.pos})</span>{' '}
+                        <span className="text-slate-600 dark:text-slate-300">{wf.defZh}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* TAB 3: 寫作潤飾門診 (WRITING CLINIC)                                  */}
+      {/* ==================================================================== */}
+      {activeTab === 'clinic' && (
+        <div className="space-y-5">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <PenTool className="w-5 h-5 text-indigo-600" />
+                  <span>寫作門診與母語三階潤飾</span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  輸入您的英文草稿（不會寫的詞可直接夾雜中文），AI 將為您診斷病句並提供三種層次的道地改寫
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start">
+                {(
+                  [
+                    { id: 'general', label: '日常自然' },
+                    { id: 'business', label: '專業商務' },
+                    { id: 'academic', label: '學術考試' },
+                    { id: 'casual', label: '美式口語' }
+                  ] as const
+                ).map((g) => (
+                  <button
+                    key={g.id}
+                    onClick={() => setClinicGoal(g.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      clinicGoal === g.id
+                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <textarea
+              rows={4}
+              value={clinicInput}
+              onChange={(e) => setClinicInput(e.target.value)}
+              placeholder="請輸入您想批改或潤飾的英文句子/段落（例如：I very like this project, hope we can 儘快達成共識 and make good result...）"
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+            />
+
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-400 font-semibold">範例測試：</span>
+                {[
+                  'Thank you for help me yesterday, I will give you the report before Friday.',
+                  'Because the weather is very bad, so our flight was delay for three hours.',
+                  'More and more people think AI will 取代傳統工作 in the future.'
+                ].map((sample, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setClinicInput(sample)}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                  >
+                    範例 {i + 1}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={handleRunWritingClinic}
+                disabled={!clinicInput.trim() || isClinicLoading}
+                className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-sm flex items-center gap-2 shadow-sm"
+              >
+                {isClinicLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                <span>開始門診批改</span>
+              </button>
+            </div>
+          </div>
+
+          {clinicError && (
+            <div className="bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-2xl p-4 text-sm text-rose-700 dark:text-rose-200">
+              {clinicError}
+            </div>
+          )}
+
+          {clinicResult && !isClinicLoading && (
+            <div className="space-y-4 animate-enter">
+              {/* Score & Overall Feedback */}
+              <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white flex flex-col items-center justify-center shrink-0 shadow-md">
+                  <span className="text-xl font-black leading-none">{clinicResult.overallScore}</span>
+                  <span className="text-[10px] opacity-80 mt-0.5">語感評分</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white mb-1">
+                    主治教練總評
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                    {clinicResult.overallCommentZh}
+                  </p>
+                </div>
+              </div>
+
+              {/* 3-Tier Rewrites */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[
+                  {
+                    key: 'corrected',
+                    badge: 'STEP 1 • 文法修正版',
+                    color: 'emerald',
+                    data: clinicResult.correctedVersion,
+                    note: clinicResult.correctedVersion?.keyFixesNote
+                  },
+                  {
+                    key: 'native',
+                    badge: 'STEP 2 • 母語自然版 (推薦)',
+                    color: 'indigo',
+                    data: clinicResult.nativeNaturalVersion,
+                    note: clinicResult.nativeNaturalVersion?.highlightNote
+                  },
+                  {
+                    key: 'c1',
+                    badge: 'STEP 3 • CEFR C1 高階精煉版',
+                    color: 'violet',
+                    data: clinicResult.advancedC1Version,
+                    note: clinicResult.advancedC1Version?.highlightNote
+                  }
+                ].map((tier) => (
+                  <div
+                    key={tier.key}
+                    className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm flex flex-col justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2.5">
+                        <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-300">
+                          {tier.badge}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => speak(tier.data?.text || '')}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600"
+                            title="朗讀"
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleCopyText(tier.key, tier.data?.text || '')}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600"
+                            title="複製句子"
+                          >
+                            {copiedKey === tier.key ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-500" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white leading-relaxed">
+                        {tier.data?.text}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                        {tier.data?.translationZh}
+                      </p>
+                    </div>
+                    {tier.note && (
+                      <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs text-indigo-600 dark:text-indigo-300 font-medium">
+                        💡 {tier.note}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Error Diagnostics */}
+              {clinicResult.diagnostics && clinicResult.diagnostics.length > 0 && (
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm">
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white mb-3">
+                    逐處細節診斷與去中式英文解析
+                  </h4>
+                  <div className="space-y-2.5">
+                    {clinicResult.diagnostics.map((d, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300">
+                              {d.issueType}
+                            </span>
+                            <span className="text-xs line-through text-rose-500 font-medium">
+                              {d.originalSpan}
+                            </span>
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+                            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                              {d.fixedSpan}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-slate-300">
+                            {d.explanationZh}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Upgraded Vocabulary to Save */}
+              {clinicResult.upgradedVocabulary && clinicResult.upgradedVocabulary.length > 0 && (
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm">
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white mb-3">
+                    本次潤飾亮點詞彙（可一鍵收入字庫）
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    {clinicResult.upgradedVocabulary.map((w, i) => {
+                      const key = w.term.trim().toLowerCase();
+                      const isSaved = existingTermsSet.has(key) || savedTermsToast[key];
+                      return (
+                        <div
+                          key={i}
+                          className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 flex flex-col justify-between gap-2"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white">
+                                {w.term}
+                              </span>
+                              <button
+                                onClick={() => handleSaveSingleWord(w)}
+                                disabled={isSaved}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${
+                                  isSaved
+                                    ? 'bg-emerald-50 text-emerald-600'
+                                    : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                }`}
+                              >
+                                {isSaved ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                                <span>{isSaved ? '已收錄' : '收錄'}</span>
+                              </button>
+                            </div>
+                            <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mt-1">
+                              {w.pos} {w.def}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-1 italic">"{w.ex}"</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* TAB 4: 主題生詞工坊 (VOCAB WORKSHOP)                                  */}
+      {/* ==================================================================== */}
+      {activeTab === 'workshop' && (
+        <div className="space-y-5">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+              <Layers className="w-5 h-5 text-indigo-600" />
+              <span>主題生詞工坊（自動避開您字庫中已有的單字）</span>
+            </h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+              <div className="md:col-span-6">
+                <label className="block text-xs font-bold text-slate-500 mb-1">
+                  想學習的主題、考試或生活場景
+                </label>
+                <input
+                  type="text"
+                  value={workshopTopic}
+                  onChange={(e) => setWorkshopTopic(e.target.value)}
+                  placeholder="例如：TOEIC 商務談判、IELTS 環境生態、軟體工程會議..."
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-900 dark:text-white"
+                />
+              </div>
+              <div className="md:col-span-3">
+                <label className="block text-xs font-bold text-slate-500 mb-1">CEFR 難度等級</label>
+                <select
+                  value={workshopLevel}
+                  onChange={(e) => setWorkshopLevel(e.target.value as any)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-900 dark:text-white"
+                >
+                  <option value="A2">A2 初中級基礎</option>
+                  <option value="B1">B1 中級實用</option>
+                  <option value="B2">B2 中高級核心</option>
+                  <option value="C1">C1 高階流利學術</option>
+                  <option value="C2">C2 母語精通級</option>
+                </select>
+              </div>
+              <div className="md:col-span-3 flex items-end gap-2">
+                <select
+                  value={workshopCount}
+                  onChange={(e) => setWorkshopCount(Number(e.target.value))}
+                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-900 dark:text-white"
+                >
+                  <option value={4}>4 字</option>
+                  <option value={6}>6 字</option>
+                  <option value={8}>8 字</option>
+                </select>
+                <button
+                  onClick={() => handleRunWorkshop()}
+                  disabled={!workshopTopic.trim() || isWorkshopLoading}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-sm flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  {isWorkshopLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4" />
+                  )}
+                  <span>生成詞包</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Topic Presets */}
+            <div className="flex items-center gap-2 flex-wrap pt-1">
+              <span className="text-xs font-bold text-slate-400">熱門主題一鍵選：</span>
+              {[
+                'TOEIC 多益商務書信與合約',
+                'IELTS 雅思高分轉折與論述詞彙',
+                'AI 人工智慧與科技趨勢',
+                '美劇高頻道地慣用片語',
+                '跨國遠端工作與敏捷開發會議',
+                '情緒與人際微妙關係形容詞'
+              ].map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => handleRunWorkshop(preset)}
+                  disabled={isWorkshopLoading}
+                  className="text-xs px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {workshopError && (
+            <div className="bg-rose-50 dark:bg-rose-950/40 border border-rose-200 rounded-2xl p-4 text-sm text-rose-700">
+              {workshopError}
+            </div>
+          )}
+
+          {workshopResult && !isWorkshopLoading && (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4 animate-enter">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                    {workshopResult.themeTitle}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    {workshopResult.themeSummary}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (workshopResult.SuggestedCategory) {
+                      onAddCategory?.(workshopResult.SuggestedCategory);
+                    }
+                    workshopResult.words.forEach((w) =>
+                      handleSaveSingleWord({
+                        ...w,
+                        category: w.category || workshopResult.SuggestedCategory || '未分類'
+                      })
+                    );
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 self-start sm:self-center shadow-sm"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>一鍵全數收入單字庫 ({workshopResult.words.length})</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {workshopResult.words.map((w, idx) => {
+                  const key = w.term.trim().toLowerCase();
+                  const isSaved = existingTermsSet.has(key) || savedTermsToast[key];
+                  return (
+                    <div
+                      key={idx}
+                      className="p-4 rounded-2xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/60 flex flex-col justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base font-black text-slate-900 dark:text-white">
+                              {w.term}
+                            </span>
+                            <button
+                              onClick={() => speak(w.term)}
+                              className="p-1 text-slate-400 hover:text-indigo-600"
+                            >
+                              <Volume2 className="w-4 h-4" />
+                            </button>
+                            <span className="text-xs font-mono px-2 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700">
+                              {w.pos}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() =>
+                              handleSaveSingleWord({
+                                ...w,
+                                category: w.category || workshopResult.SuggestedCategory || '未分類'
+                              })
+                            }
+                            disabled={isSaved}
+                            className={`px-3 py-1 rounded-xl text-xs font-bold flex items-center gap-1 ${
+                              isSaved
+                                ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                            }`}
+                          >
+                            {isSaved ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                            <span>{isSaved ? '已收錄' : '加入字庫'}</span>
+                          </button>
+                        </div>
+
+                        <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400 mt-1.5">
+                          {w.def}
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          {w.defEn}
+                        </div>
+
+                        {w.memoryTip && (
+                          <div className="mt-2 text-xs bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 px-3 py-1.5 rounded-xl">
+                            💡 記憶提示：{w.memoryTip}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="pt-2.5 border-t border-slate-200/60 dark:border-slate-700/60 text-xs space-y-0.5">
+                        <p className="font-medium text-slate-800 dark:text-slate-200">"{w.ex}"</p>
+                        {w.exZh && <p className="text-slate-500 dark:text-slate-400">{w.exZh}</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* TAB 5: 弱點隨堂考官 (QUIZ COACH)                                      */}
+      {/* ==================================================================== */}
+      {activeTab === 'quiz' && (
+        <div className="space-y-5">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <Target className="w-5 h-5 text-indigo-600" />
+                  <span>AI 弱點特訓隨堂考官</span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  直接抽取您單字庫中熟練度較低的單字，即時編寫全新情境克漏字與語感辨析題
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setQuizSourceMode('library')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                    quizSourceMode === 'library'
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  從我的弱點字庫出題 ({uniqueExistingWords.length} 字)
+                </button>
+                <button
+                  onClick={() => setQuizSourceMode('custom')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                    quizSourceMode === 'custom'
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  自訂主題出題
+                </button>
+              </div>
+            </div>
+
+            {quizSourceMode === 'custom' && (
+              <input
+                type="text"
+                value={customQuizTopic}
+                onChange={(e) => setCustomQuizTopic(e.target.value)}
+                placeholder="輸入想測驗的主題，例如：多益易混淆動詞、高階形容詞..."
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-sm"
+              />
+            )}
+
+            <button
+              onClick={handleStartQuizCoach}
+              disabled={isQuizLoading}
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-sm flex items-center gap-2 shadow-sm"
+            >
+              {isQuizLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+              <span>{quizQuestions.length > 0 ? '重新生成一組新考題' : '開始生成 4 題實戰特訓'}</span>
+            </button>
+          </div>
+
+          {quizError && (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-sm text-rose-700">
+              {quizError}
+            </div>
+          )}
+
+          {quizQuestions.length > 0 && !isQuizLoading && (
+            <div className="space-y-4 animate-enter">
+              <div className="bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-800/60 rounded-2xl p-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-black text-indigo-900 dark:text-indigo-200">
+                    {quizTitle}
+                  </h3>
+                  {quizCoachIntro && (
+                    <p className="text-xs text-indigo-700 dark:text-indigo-300 mt-0.5">
+                      {quizCoachIntro}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-xs font-black text-indigo-700 dark:text-indigo-300 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-xl">
+                  <Award className="w-4 h-4" />
+                  <span>
+                    得分：
+                    {
+                      Object.entries(selectedAnswers).filter(
+                        ([qIdx, ansIdx]) => quizQuestions[Number(qIdx)]?.correctIndex === ansIdx
+                      ).length
+                    }{' '}
+                    / {quizQuestions.length}
+                  </span>
+                </div>
+              </div>
+
+              {quizQuestions.map((q, qIdx) => {
+                const chosen = selectedAnswers[qIdx];
+                const isAnswered = chosen !== undefined;
+                return (
+                  <div
+                    key={qIdx}
+                    className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        Q{qIdx + 1} • {q.questionType}
+                      </span>
+                      <button
+                        onClick={() => speak(q.stemEn.replace(/_{2,}/g, q.options[q.correctIndex] || ''))}
+                        className="text-xs text-slate-400 hover:text-indigo-600 flex items-center gap-1"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>朗讀完整句</span>
+                      </button>
+                    </div>
+
+                    <p className="text-sm sm:text-base font-bold text-slate-900 dark:text-white leading-relaxed">
+                      {q.stemEn}
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {q.options.map((opt, oIdx) => {
+                        const isCorrect = oIdx === q.correctIndex;
+                        const isSelected = chosen === oIdx;
+                        let btnStyle =
+                          'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:border-indigo-400';
+                        if (isAnswered) {
+                          if (isCorrect) {
+                            btnStyle =
+                              'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-800 dark:text-emerald-200 font-bold';
+                          } else if (isSelected) {
+                            btnStyle =
+                              'bg-rose-50 dark:bg-rose-950/60 border-rose-500 text-rose-800 dark:text-rose-200';
+                          } else {
+                            btnStyle = 'opacity-50 bg-slate-50 dark:bg-slate-800/40 border-slate-200';
+                          }
+                        }
+
+                        return (
+                          <button
+                            key={oIdx}
+                            disabled={isAnswered}
+                            onClick={() =>
+                              setSelectedAnswers((prev) => ({ ...prev, [qIdx]: oIdx }))
+                            }
+                            className={`p-3 rounded-2xl border text-left text-sm flex items-center justify-between transition-all ${btnStyle}`}
+                          >
+                            <span>
+                              <strong className="mr-2 font-mono">
+                                {String.fromCharCode(65 + oIdx)}.
+                              </strong>
+                              {opt}
+                            </span>
+                            {isAnswered && isCorrect && (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            )}
+                            {isAnswered && isSelected && !isCorrect && (
+                              <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {isAnswered && (
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/70 dark:border-slate-700/60 space-y-2 text-xs sm:text-sm animate-enter">
+                        <div className="font-bold text-slate-800 dark:text-slate-100">
+                          📖 句意翻譯：{q.stemTranslationZh}
+                        </div>
+                        <div className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                          💡 <strong>考官詳解：</strong>
+                          {q.explanationZh}
+                        </div>
+                        {q.collocationTip && (
+                          <div className="text-indigo-600 dark:text-indigo-400 font-semibold">
+                            🔑 重點筆記：{q.collocationTip}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* TAB 6: 字庫智慧整理 (SMART LIBRARY TOOLKIT)                           */}
+      {/* ==================================================================== */}
+      {activeTab === 'toolkit' && (
+        <div className="space-y-5">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4">
+            <div>
+              <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <Wrench className="w-5 h-5 text-indigo-600" />
+                <span>字庫確定性智慧整理中心</span>
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                透過視覺化預覽與一鍵確認管理您的單字庫，安全可靠、不會因自然語言誤判而誤刪資料
+              </p>
+            </div>
+
+            {toolkitStatusMsg && (
+              <div className="p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-xs sm:text-sm font-bold text-indigo-700 dark:text-indigo-300">
+                {toolkitStatusMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Tool 1: AI Auto Categorize */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 flex flex-col justify-between gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-sm font-black text-slate-900 dark:text-white">
+                      1. 未分類單字 AI 智慧歸類
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">
+                      {uncategorizedWords.length} 個未分類
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    由 AI 自動掃描您尚未分類的單字，依語意與領域規劃分類群組，預覽滿意後即可一鍵套用。
+                  </p>
+                </div>
+                <button
+                  onClick={handleRunSmartCategorize}
+                  disabled={isCategorizing || uncategorizedWords.length === 0}
+                  className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                >
+                  {isCategorizing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FolderPlus className="w-4 h-4" />
+                  )}
+                  <span>
+                    {uncategorizedWords.length === 0 ? '所有單字皆已分類' : '開始 AI 分類規劃'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Tool 2: Enrich Missing Definitions */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 flex flex-col justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-slate-900 dark:text-white mb-1.5">
+                    2. 補齊缺漏英英釋義與例句
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    自動檢查字庫中缺少英英定義 (defEn) 或例句的單字，並批次為您補齊道地雙語資料。
+                  </p>
+                </div>
+                <button
+                  onClick={handleBatchEnrichMissing}
+                  disabled={isEnrichingLibrary || existingWords.length === 0}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 disabled:opacity-40 text-xs font-bold flex items-center justify-center gap-1.5"
+                >
+                  {isEnrichingLibrary ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4" />
+                  )}
+                  <span>一鍵檢查並補齊資料</span>
+                </button>
+              </div>
+
+              {/* Tool 3: Deduplicate */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 flex flex-col justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-slate-900 dark:text-white mb-1.5">
+                    3. 單字庫重複項目合併去重
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    安全合併重複建立的相同單字與詞性，並保留您最高的學習熟練度紀錄。
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    onDeduplicateWords();
+                    setToolkitStatusMsg('✅ 已執行單字庫重複項目合併與清理！');
+                  }}
+                  disabled={existingWords.length === 0}
+                  className="w-full py-2.5 px-4 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>執行合併去重</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Categorization Plan Preview */}
+          {categoryPlan && (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm space-y-4 animate-enter">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                    AI 智慧分類建議預覽
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    {categoryPlan.summaryZh}
+                  </p>
+                </div>
+                <button
+                  onClick={handleApplyAllCategoryGroups}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 self-start sm:self-center"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>一鍵套用所有分類</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {categoryPlan.groups.map((grp, idx) => {
+                  const isApplied = appliedCategoryGroups[grp.category];
+                  return (
+                    <div
+                      key={idx}
+                      className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 flex flex-col justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">
+                            📁 {grp.category} ({grp.terms.length})
+                          </span>
+                          <button
+                            onClick={() => handleApplyCategoryGroup(grp)}
+                            disabled={isApplied}
+                            className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${
+                              isApplied
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                            }`}
+                          >
+                            {isApplied ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                            <span>{isApplied ? '已套用' : '套用此組'}</span>
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                          {grp.reasonZh}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 mt-2.5">
+                          {grp.terms.map((t, i) => (
+                            <span
+                              key={i}
+                              className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

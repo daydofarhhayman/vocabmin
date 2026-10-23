@@ -179,7 +179,7 @@ async function generateWithModelFallback(
     'gemini-3.8-flash',
     'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite',
-    'gemini-3.1-pro-preview'
+    'gemini-4-argon'
   ]
 ) {
   let lastError: any = null;
@@ -552,72 +552,103 @@ async function fetchExternalUrlContent(url: string): Promise<{ title: string; te
   }
 }
 
-/**
- * Execute on-demand data providers requested by Gemini to eliminate hallucinations and save tokens
- */
-function executeDataProvider(provider: string, param: string, screenContext: any): string {
-  if (!screenContext) return '無可用的畫面或資料庫數據。';
+// ============================================================================
+// VocabMin Next-Gen AI Assistant Engine (Task-Isolated, Zero-Hallucination)
+// ============================================================================
 
-  switch (provider) {
-    case 'get_categories': {
-      const stats = screenContext.categoryStats || {};
-      const cats: string[] = screenContext.allCategories || screenContext.customCategories || Object.keys(stats);
-      if (cats.length === 0) return '目前資料庫中無任何自訂分類。';
-      const lines = cats.map((c) => `- 分類「${c}」: 收錄 ${stats[c] || 0} 個單字`);
-      if (stats['未分類'] !== undefined) {
-        lines.push(`- 「未分類」: 收錄 ${stats['未分類']} 個單字`);
-      }
-      return `【資料庫全庫分類清單與統計 (共 ${cats.length} 個分類)】:\n${lines.join('\n')}`;
+function buildCleanContextualGrounding(screenContext: any, currentArticle: any): string {
+  const parts: string[] = [];
+
+  if (screenContext) {
+    const tabLabels: Record<string, string> = {
+      home: '首頁概覽',
+      review: 'SRS 間隔重複複習測驗',
+      quiz: '多模式隨堂測驗',
+      reader: screenContext.isReadingArticle ? '沉浸式雙語文章閱讀' : '文章書架列表',
+      list: '個人單字庫管理',
+      ai: 'VocabMin AI 語言學習工作台'
+    };
+    const statsLine = [
+      screenContext.currentTab ? `當前畫面：${tabLabels[screenContext.currentTab] || screenContext.currentTab}` : '',
+      screenContext.totalWordsCount !== undefined ? `單字總數：${screenContext.totalWordsCount} 個` : '',
+      screenContext.dueWordsCount !== undefined ? `待複習：${screenContext.dueWordsCount} 個` : '',
+      screenContext.totalArticlesCount !== undefined ? `收錄文章：${screenContext.totalArticlesCount} 篇` : '',
+      screenContext.dailyStreak !== undefined ? `連續學習：${screenContext.dailyStreak} 天` : ''
+    ]
+      .filter(Boolean)
+      .join(' ｜ ');
+
+    if (statsLine) {
+      parts.push(`【使用者目前學習狀態】\n${statsLine}`);
     }
-    case 'get_words_by_category': {
-      const rawParam = (param || '').trim();
-      const isUncat = !rawParam || /^(?:未分類|尚未分類|無分類|uncategorized|none|未歸類)$/i.test(rawParam);
-      const wordsWithCats = screenContext.wordsWithCategories || [];
-      const matched = wordsWithCats.filter((w: any) => {
-        const cat = (w.category || '未分類').trim().toLowerCase();
-        if (isUncat) return !w.category || cat === '未分類' || cat === '';
-        return cat === rawParam.toLowerCase();
-      });
-      const terms = matched.map((w: any) => w.term);
-      const label = isUncat ? '未分類' : rawParam;
-      return `【資料庫分類「${label}」下的單字查詢結果】:\n共找到 ${terms.length} 個單字:\n${terms.length > 0 ? terms.join(', ') : '（目前此分類下無單字）'}`;
+
+    if (Array.isArray(screenContext.allCategories) && screenContext.allCategories.length > 0) {
+      parts.push(`【現有自訂分類】\n${screenContext.allCategories.join('、')}`);
     }
-    case 'search_words': {
-      const query = (param || '').trim().toLowerCase();
-      const allTerms: string[] = screenContext.allWordTerms || [];
-      const wordsWithCats = screenContext.wordsWithCategories || [];
-      const matched = allTerms.filter((t: string) => t.toLowerCase().includes(query));
-      const details = matched.slice(0, 50).map((t: string) => {
-        const item = wordsWithCats.find((w: any) => w.term.toLowerCase() === t.toLowerCase());
-        return `${t}${item?.category ? ` (分類: ${item.category})` : ''}`;
-      });
-      return `【單字庫搜尋「${param}」結果 (共找到 ${matched.length} 個符合單字)】:\n${details.length > 0 ? details.join(', ') : '（未找到符合的單字）'}`;
+
+    // Active Quiz / Review Question Grounding
+    if (screenContext.activeStudyQuestion) {
+      const q = screenContext.activeStudyQuestion;
+      parts.push(
+        [
+          `【使用者當前畫面上的測驗題目（若使用者詢問「這題」、「為什麼」、「這個字」，即指以下內容）】`,
+          `- 目標單字：${q.term} (${q.pos || 'n.'}) — ${q.def || ''}${q.defEn ? ` / ${q.defEn}` : ''}`,
+          q.sentence ? `- 題目原句："${q.sentence}"` : '',
+          Array.isArray(q.options) && q.options.length > 0 ? `- 選項：[${q.options.join(', ')}]` : '',
+          `- 作答狀態：${
+            q.isAnswered
+              ? `已作答（選擇 "${q.userAnswer || ''}"，${q.isCorrect ? '答對' : '答錯'}）`
+              : '尚未作答'
+          }`
+        ]
+          .filter(Boolean)
+          .join('\n')
+      );
     }
-    case 'get_articles': {
-      const titles: string[] = screenContext.allArticleTitles || [];
-      return `【文章閱讀庫現有文章清單 (共 ${titles.length} 篇)】:\n${titles.length > 0 ? titles.map((t, idx) => `${idx + 1}. 《${t}》`).join('\n') : '（目前無任何收錄文章）'}`;
+
+    // Active Inspected Word Grounding
+    if (screenContext.activeInspectedWord) {
+      parts.push(
+        `【使用者當前正開啟檢視的目標單字】：「${screenContext.activeInspectedWord}」（若使用者詢問「這個單字」或要求造句、辨析，請直接針對此單字回答）`
+      );
     }
-    case 'get_stats': {
-      return `【資料庫核心數據統計】:\n- 單字總數: ${screenContext.totalWordsCount || 0} 個\n- 文章總數: ${screenContext.totalArticlesCount || 0} 篇\n- 今日待複習: ${screenContext.dueWordsCount || 0} 個\n- 連續打卡: ${screenContext.dailyStreak || 0} 天\n- 今日已學: ${screenContext.learnedToday || 0} 個`;
-    }
-    default:
-      return `未知的資料提供者: ${provider}`;
   }
+
+  // Active Reading Article Grounding
+  if (currentArticle && currentArticle.title) {
+    parts.push(
+      [
+        `【使用者當前正在閱讀的文章（若使用者詢問文章大意、段落文法或挑出難字，請 100% 根據此文回答，嚴禁憑空捏造）】`,
+        `- 標題：《${currentArticle.title}》 (CEFR ${currentArticle.level || 'B2'} / ${currentArticle.category || 'General'})`,
+        currentArticle.summary ? `- 摘要：${currentArticle.summary}` : '',
+        `- 英文正文：\n${String(currentArticle.content || '').slice(0, 18000)}`
+      ]
+        .filter(Boolean)
+        .join('\n')
+    );
+  }
+
+  return parts.join('\n\n');
 }
 
-// API: AI Vocabulary Operations (Chat, Word Lookup, Standardization, Auto-Complete, Modifying, Deletion)
-app.post('/api/ai/chat', async (req, res) => {
+async function handleAIAssistantRequest(req: any, res: any) {
   try {
     const {
-      messages,
-      userPrompt,
-      existingWordsSummary,
-      rawInputWords,
-      existingArticlesSummary,
-      scenario,
-      scenarioDesc,
-      currentArticle,
-      screenContext
+      mode = 'tutor',
+      messages = [],
+      userPrompt = '',
+      targetWord = '',
+      contextSentence = '',
+      writingText = '',
+      writingGoal = 'general',
+      workshopTopic = '',
+      workshopLevel = 'B2',
+      workshopCount = 6,
+      existingWordsSummary = [],
+      rawInputWords = [],
+      currentArticle = null,
+      screenContext = null,
+      quizWords = []
     } = req.body;
 
     const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
@@ -626,334 +657,476 @@ app.post('/api/ai/chat', async (req, res) => {
       return res.status(503).json({
         error: '尚未配置 Google Gemini API Key',
         reason: 'NO_API_KEY',
-        details: '伺服器未檢測到 GEMINI_API_KEY，且請求中未附帶使用者個人的 API Key。',
-        suggestion: '請前往右上角「設定 > 雲端同步與帳號」輸入個人的 Google Gemini API Key，即可啟用即時 AI 智能對話與單字操作！',
-        reply: '目前系統尚未偵測到 GEMINI_API_KEY 設定。請前往「設定」輸入您的金鑰，即可開啟 AI 智能語伴與所有學習功能！',
+        details: '伺服器未檢測到 GEMINI_API_KEY，且請求中未附帶個人 API Key。',
+        suggestion: '請點擊右上角「設定 > 雲端同步與帳號」填入您的 Google Gemini API Key。',
+        reply: '目前尚未設定 Google Gemini API Key。請前往右上角「設定」輸入金鑰後即可啟用 AI 語言助手！',
         words: []
       });
     }
 
-    // Extract raw user prompt cleanly (stripping any accidental frontend prefixes)
-    let rawUserPrompt = (userPrompt || '').trim();
-    const legacyMatch = rawUserPrompt.match(/(?:使用者[指提]問?|User\s*Prompt)[\uff1a:]\s*([\s\S]+)$/i);
-    if (legacyMatch && legacyMatch[1]) {
-      rawUserPrompt = legacyMatch[1].trim();
-    }
+    const STRICT_LANGUAGE_RULE = `
+### 語言與品質鐵律 (STRICT LANGUAGE & QUALITY RULES):
+1. 你的所有中文解說、分析、提示與回饋，必須 100% 使用自然、道地的「繁體中文（台灣慣用語）」（例如使用：單字、詞彙、語境、片語、資訊、透過、專案；嚴禁夾雜簡體字、嚴禁中英半句混亂拼湊或亂碼）。
+2. 英文例句、英文定義 (defEn) 與潤飾範文必須是純粹、自然、道地的母語者英文 (Authentic Native English)。
+3. 嚴格遵守「零幻覺原則」：直接、精準回答使用者的問題，絕不答非所問，絕不編造不存在的系統操作或假裝已經修改資料庫。`;
 
-    // Check if the prompt contains an external URL to scrape
-    let externalScrapedContext = '';
-    let fetchedExternal: { title: string; text: string } | null = null;
-    const urlMatch = rawUserPrompt.match(/https?:\/\/[^\s"'<>]+/i);
-    if (urlMatch) {
-      const targetUrl = urlMatch[0];
-      fetchedExternal = await fetchExternalUrlContent(targetUrl);
-      if (fetchedExternal && fetchedExternal.text) {
-        externalScrapedContext = `\n【已成功從外部網址 (${targetUrl}) 抓取文章內容】:\n文章標題: ${fetchedExternal.title || '外部網頁文章'}\n文章正文:\n${fetchedExternal.text}\n`;
+    // ========================================================================
+    // MODE 1: WORD X-RAY (單字深度 X 光剖析室)
+    // ========================================================================
+    if (mode === 'word_xray') {
+      const cleanTerm = String(targetWord || userPrompt || '').trim();
+      if (!cleanTerm) {
+        return res.status(400).json({ error: '請輸入要剖析的英文單字或片語' });
       }
+
+      const prompt = `請針對英文單字或片語「${cleanTerm}」進行全方位的深度語言學 X 光剖析。
+${contextSentence ? `參考出現語境："${contextSentence}"\n` : ''}
+${STRICT_LANGUAGE_RULE}`;
+
+      const response = await generateWithModelFallback(
+        ai,
+        {
+          temperature: 0.3,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              term: { type: Type.STRING, description: 'Canonical English word or phrase' },
+              phonetic: { type: Type.STRING, description: 'IPA phonetic transcription, e.g. /juːˈbɪk.wɪ.təs/' },
+              pos: { type: Type.STRING, description: 'Primary part of speech: n., v., adj., adv., or phr.' },
+              cefrLevel: { type: Type.STRING, description: 'CEFR level: A1, A2, B1, B2, C1, or C2' },
+              coreDefZh: { type: Type.STRING, description: '精準繁體中文核心釋義' },
+              coreDefEn: { type: Type.STRING, description: 'Clear, natural English definition' },
+              nuanceAndVibe: {
+                type: Type.STRING,
+                description: '核心語感與母語者使用情境剖析（包含正式程度、語氣褒貶、台灣學習者常見誤區）'
+              },
+              etymology: {
+                type: Type.STRING,
+                description: '字根、字首、字尾拆解與構詞由來（若為基礎字或片語則說明字源演變）'
+              },
+              memoryHook: {
+                type: Type.STRING,
+                description: '令人印象深刻的圖像記憶法、聯想口訣或故事記憶錨點（繁體中文）'
+              },
+              collocations: {
+                type: Type.ARRAY,
+                description: '3 to 4 high-frequency native collocations',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    phrase: { type: Type.STRING },
+                    meaningZh: { type: Type.STRING },
+                    exampleEn: { type: Type.STRING }
+                  },
+                  required: ['phrase', 'meaningZh', 'exampleEn']
+                }
+              },
+              synonymsComparison: {
+                type: Type.ARRAY,
+                description: '2 to 3 close synonyms and how their nuances differ from the target word',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    word: { type: Type.STRING },
+                    nuanceZh: { type: Type.STRING, description: '與目標單字的語感與用法差異（繁體中文）' },
+                    exampleEn: { type: Type.STRING }
+                  },
+                  required: ['word', 'nuanceZh', 'exampleEn']
+                }
+              },
+              wordFamily: {
+                type: Type.ARRAY,
+                description: 'Derivative forms across different parts of speech',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    term: { type: Type.STRING },
+                    pos: { type: Type.STRING },
+                    defZh: { type: Type.STRING }
+                  },
+                  required: ['term', 'pos', 'defZh']
+                }
+              },
+              exampleSentences: {
+                type: Type.ARRAY,
+                description: '3 authentic example sentences in different contexts (日常對話 / 商務職場 / 學術考試)',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    contextTag: { type: Type.STRING },
+                    en: { type: Type.STRING },
+                    zh: { type: Type.STRING }
+                  },
+                  required: ['contextTag', 'en', 'zh']
+                }
+              }
+            },
+            required: [
+              'term',
+              'phonetic',
+              'pos',
+              'cefrLevel',
+              'coreDefZh',
+              'coreDefEn',
+              'nuanceAndVibe',
+              'etymology',
+              'memoryHook',
+              'collocations',
+              'synonymsComparison',
+              'wordFamily',
+              'exampleSentences'
+            ]
+          }
+        },
+        [{ role: 'user', parts: [{ text: prompt }] }]
+      );
+
+      const xrayData = JSON.parse(response.text || '{}');
+      return res.json({ mode: 'word_xray', xray: xrayData });
     }
 
-    const systemInstruction = `You are VocabMin AI (智能單字管理與全能英語學習智囊), an empathetic, knowledgeable, and intuitive English learning coach, linguistic expert, and bilingual reading guide.
+    // ========================================================================
+    // MODE 2: WRITING CLINIC (寫作門診與母語潤飾)
+    // ========================================================================
+    if (mode === 'writing_clinic') {
+      const draft = String(writingText || userPrompt || '').trim();
+      if (!draft) {
+        return res.status(400).json({ error: '請輸入要批改或潤飾的英文句子/段落' });
+      }
 
-### CORE MISSION:
-Listen carefully to the user's message and understand their true intent in context. Give direct, insightful, natural, and helpful responses without robotic deflections, hallucinations, or unsolicited content.
-
-### RESPONSE FORMAT:
-You must strictly output JSON matching this schema:
-- "reply" (string, required): Your conversational response to the user.
-- "words" (array, optional): New vocabulary words to import/learn. Empty array [] when not adding/recommending vocabulary.
-- "article" (object, optional): Structured reading article. ONLY include this when the user explicitly requests to create, generate, or import a brand new article.
-- "action" (object, optional): Explicit database action proposal. ONLY include this when the user explicitly commands a library modification.
-
-### 🛑 CRITICAL ANTI-HALLUCINATION RULES (防幻覺核心準則):
-1. 當使用者正在閱讀文章（情境包含【使用者目前正開啟並停留在以下文章的閱讀畫面】）時：
-   - 使用者的目光「正注視著這篇文章」！
-   - 當使用者提出以下需求時：
-     * 「請幫我挑出此文章的難字」、「挑出生詞」、「文章中的生詞」
-     * 「這篇文章在講什麼」、「總結這篇」、「段落大意」
-     * 「分析這句話的文法」、「解釋這段的意思」
-     * 或是任何提及該文章標題的提問
-   - 你的鐵律回應要求：
-     * 🚨 絕對禁止說「您沒有提供文章」、「您沒有指定哪一篇」或「我的閱讀庫中還沒有這篇文章」！因為文章就在使用者眼前！
-     * 🚨 絕對禁止擅自編造或生成一篇全新、無關的假文章（嚴禁隨機輸出 Digital Nomads 或其他任何短文）！
-     * 🚨 必須 100% 嚴格基於所提供之《${currentArticle?.title || '當前文章'}》完整正文進行分析與回答！
-     * 當使用者要求「挑出難字/生詞」時：
-       - 從該文章的真實英文正文中精選 4~8 個值得學習的進階或核心單字。
-       - 在 "reply" 中給出清晰、親切的引導說明（結合文章上下文解說其含義）。
-       - 在 "words" 陣列中精確輸出這 4~8 個單字（每個單字包含 term, pos, def, defEn，以及取自文章原句或原語境的 ex 例句）。
-       - 嚴格禁止輸出 "article" 欄位（保持 undefined）！
-
-2. 當使用者正在進行【單字卡片複習 / 隨堂測驗】（情境包含【使用者當前正在作答/複習的題目資訊】）時：
-   - 使用者正注視著目前的題目與單字！
-   - 若使用者詢問「這題怎麼解」、「為什麼選這個」、「這個單字怎麼記」、「選項有什麼差別」、「例句文法」、「造句」：
-     * 🚨 必須 100% 針對當前題目的目標單字與例句進行精闢解析！
-     * 🚨 絕對禁止詢問「請問你在背哪一個單字？」或「您目前在看哪道題目？」，因為題目單字、釋義與選項就在上方情境中！
-
-3. 當使用者正在【單字詳情/編輯彈窗】（情境包含【使用者當前正開啟彈窗檢視/編輯的單字】）時：
-   - 使用者正注視著該單字！
-   - 必須直接針對該單字深入解答語意、語感、搭配詞與造句。
-   - 若使用者提出「刪除這個單字」、「刪掉它」或「從字庫移除」，目標單字即為該單字！必須產出 action: { type: 'delete_word', summary: '...', deleteWord: { term: '...' } }。
-
-4. 當使用者在【文章閱讀】中提出「刪除這篇文章」、「刪掉這篇」時：
-   - 目標文章即為當前文章！必須產出 action: { type: 'delete_article', summary: '...', deleteArticle: { title: '...' } }。
-
-5. 當使用者詢問資料庫統計或全庫資訊（例如：「請問我現在有幾篇文章，幾個單字？」、「我的字庫裡有哪些單字？」、「我存了幾篇？」等）：
-   - 🚨 必須 100% 依據環境情境中所提供之【使用者真實資料庫數據庫統計】直接如實回答確切的數字與文章/單字清單！
-   - 🚨 絕對禁止回答「我無法存取後台數據」或「看不到您的數據」，因為統計數據與清單就在情境中！
-
-6. 當使用者在【書架總覽】（尚未開啟單篇文章）時：
-   - 使用者看到的是其文章庫清單。可根據使用者已有文章庫題材進行討論，或提供閱讀規劃。
-   - 只有當使用者明確表示「請幫我寫/生成/創建一篇全新文章」（例如：「幫我寫一篇關於海洋保護的B2英文短文」）時，才在 "article" 物件生成文章。
-
-### SCENARIO RULES & GUIDANCE:
-
-1. GENERAL INQUIRIES, QUESTIONS, GRAMMAR & CHAT:
-   - When the user asks general questions, inquires about grammar/idioms, asks for learning advice, chats, or expresses confusion/frustration:
-     * Answer directly, accurately, and warmly in "reply".
-     * If the user says you didn't understand them previously or expresses frustration (e.g. "聽不懂", "搞錯了", "你根本不懂"): apologize sincerely, pay close attention to what they need, clarify their intent, and directly help them without reciting rigid scripted menus.
-     * "words" MUST be [] (empty array).
-     * "article" MUST NOT be included (omit or undefined).
-     * "action" MUST NOT be included (omit or undefined).
-
-2. VOCABULARY INQUIRIES, RECOMMENDATIONS & ADDING WORDS:
-   - Triggers: User asks for vocabulary recommendations, word lookups, expansions, thematic words, or says "幫我新增/加入單字 [word]", "推薦 5 個商務單字", "有哪些描述性格的形容詞", "請查 ubiquitous":
-     * Provide a friendly conversational explanation in "reply".
-     * Populate "words" with the recommended/added words. Each item must have:
-       - "term": English word or phrase
-       - "pos": Part of speech (n., v., adj., adv., phr., other)
-       - "def": Clear, accurate Traditional Chinese definition (繁體中文解釋)
-       - "defEn": Authentic, clear English explanation in English (英英釋義)
-       - "ex": Natural, modern example sentence in English
-     * DO NOT generate an "article".
-
-3. ARTICLE READING & EXTERNAL IMPORT:
-   - Triggers: ONLY when the user EXPLICITLY asks to generate an article, read a passage/essay, import from a URL, or requests bilingual reading (e.g., "幫我生成一篇關於AI科技的B2雙語文章", "從網址匯入文章 https://...", "我想讀一篇英文短文並看文法結構"):
-     * Populate "article" with:
-       - "title", "subtitle", "author", "source", "level" (A1-C2), "category" ('Tech'|'Science'|'Business'|'News'|'Story'|'Daily'|'Custom')
-       - "content": Complete English article text with paragraphs separated by double newlines (\\n\\n).
-       - "translationZh": High-fidelity paragraph-by-paragraph Traditional Chinese translation (\\n\\n).
-       - "summary": 1-2 sentence Traditional Chinese summary.
-       - "grammarPoints": 3-5 in-depth sentence structures and grammar analyses.
-       - "keyVocabulary": 5-8 key academic/advanced vocabulary words.
-       - "quiz": 1-2 reading comprehension multiple choice questions.
-     * In "reply", summarize the article and highlight key learning points.
-     * In this case, "words" should be [] (key vocabulary is already inside article.keyVocabulary).
-   - CRITICAL PROHIBITION: NEVER generate an article when the user is just asking for vocabulary words, asking questions, or discussing sentences!
-
-4. WRITING CORRECTION & POLISHING (作文與文法批改):
-   - Triggers: User provides an English sentence or paragraph and asks for critique, correction, grammar check, or CEFR C1/C2 polish:
-     * In "reply", provide structured feedback:
-       - 🔍 【原文問題診斷】：逐一指出文法錯誤、時態誤用或不道地的搭配詞。
-       - ✍️ 【自然地道版 (Natural Correction)】：自然地道、文法無誤的英文。
-       - 💎 【高階潤飾版 (CEFR C1/C2 Native Polish)】：運用豐富的學術詞彙、倒裝句或分詞構句。
-       - 💡 【詞彙與句型剖析】：詳細解說為何此處用詞更加精準。
-     * In "words", optionally extract 2-4 advanced vocabulary items from the polished version.
-
-5. DATABASE OPERATIONS & MANAGEMENT ("action" object):
-   - ONLY trigger when the user EXPLICITLY COMMANDS an operational database modification:
-     * "清空所有單字" / "刪除所有單字" / "清空單字庫" -> action: { type: 'clear_all_words', summary: '清空單字庫中的所有單字' }
-     * "清空所有文章" / "刪除所有文章" / "清空文章閱讀庫" -> action: { type: 'clear_all_articles', summary: '清空文章閱讀庫中的所有文章' }
-     * "刪除單字 [term]" / "刪除這個單字" -> action: { type: 'delete_word', summary: '從單字庫刪除「...」', deleteWord: { term: '...' } }
-     * "刪除文章 [title]" / "刪除這篇文章" -> action: { type: 'delete_article', summary: '從文章閱讀庫刪除指定文章', deleteArticle: { title: '...' } }
-     * "合併重複單字" / "去重" -> action: { type: 'deduplicate_words', summary: '合併單字庫中重複的單字' }
-     * "重置所有單字熟練度" -> action: { type: 'reset_mastery', summary: '重置所有單字熟練度為 Level 0' }
-     * "全庫單字標準化" / "補齊英文釋義" -> action: { type: 'batch_standardize', summary: '為現有單字補齊英文釋義並標準化' }
-     * "修改單字 [term]" -> action: { type: 'update_word', summary: '修改單字「...」之釋義或例句', updateWord: { term: '...' } }
-     * "將單字 [term] 分類為 [category]" / "幫我把 [term] 放到 [category] 分類" / "取消單字 [term] 的分類" -> action: { type: 'set_word_category', summary: '將單字「...」分類至「...」', setWordCategory: { term: '...', category: '...' } }
-     * "批次將 [term1, term2...] 分類為 [category]" / "把這幾個單字歸類至 [category]" / "將除了 [catA] 之外的單字全部加入 [catB] 分類" -> action: { type: 'batch_set_category', summary: '批次將 N 個單字歸類至「...」', batchSetCategory: { terms: [...], category: '...' } }
-     * "新增分類 [category]" / "建立新分類 [category]" -> action: { type: 'add_category', summary: '新增自訂分類「...」', addCategory: { name: '...' } }
-     * "將分類 [old] 改名為 [new]" / "更名分類 [old] 為 [new]" -> action: { type: 'rename_category', summary: '將分類「...」更名為「...」', renameCategory: { oldName: '...', newName: '...' } }
-     * "刪除分類 [category]" / "移除分類 [category]" / "將 [category] 分類中的單字全部換成未分類狀態，並刪除分類" -> action: { type: 'delete_category', summary: '刪除自訂分類「...」', deleteCategory: { name: '...' } }
-       🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting words or clearing the vocabulary library! When the user commands to delete or reset a category, action MUST be "delete_category" (or "batch_set_category"), and NEVER "clear_all_words"! In VocabMin, deleting a category safely retains all words and resets their category to "未分類".
-       🚨 STRICT DISTINCTION: NEVER confuse deleting a category with deleting an article! If the user says "刪除 [Name] 分類" or mentions "分類", [Name] is a CATEGORY, NOT an article! NEVER output "delete_article" for category commands!
-     * "幫我把單字庫中尚未分類的單字歸納到最適當的分類" / "為未分類單字分類" / "自動歸納未分類" ->
-       🚨 絕對禁令：當情境中尚有未分類單字或各分類統計包含「未分類」時，嚴格禁止回答「未分類中沒有任何單字」或「所有單字都已經分好類了」！
-       🚨 絕對禁令：嚴格禁止回答假執行的確認語句（如「我已為您發起需求，請確認此操作」）卻不提供具體分類分析與操作卡片！
-       1. 檢視情境中提供的「未分類」單字清單（例如 Violation, Nomenclature, Intentional, Pion, Bending, Emulsion）。
-       2. 針對每一個未分類單字逐一進行領域與語意分析：
-          - 若符合現有分類（如 Chemistry），規劃歸入該分類。
-          - 若屬於其他專業領域（如 物理學/Physics, 法政學術/Academic, 日常實用/General），規劃適當的新分類名稱。
-       3. 在 "reply" 中給出完整且清晰的分類歸納方案（條列指出每個單字預計歸屬之分類與理由）。
-       4. 在 "action" 中產出主要的批次操作確認卡片：action: { type: 'batch_set_category', summary: '...', batchSetCategory: { terms: [...], category: '...' } }。
-     * 使用者簡短確認（"確認"、"好的"、"執行"、"確定"、"可以"）處理：
-       當使用者的輸入僅為「確認」或「好的」等簡短確認詞時，請檢視前一輪對話的討論內容。若上一輪討論為單字分類或庫存異動，請立即落實並輸出具體的 action 操作卡片，絕不能遺失上下文或假裝資料不存在！
-   - ⚠️ CRITICAL ZERO-HALLUCINATION & MANDATORY ACTION BINDING PROTOCOL (絕對禁止假執行幻覺與物件遺漏):
-     * You do NOT have direct execution access to alter, delete, or clear the database in the background.
-     * Therefore, you MUST NEVER falsely claim in "reply" that you have already deleted or cleared anything without emitting an "action" (e.g., STRICTLY PROHIBITED phrases: "已為您清除...", "已為您刪除...", "已經清空...", "已成功刪除...").
-     * When proposing ANY action, you MUST emit the "action" object in your JSON output. If your "reply" claims:
-       "已為您建立「...」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以執行此變更。"
-       YOU MUST ACTUALLY PROVIDE the "action" OBJECT IN THE JSON! An action card cannot appear on screen without the "action" object in JSON!
-     * ⚠️ CATEGORY OPERATIONS VS VOCABULARY GENERATION RULE:
-       When the user commands category adjustments (e.g., "將...加入...分類", "除了...分類以外全部加入...分類", "歸類至...", "設定分類"):
-       1. The word "加入" means ASSIGNING CATEGORIES TO EXISTING WORDS, NOT creating new vocabulary items!
-       2. The "words" array MUST BE EMPTY ("words": []). DO NOT populate vocabulary word cards in "words" when performing category operations!
-       3. You MUST populate "action": { type: "batch_set_category", summary: "...", batchSetCategory: { terms: [...], category: "..." } } (or "set_word_category").
-       4. If the user specifies an exclusion condition (e.g. "除了 Chemistry 以外全部加入 High Energy Physics"), inspect screenContext.wordsWithCategories or screenContext.allWordTerms to find all words that are NOT in the excluded category, and put all those terms into terms: [...]!
-   - CRITICAL SAFETY: If the user is merely asking a question ABOUT these operations (e.g. "如何清空單字？", "什麼是去重？"), explain in "reply" and DO NOT generate an "action"!
-   - NEVER confuse "單字" (words) with "文章" (articles)!
-
-6. LANGUAGE ADAPTATION:
-   - Default language: Warm, professional Traditional Chinese (繁體中文, 台灣語境).
-   - If the user writes in English, practices dialogue, asks for roleplay, or requests English responses, respond naturally and fluently in English (with bilingual notes if helpful).
-
-7. 🛠️ ON-DEMAND DATA ACCESS (按需資料請求對接機制 - 節省 Token 與杜絕幻覺):
-   - To save tokens and eliminate hallucinations, raw database listings are NOT bloated into every turn.
-   - If you need exact database information to safely and accurately fulfill the user's operational command or inquiry, you can ask for it via the "request_data" field in your JSON response!
-   - Available data providers:
-     * "get_categories": Returns the complete, real list of all categories in the user's library and word counts per category. (Use this whenever the user commands category modifications, category deletions, or asks what categories exist!)
-     * "get_words_by_category": Provide "param" as the category name. Returns the exact list of words belonging to that category. (Use this when the user asks to reset words in a category or recategorize words!)
-     * "search_words": Provide "param" as search term. Returns matching words in the user's library.
-     * "get_articles": Returns all article titles in the reading library.
-     * "get_stats": Returns total counts of words, articles, and reviews.
-   - When you set "request_data", VocabMin will immediately query the database and feed the real data to you in a follow-up turn. Once you receive the real data, output the final "action" and "reply" with "request_data": null.`;
-
-    // Construct conversation contents
-    const rawContents: any[] = [];
-
-    // Contextual Grounding (injected into systemInstruction to isolate environment from user turns)
-    const contextParts: string[] = [];
-
-    // 1. Live Screen State Awareness
-    if (screenContext) {
-      const screenLines: string[] = [];
-      const tabNames: Record<string, string> = {
-        home: '首頁概覽儀表板（學習目標卡片、待複習單字提醒、掌握度分佈）',
-        review: '複習測驗（SRS 間隔重複單字卡片複習模式）',
-        quiz: '隨堂測驗（多模式克漏字/拼字/選擇題題型練習）',
-        reader: screenContext.isReadingArticle
-          ? `文章閱讀（正在沉浸式閱讀文章《${screenContext.activeArticleTitle || ''}》）`
-          : `文章閱讀（目前在書架總覽瀏覽文章列表，共 ${screenContext.totalArticlesCount || 0} 篇）`,
-        list: `單字庫（全庫單字管理，共 ${screenContext.totalWordsCount || 0} 個單字）`,
-        ai: 'AI 學習語伴（自由英文深度對話與全庫即時智囊）'
+      const goalLabels: Record<string, string> = {
+        general: '自然日常與流暢溝通 (General & Natural)',
+        business: '專業商務書信與職場溝通 (Professional Business)',
+        academic: '學術論文與留學考試高分寫作 (Academic / IELTS / TOEFL)',
+        casual: '道地美式口語與社群表達 (Casual & Idiomatic)'
       };
-      screenLines.push(`【使用者當前操作畫面】: ${tabNames[screenContext.currentTab] || screenContext.currentTab}`);
-      if (screenContext.totalWordsCount !== undefined) {
-        screenLines.push(`【單字庫總量】: ${screenContext.totalWordsCount} 個單字，【今日待複習】: ${screenContext.dueWordsCount || 0} 個單字`);
-      }
-      if (screenContext.dailyStreak !== undefined) {
-        screenLines.push(`【連續打卡天數】: ${screenContext.dailyStreak} 天，【今日已學】: ${screenContext.learnedToday || 0} 個單字`);
-      }
-      if (screenContext.activeStudyQuestion) {
-        const q = screenContext.activeStudyQuestion;
-        const qLines: string[] = [
-          `\n【🎯 使用者當前正在作答/複習的題目資訊（請直接根據此題提供解說、記憶技巧、造句或選項辨析）】:`,
-          `- 練習模式: ${q.mode === 'choice' ? '四選一選擇題' : '拼寫填空題'}`,
-          `- 當前進度: 第 ${q.currentIndex} 題（共 ${q.totalQuestions} 題）`,
-          `- 目標單字: 「${q.term}」 (${q.pos || 'n.'})`,
-          `- 繁體中文釋義: ${q.def}`,
-          q.defEn ? `- 英英釋義: ${q.defEn}` : '',
-          q.sentence ? `- 題目句幹/例句: "${q.sentence}"` : '',
-          q.options && q.options.length > 0 ? `- 選項清單: [${q.options.join(', ')}]` : '',
-          `- 作答狀態: ${q.isAnswered ? `已作答（使用者選擇: "${q.userAnswer || '無'}"，結果: ${q.isCorrect ? '✅ 答對' : '❌ 答錯'}）` : '⏳ 思考中 / 尚未送出答案'}`
-        ].filter(Boolean);
-        screenLines.push(qLines.join('\n'));
-      }
-      if (screenContext.activeInspectedWord) {
-        screenLines.push(`【🔍 使用者當前正開啟彈窗檢視/編輯的單字】: 「${screenContext.activeInspectedWord}」（若使用者說「解釋這個單字」或「刪除這個單字」，請直接針對此詞處理）`);
-      }
-      contextParts.push(screenLines.join('\n'));
-    } else if (scenario) {
-      contextParts.push(`【使用者當前所在場景】: ${scenario}${scenarioDesc ? ` (${scenarioDesc})` : ''}`);
+
+      const prompt = `你是一位頂尖的英語寫作教練與母語編輯。請針對以下使用者的英文草稿（或中英夾雜草稿）進行深度批改、去中式英文 (De-Chinglish) 與分級母語潤飾。
+【目標語境】：${goalLabels[writingGoal] || goalLabels.general}
+【使用者原稿】：
+"""
+${draft}
+"""
+${STRICT_LANGUAGE_RULE}`;
+
+      const response = await generateWithModelFallback(
+        ai,
+        {
+          temperature: 0.35,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              overallScore: { type: Type.NUMBER, description: 'Score from 0 to 100 based on grammar, naturalness, and clarity' },
+              overallCommentZh: { type: Type.STRING, description: '整體點評與鼓勵（繁體中文，指出最大亮點與主要改進方向）' },
+              correctedVersion: {
+                type: Type.OBJECT,
+                description: 'Grammatically correct and clear version preserving original structure',
+                properties: {
+                  text: { type: Type.STRING },
+                  translationZh: { type: Type.STRING },
+                  keyFixesNote: { type: Type.STRING, description: '主要修正說明（繁體中文）' }
+                },
+                required: ['text', 'translationZh', 'keyFixesNote']
+              },
+              nativeNaturalVersion: {
+                type: Type.OBJECT,
+                description: 'How an educated native speaker would naturally express this in the target context',
+                properties: {
+                  text: { type: Type.STRING },
+                  translationZh: { type: Type.STRING },
+                  highlightNote: { type: Type.STRING, description: '道地語感升級重點（繁體中文）' }
+                },
+                required: ['text', 'translationZh', 'highlightNote']
+              },
+              advancedC1Version: {
+                type: Type.OBJECT,
+                description: 'CEFR C1/C2 high-impact version with sophisticated vocabulary and syntax',
+                properties: {
+                  text: { type: Type.STRING },
+                  translationZh: { type: Type.STRING },
+                  highlightNote: { type: Type.STRING, description: '高階句型與精準用字解析（繁體中文）' }
+                },
+                required: ['text', 'translationZh', 'highlightNote']
+              },
+              diagnostics: {
+                type: Type.ARRAY,
+                description: 'Specific sentence-level or phrase-level error/style diagnostics',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    originalSpan: { type: Type.STRING },
+                    fixedSpan: { type: Type.STRING },
+                    issueType: { type: Type.STRING, description: 'e.g. 文法時態, 搭配詞誤用, 中式英文, 標點與結構' },
+                    explanationZh: { type: Type.STRING }
+                  },
+                  required: ['originalSpan', 'fixedSpan', 'issueType', 'explanationZh']
+                }
+              },
+              upgradedVocabulary: {
+                type: Type.ARRAY,
+                description: '2 to 4 high-value words or phrases introduced in the polished versions ready to save',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    term: { type: Type.STRING },
+                    pos: { type: Type.STRING },
+                    def: { type: Type.STRING, description: '繁體中文釋義' },
+                    defEn: { type: Type.STRING, description: 'English definition' },
+                    ex: { type: Type.STRING },
+                    category: { type: Type.STRING }
+                  },
+                  required: ['term', 'pos', 'def', 'defEn', 'ex']
+                }
+              }
+            },
+            required: [
+              'overallScore',
+              'overallCommentZh',
+              'correctedVersion',
+              'nativeNaturalVersion',
+              'advancedC1Version',
+              'diagnostics',
+              'upgradedVocabulary'
+            ]
+          }
+        },
+        [{ role: 'user', parts: [{ text: prompt }] }]
+      );
+
+      const clinicData = JSON.parse(response.text || '{}');
+      return res.json({ mode: 'writing_clinic', clinic: clinicData });
     }
 
-    // 2. Authoritative Database Knowledge Injection (100% Truth for Word/Article Inquiries)
-    const wordsTotal =
-      screenContext?.totalWordsCount !== undefined
-        ? screenContext.totalWordsCount
-        : Array.isArray(existingWordsSummary)
-        ? existingWordsSummary.length
-        : undefined;
+    // ========================================================================
+    // MODE 3: VOCAB WORKSHOP (主題生詞工坊)
+    // ========================================================================
+    if (mode === 'vocab_workshop') {
+      const topic = String(workshopTopic || userPrompt || '日常實用高頻英文').trim();
+      const level = String(workshopLevel || 'B2').trim();
+      const count = Math.min(10, Math.max(3, Number(workshopCount) || 6));
+      const existingTerms = Array.isArray(existingWordsSummary)
+        ? existingWordsSummary
+            .map((w: any) => (typeof w === 'string' ? w : w?.term))
+            .filter(Boolean)
+            .slice(0, 120)
+        : [];
 
-    const articlesTotal =
-      screenContext?.totalArticlesCount !== undefined
-        ? screenContext.totalArticlesCount
-        : Array.isArray(existingArticlesSummary)
-        ? existingArticlesSummary.length
-        : undefined;
+      const prompt = `請根據主題「${topic}」與目標難度「CEFR ${level}」，精心策劃 ${count} 個極具實用價值且道地的英文單字或高頻片語。
+${existingTerms.length > 0 ? `請避開使用者字庫中已有的單字：[${existingTerms.join(', ')}]\n` : ''}
+${STRICT_LANGUAGE_RULE}`;
 
-    const allCats: string[] = screenContext?.allCategories || screenContext?.customCategories || [];
+      const response = await generateWithModelFallback(
+        ai,
+        {
+          temperature: 0.5,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              themeTitle: { type: Type.STRING, description: '主題詞包標題（繁體中文）' },
+              themeSummary: { type: Type.STRING, description: '本組單字的學習重點與應用場景簡介（繁體中文）' },
+              SuggestedCategory: { type: Type.STRING, description: '建議歸入的分類名稱（繁體中文，如：商務職場、學術科研、旅遊生活）' },
+              words: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    term: { type: Type.STRING },
+                    pos: { type: Type.STRING, description: 'n., v., adj., adv., or phr.' },
+                    def: { type: Type.STRING, description: '精準繁體中文釋義' },
+                    defEn: { type: Type.STRING, description: 'Clear English definition' },
+                    ex: { type: Type.STRING, description: 'Natural English example sentence' },
+                    exZh: { type: Type.STRING, description: '例句之繁體中文翻譯' },
+                    memoryTip: { type: Type.STRING, description: '簡短字根或語感記憶提示（繁體中文）' },
+                    cefrLevel: { type: Type.STRING },
+                    category: { type: Type.STRING }
+                  },
+                  required: ['term', 'pos', 'def', 'defEn', 'ex', 'exZh', 'memoryTip', 'cefrLevel', 'category']
+                }
+              }
+            },
+            required: ['themeTitle', 'themeSummary', 'SuggestedCategory', 'words']
+          }
+        },
+        [{ role: 'user', parts: [{ text: prompt }] }]
+      );
 
-    const wordsWithCats = Array.isArray(screenContext?.wordsWithCategories)
-      ? screenContext.wordsWithCategories
-      : [];
-    const uncategorizedWords = wordsWithCats
-      .filter((w: any) => !w.category || w.category === '未分類' || String(w.category).trim() === '')
-      .map((w: any) => w.term);
-
-    if (wordsTotal !== undefined || articlesTotal !== undefined || allCats.length > 0 || uncategorizedWords.length > 0) {
-      const dbInfo: string[] = [
-        `【📚 使用者真實資料庫概覽與按需資料對接】:`,
-        wordsTotal !== undefined ? `- 單字庫收錄總量: 共 ${wordsTotal} 個單字` : '',
-        articlesTotal !== undefined ? `- 文章閱讀庫總量: 共 ${articlesTotal} 篇文章` : '',
-        screenContext?.dueWordsCount !== undefined ? `- 今日待複習單字數: ${screenContext.dueWordsCount} 個` : '',
-        screenContext?.dailyStreak !== undefined ? `- 連續打卡天數: ${screenContext.dailyStreak} 天` : '',
-        allCats.length > 0
-          ? `- 現有自訂分類標籤清單: [${allCats.join(', ')}]`
-          : '',
-        screenContext?.categoryStats
-          ? `- 各分類收錄單字量統計: ${JSON.stringify(screenContext.categoryStats)}`
-          : '',
-        uncategorizedWords.length > 0
-          ? `- 🚨 目前尚有 ${uncategorizedWords.length} 個單字處於「未分類」狀態: [${uncategorizedWords.slice(0, 60).join(', ')}${uncategorizedWords.length > 60 ? '...等' : ''}]（若使用者要求「歸納未分類單字」、「智慧分類」等，請直接針對上述 ${uncategorizedWords.length} 個真實單字進行領域與語意分析，並產出分類建議與 batch_set_category 操作確認卡片，絕對嚴禁聲稱沒有未分類單字！）`
-          : '- 目前全庫單字皆已分類完成（未分類單字為 0 個）。',
-        screenContext?.allArticleTitles && Array.isArray(screenContext.allArticleTitles) && screenContext.allArticleTitles.length > 0
-          ? `- 現有文章清單 (共 ${screenContext.allArticleTitles.length} 篇): [${screenContext.allArticleTitles.slice(0, 20).map((t: string) => `《${t}》`).join(', ')}]`
-          : '',
-        `\n💡 【按需資料請求機制 (On-Demand Data Access - 大幅節省 Token 並杜絕幻覺)】:`,
-        `- 為節省 Token 並杜絕幻覺，單字庫完整龐大清單預設不全部載入。`,
-        `- 若你需要特定分類下的完整單字清單、搜尋特定單字、文章詳細清單等，請在第一輪輸出 request_data: { provider: "...", param: "..." }，系統將立即為你查詢真實資料庫並進入第二輪對接！`,
-        `- 可用 provider: get_categories, get_words_by_category, search_words, get_articles, get_stats。`
-      ].filter(Boolean);
-      contextParts.push(dbInfo.join('\n'));
-    }
-
-    // 3. Active Article Full Details Injection (CRITICAL FOR ANTI-HALLUCINATION)
-    if (currentArticle && currentArticle.title) {
-      const artDetails: string[] = [
-        `【⭐⭐⭐ 使用者目前正開啟並停留在以下文章的閱讀畫面（完整內文如下，請嚴格基於此文回答）⭐⭐⭐】`,
-        `文章標題: 《${currentArticle.title}》`,
-        currentArticle.subtitle ? `副標題: ${currentArticle.subtitle}` : '',
-        `難度等級: CEFR ${currentArticle.level || 'B1'}`,
-        `主題分類: ${currentArticle.category || 'General'}`,
-        currentArticle.wordCount ? `文章長度: 約 ${currentArticle.wordCount} 字` : '',
-        currentArticle.summary ? `核心摘要: ${currentArticle.summary}` : '',
-        `\n【文章完整正文內容 (Full Article Text)】:\n${(currentArticle.content || '（無內文）').slice(0, 40000)}`,
-        currentArticle.translationZh ? `\n【文章中文對照翻譯】:\n${currentArticle.translationZh.slice(0, 20000)}` : '',
-        currentArticle.savedWordTerms && currentArticle.savedWordTerms.length > 0
-          ? `\n【使用者已在本文中標記/收錄的生詞】: ${currentArticle.savedWordTerms.join(', ')}`
-          : '',
-        currentArticle.keyVocabulary && currentArticle.keyVocabulary.length > 0
-          ? `\n【本文已標註的核心詞彙】: ${currentArticle.keyVocabulary.map((k: any) => k.term).join(', ')}`
-          : ''
-      ].filter(Boolean);
-      contextParts.push(artDetails.join('\n'));
-    }
-
-    if (rawInputWords && rawInputWords.length > 0) {
-      contextParts.push(`【使用者需要自動補全與標準化的原始單字列表】: ${rawInputWords.join(', ')}`);
-    }
-    if (externalScrapedContext) {
-      contextParts.push(externalScrapedContext);
-    }
-
-    // Build chat history
-    if (Array.isArray(messages) && messages.length > 0) {
-      messages.forEach((m) => {
-        if (m.content && m.content.trim()) {
-          rawContents.push({
-            role: m.role === 'user' ? 'user' : 'model',
-            parts: [{ text: m.content }]
-          });
-        }
+      const workshopData = JSON.parse(response.text || '{}');
+      return res.json({
+        mode: 'vocab_workshop',
+        workshop: workshopData,
+        words: workshopData.words || []
       });
     }
 
-    // Pure user turn: NEVER prepend context JSON blobs directly into the user turn!
+    // ========================================================================
+    // MODE 4: QUIZ COACH (弱點特訓隨堂考官)
+    // ========================================================================
+    if (mode === 'quiz_coach') {
+      const targetList = Array.isArray(quizWords) && quizWords.length > 0 ? quizWords.slice(0, 8) : [];
+      const customTopic = String(userPrompt || '').trim();
+
+      const prompt =
+        targetList.length > 0
+          ? `請根據使用者單字庫中的以下目標單字，設計 4 道高品質、具語境深度的四選一實戰測驗題（包含情境克漏字與近義詞語感辨析）：
+目標單字清單：${JSON.stringify(targetList)}
+${STRICT_LANGUAGE_RULE}`
+          : `請根據主題「${customTopic || 'CEFR B2 核心商務與學術字彙'}」，設計 4 道高品質、具語境深度的四選一英文單字實戰測驗題。
+${STRICT_LANGUAGE_RULE}`;
+
+      const response = await generateWithModelFallback(
+        ai,
+        {
+          temperature: 0.45,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              quizTitle: { type: Type.STRING, description: '本次特訓標題（繁體中文）' },
+              coachIntroZh: { type: Type.STRING, description: '考官開場叮嚀（繁體中文）' },
+              questions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    targetTerm: { type: Type.STRING },
+                    questionType: { type: Type.STRING, description: '情境克漏字 | 語感辨析 | 搭配詞實戰' },
+                    stemEn: { type: Type.STRING, description: 'English sentence with ______ for the blank' },
+                    stemTranslationZh: { type: Type.STRING, description: '完整句子的繁體中文翻譯' },
+                    options: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: 'Exactly 4 distinct English options'
+                    },
+                    correctIndex: { type: Type.NUMBER, description: '0, 1, 2, or 3' },
+                    explanationZh: {
+                      type: Type.STRING,
+                      description: '詳盡繁體中文解析：說明為何正解最適合此語境，並剖析其他干擾項的意思與不適用原因'
+                    },
+                    collocationTip: { type: Type.STRING, description: '本題必記搭配詞或文法重點' }
+                  },
+                  required: [
+                    'targetTerm',
+                    'questionType',
+                    'stemEn',
+                    'stemTranslationZh',
+                    'options',
+                    'correctIndex',
+                    'explanationZh',
+                    'collocationTip'
+                  ]
+                }
+              }
+            },
+            required: ['quizTitle', 'coachIntroZh', 'questions']
+          }
+        },
+        [{ role: 'user', parts: [{ text: prompt }] }]
+      );
+
+      const quizData = JSON.parse(response.text || '{}');
+      return res.json({ mode: 'quiz_coach', quiz: quizData });
+    }
+
+    // ========================================================================
+    // MODE 5: SMART CATEGORIZE (字庫 AI 智慧分類器)
+    // ========================================================================
+    if (mode === 'smart_categorize') {
+      const wordsToClassify = Array.isArray(existingWordsSummary) ? existingWordsSummary.slice(0, 50) : [];
+      const existingCats = Array.isArray(screenContext?.allCategories) ? screenContext.allCategories : [];
+
+      if (wordsToClassify.length === 0) {
+        return res.json({
+          mode: 'smart_categorize',
+          categorization: {
+            summaryZh: '目前沒有需要分類的單字。',
+            groups: []
+          }
+        });
+      }
+
+      const prompt = `請將以下單字依照語意與應用領域，智慧歸納至最適當的分類中。
+現有分類標籤：${existingCats.length > 0 ? existingCats.join('、') : '（尚無自訂分類，請建立清晰直觀的繁體中文分類，如：商務職場、學術科研、科技數位、日常溝通、社會人文）'}
+待分類單字清單：
+${JSON.stringify(wordsToClassify.map((w: any) => ({ term: w.term, pos: w.pos, def: w.def })))}
+${STRICT_LANGUAGE_RULE}`;
+
+      const response = await generateWithModelFallback(
+        ai,
+        {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              summaryZh: { type: Type.STRING, description: '分類規劃總結說明（繁體中文）' },
+              groups: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    category: { type: Type.STRING, description: '分類名稱' },
+                    terms: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    reasonZh: { type: Type.STRING, description: '歸入此分類的理由說明（繁體中文）' }
+                  },
+                  required: ['category', 'terms', 'reasonZh']
+                }
+              }
+            },
+            required: ['summaryZh', 'groups']
+          }
+        },
+        [{ role: 'user', parts: [{ text: prompt }] }]
+      );
+
+      const catData = JSON.parse(response.text || '{}');
+      return res.json({ mode: 'smart_categorize', categorization: catData });
+    }
+
+    // ========================================================================
+    // MODE 6 (DEFAULT): TUTOR (智能英語家教與隨身情境助教)
+    // ========================================================================
+    const rawWordsHint =
+      Array.isArray(rawInputWords) && rawInputWords.length > 0
+        ? `\n（請務必針對目標單字 [${rawInputWords.join(', ')}] 於 recommendedWords 陣列中輸出完整的標準化詞條資料：term, pos, def, defEn, ex）`
+        : '';
+    const cleanPrompt =
+      (String(userPrompt || '').trim() || '請根據我目前的學習內容提供協助。') + rawWordsHint;
+    const groundingText = buildCleanContextualGrounding(screenContext, currentArticle);
+
+    const tutorSystemInstruction = `你是 VocabMin AI 首席英語學習家教與隨身語言助教。
+你的任務是精準理解使用者的問題，提供條理分明、深入淺出、零幻覺的專業解答。
+${STRICT_LANGUAGE_RULE}
+
+### 回答準則：
+1. **緊扣問題核心**：直接回答使用者的問題（如文法解析、句意翻譯、單字比較、記憶方法、學習建議、文章段落解讀、測驗題目解析）。
+2. **善用清晰排版**：適度使用 Markdown 標題、重點粗體與條列清單，讓閱讀體驗清爽易懂。
+3. **何時提供 recommendedWords**：
+   - 當使用者「明確要求推薦單字、查詢特定單字、從目前閱讀的文章挑出難字/生詞、或詢問某主題有哪些英文單字」時，請將這些單字填入 \`recommendedWords\` 陣列，方便使用者一鍵加入單字庫。
+   - 若使用者只是進行一般文法問答、句子翻譯或概念討論，\`recommendedWords\` 請保持空陣列 \`[]\`。
+4. **延伸追問建議 (\`followUpSuggestions\`)**：
+   - 根據當下話題，提供 2 到 3 個使用者可能會想繼續追問的簡短問題（每個問題 8～18 字以內）。
+${groundingText ? `\n### 使用者當前畫面與學習情境參考：\n${groundingText}` : ''}`;
+
+    const rawContents: any[] = [];
+    if (Array.isArray(messages) && messages.length > 0) {
+      for (const m of messages.slice(-10)) {
+        const text = String(m?.content || '').trim();
+        if (!text) continue;
+        rawContents.push({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text }]
+        });
+      }
+    }
     rawContents.push({
       role: 'user',
-      parts: [{ text: rawUserPrompt || '請協助我' }]
+      parts: [{ text: cleanPrompt }]
     });
 
-    // Ensure valid Gemini multiturn alternating format (user -> model -> user)
+    // Ensure strictly alternating roles starting with 'user'
     const contents: any[] = [];
     for (const item of rawContents) {
       if (contents.length > 0 && contents[contents.length - 1].role === item.role) {
@@ -965,959 +1138,70 @@ You must strictly output JSON matching this schema:
     while (contents.length > 0 && contents[0].role === 'model') {
       contents.shift();
     }
-    if (contents.length === 0) {
-      contents.push({
-        role: 'user',
-        parts: [{ text: rawUserPrompt || '請協助我' }]
-      });
-    }
 
-    // Integrate live environmental context into system instructions
-    const fullSystemInstruction = contextParts.length > 0
-      ? `${systemInstruction}\n\n### 🖥️ LIVE USER SCREEN & ENVIRONMENT GROUNDING (使用者當前真實畫面與操作情境，請嚴格基於此情境提供專屬協助):\n${contextParts.join('\n\n')}`
-      : systemInstruction;
-
-    const config: any = {
-      systemInstruction: fullSystemInstruction,
-      temperature: 0.4,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          reply: {
-            type: Type.STRING,
-            description: 'Direct conversational response to the user in Traditional Chinese (or English if user converses in English).'
-          },
-          words: {
-            type: Type.ARRAY,
-            description: 'NEW vocabulary items to import into library. Empty array [] when not adding/recommending vocabulary.',
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                term: { type: Type.STRING, description: 'The English word or phrase' },
-                pos: { type: Type.STRING, description: 'Part of speech: n., v., adj., adv., phr., or other' },
-                def: { type: Type.STRING, description: 'Standardized Traditional Chinese definition (繁體中文解釋)' },
-                defEn: { type: Type.STRING, description: 'Clear English definition explaining the word in English (英英釋義)' },
-                ex: { type: Type.STRING, description: 'Contextual English example sentence' },
-                category: { type: Type.STRING, description: 'Appropriate category tag matching user categories or topic (e.g. 商務職場, 日常實用, 學術寫作, 科技潮流)' }
-              },
-              required: ['term', 'pos', 'def', 'defEn']
-            }
-          },
-          article: {
-            type: Type.OBJECT,
-            description: 'Structured English reading article ONLY if explicitly requested by user (article generation, bilingual reading, URL import).',
-            properties: {
-              id: { type: Type.STRING },
-              title: { type: Type.STRING, description: 'Catchy, authentic English title' },
-              subtitle: { type: Type.STRING, description: 'Subtitle or thematic overview' },
-              author: { type: Type.STRING, description: 'Author or source publication name' },
-              source: { type: Type.STRING, description: 'Source publication name or origin URL' },
-              level: { type: Type.STRING, description: 'CEFR level: A1, A2, B1, B2, C1, or C2' },
-              category: { type: Type.STRING, description: 'Category: Tech, Science, Business, News, Story, Daily, or Custom' },
-              content: { type: Type.STRING, description: 'Complete English article text with paragraphs separated by double newlines (\n\n)' },
-              translationZh: { type: Type.STRING, description: 'Paragraph-by-paragraph Traditional Chinese translation and explanation (繁體中文)' },
-              summary: { type: Type.STRING, description: '1-2 sentence Traditional Chinese summary' },
-              grammarPoints: {
-                type: Type.ARRAY,
-                description: '3-6 in-depth grammatical analyses of key/difficult sentences from the article',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    sentence: { type: Type.STRING, description: 'Exact English sentence from article' },
-                    structure: { type: Type.STRING, description: 'Syntactic breakdown formula' },
-                    explanation: { type: Type.STRING, description: 'Detailed grammatical explanation in Traditional Chinese' },
-                    grammarType: { type: Type.STRING, description: 'Grammar category tag' }
-                  },
-                  required: ['sentence', 'structure', 'explanation']
-                }
-              },
-              keyVocabulary: {
-                type: Type.ARRAY,
-                description: '5-8 key academic or advanced vocabulary words extracted from the article',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    term: { type: Type.STRING },
-                    pos: { type: Type.STRING },
-                    def: { type: Type.STRING, description: 'Traditional Chinese definition' },
-                    defEn: { type: Type.STRING, description: 'Authentic English definition' },
-                    level: { type: Type.STRING, description: 'CEFR level (e.g. B2, C1)' },
-                    ex: { type: Type.STRING, description: 'Example sentence or sentence from article' }
-                  },
-                  required: ['term', 'pos', 'def', 'defEn']
-                }
-              },
-              quiz: {
-                type: Type.ARRAY,
-                description: '1-2 multiple-choice reading comprehension questions',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    question: { type: Type.STRING },
-                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    correctAnswerIndex: { type: Type.NUMBER },
-                    explanation: { type: Type.STRING }
-                  },
-                  required: ['question', 'options', 'correctAnswerIndex', 'explanation']
-                }
-              }
+    const response = await generateWithModelFallback(
+      ai,
+      {
+        systemInstruction: tutorSystemInstruction,
+        temperature: 0.4,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            reply: {
+              type: Type.STRING,
+              description: 'Clear, helpful Markdown response in Taiwan Traditional Chinese (繁體中文)'
             },
-            required: ['title', 'content', 'translationZh', 'summary', 'grammarPoints', 'keyVocabulary']
-          },
-          action: {
-            type: Type.OBJECT,
-            description: 'Proposed app database mutation action ONLY if user explicitly commanded a modification, deletion, or reset.',
-            properties: {
-              type: {
-                type: Type.STRING,
-                description:
-                  'Action type: add_words, update_word, delete_word, batch_standardize, deduplicate_words, clear_all_words, reset_mastery, save_article, delete_article, clear_all_articles, set_word_category, batch_set_category, add_category, rename_category, delete_category'
-              },
-              summary: {
-                type: Type.STRING,
-                description: 'Brief summary of the action in Traditional Chinese'
-              },
-              clearAllArticles: {
+            recommendedWords: {
+              type: Type.ARRAY,
+              description: 'Vocabulary words to save ONLY when the user asks to look up, extract, or recommend vocabulary; otherwise empty array []',
+              items: {
                 type: Type.OBJECT,
-                description: 'Details if type is clear_all_articles',
-                properties: {
-                  count: { type: Type.NUMBER }
-                }
-              },
-              deleteArticle: {
-                type: Type.OBJECT,
-                description: 'Details if type is delete_article',
-                properties: {
-                  id: { type: Type.STRING },
-                  title: { type: Type.STRING }
-                }
-              },
-              saveArticle: {
-                type: Type.OBJECT,
-                description: 'Article to save into reader library if type is save_article',
-                properties: {
-                  id: { type: Type.STRING },
-                  title: { type: Type.STRING },
-                  subtitle: { type: Type.STRING },
-                  author: { type: Type.STRING },
-                  source: { type: Type.STRING },
-                  level: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  content: { type: Type.STRING },
-                  translationZh: { type: Type.STRING },
-                  summary: { type: Type.STRING }
-                }
-              },
-              resetMastery: {
-                type: Type.OBJECT,
-                description: 'Details if type is reset_mastery',
-                properties: {
-                  targetLevel: { type: Type.NUMBER },
-                  count: { type: Type.NUMBER }
-                }
-              },
-              clearAllWords: {
-                type: Type.OBJECT,
-                description: 'Details if type is clear_all_words',
-                properties: {
-                  count: { type: Type.NUMBER }
-                }
-              },
-              deduplicateWords: {
-                type: Type.OBJECT,
-                description: 'Details for deduplicating repeated items if type is deduplicate_words',
-                properties: {
-                  duplicateTerms: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    description: 'Array of terms detected to have duplicate definitions'
-                  },
-                  detail: {
-                    type: Type.STRING,
-                    description: 'Brief detail of duplicate cleanup'
-                  }
-                }
-              },
-              addWords: {
-                type: Type.ARRAY,
-                description: 'Words to add if type is add_words',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    term: { type: Type.STRING },
-                    pos: { type: Type.STRING },
-                    def: { type: Type.STRING, description: 'Standardized Traditional Chinese definition' },
-                    defEn: { type: Type.STRING, description: 'Clear English definition (英英釋義)' },
-                    ex: { type: Type.STRING }
-                  },
-                  required: ['term', 'pos', 'def']
-                }
-              },
-              updateWord: {
-                type: Type.OBJECT,
-                description: 'Word to update if type is update_word',
                 properties: {
                   term: { type: Type.STRING },
-                  newEntries: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        pos: { type: Type.STRING },
-                        def: { type: Type.STRING },
-                        defEn: { type: Type.STRING },
-                        ex: { type: Type.STRING }
-                      },
-                      required: ['pos', 'def']
-                    }
-                  }
-                }
-              },
-              deleteWord: {
-                type: Type.OBJECT,
-                description: 'Word to delete if type is delete_word',
-                properties: {
-                  term: { type: Type.STRING }
-                }
-              },
-              batchStandardize: {
-                type: Type.OBJECT,
-                description: 'Batch standardization results',
-                properties: {
-                  originalCount: { type: Type.NUMBER },
-                  updatedWords: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        id: { type: Type.STRING },
-                        term: { type: Type.STRING },
-                        pos: { type: Type.STRING },
-                        def: { type: Type.STRING },
-                        defEn: { type: Type.STRING },
-                        ex: { type: Type.STRING },
-                        level: { type: Type.NUMBER }
-                      },
-                      required: ['term', 'pos', 'def']
-                    }
-                  }
-                }
-              },
-              setWordCategory: {
-                type: Type.OBJECT,
-                description: 'Details if type is set_word_category',
-                properties: {
-                  term: { type: Type.STRING, description: 'Target word to categorize' },
-                  category: { type: Type.STRING, description: 'Category name (or "未分類" to clear)' }
+                  pos: { type: Type.STRING, description: 'n., v., adj., adv., or phr.' },
+                  def: { type: Type.STRING, description: '繁體中文釋義' },
+                  defEn: { type: Type.STRING, description: 'Authentic English definition' },
+                  ex: { type: Type.STRING, description: 'Natural English example sentence' },
+                  category: { type: Type.STRING, description: 'Suggested category tag in Traditional Chinese' }
                 },
-                required: ['term']
-              },
-              batchSetCategory: {
-                type: Type.OBJECT,
-                description: 'Details if type is batch_set_category',
-                properties: {
-                  terms: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    description: 'List of target words'
-                  },
-                  category: { type: Type.STRING, description: 'Target category name (or "未分類" to clear)' }
-                },
-                required: ['terms', 'category']
-              },
-              addCategory: {
-                type: Type.OBJECT,
-                description: 'Details if type is add_category',
-                properties: {
-                  name: { type: Type.STRING, description: 'New custom category name' }
-                },
-                required: ['name']
-              },
-              renameCategory: {
-                type: Type.OBJECT,
-                description: 'Details if type is rename_category',
-                properties: {
-                  oldName: { type: Type.STRING, description: 'Existing category name' },
-                  newName: { type: Type.STRING, description: 'New category name' }
-                },
-                required: ['oldName', 'newName']
-              },
-              deleteCategory: {
-                type: Type.OBJECT,
-                description: 'Details if type is delete_category',
-                properties: {
-                  name: { type: Type.STRING, description: 'Category name to delete' }
-                },
-                required: ['name']
+                required: ['term', 'pos', 'def', 'defEn', 'ex']
               }
+            },
+            followUpSuggestions: {
+              type: Type.ARRAY,
+              description: '2 to 3 short follow-up questions in Traditional Chinese',
+              items: { type: Type.STRING }
             }
           },
-          request_data: {
-            type: Type.OBJECT,
-            description: 'Request real database data from VocabMin before final proposal to avoid hallucinations and token waste.',
-            properties: {
-              provider: {
-                type: Type.STRING,
-                description: 'Data provider: get_categories, get_words_by_category, search_words, get_articles, get_stats'
-              },
-              param: {
-                type: Type.STRING,
-                description: 'Parameter for data provider (e.g. category name, search term, or empty string)'
-              }
-            }
-          }
-        },
-        required: ['reply']
-      }
-    };
+          required: ['reply', 'recommendedWords', 'followUpSuggestions']
+        }
+      },
+      contents
+    );
 
-    const response = await generateWithModelFallback(ai, config, contents);
-
-    const outputText = response.text || '{}';
-    let parsedData: any;
+    let parsed: any;
     try {
-      parsedData = JSON.parse(outputText);
+      parsed = JSON.parse(response.text || '{}');
     } catch {
-      parsedData = {
-        reply: outputText,
-        words: []
+      parsed = {
+        reply: response.text || '抱歉，系統暫時無法解析回應，請再試一次。',
+        recommendedWords: [],
+        followUpSuggestions: []
       };
     }
 
-    // On-demand data access: Agentic multi-turn query loop (up to 2 iterations)
-    let agentLoopCount = 0;
-    while (parsedData.request_data && parsedData.request_data.provider && agentLoopCount < 2) {
-      agentLoopCount++;
-      const provider = String(parsedData.request_data.provider).trim();
-      const param = String(parsedData.request_data.param || '').trim();
-      const providerResult = executeDataProvider(provider, param, screenContext);
-
-      contents.push({
-        role: 'model',
-        parts: [{ text: JSON.stringify(parsedData) }]
-      });
-      contents.push({
-        role: 'user',
-        parts: [
-          {
-            text: `[SYSTEM DATA PROVIDER RESPONSE for "${provider}" (param: "${param}")]:\n${providerResult}\n\n【指令要求】：你已獲得精準的資料庫真實數據。請根據這些真實數據與使用者的需求，輸出最終的 reply 與對應的 action（若需要操作）。本次最終輸出請將 request_data 設為 null，並提供完整確切的繁體中文回覆與安全確認卡片。`
-          }
-        ]
-      });
-
-      try {
-        const loopResponse = await generateWithModelFallback(ai, config, contents);
-        const loopOutput = loopResponse.text || '{}';
-        const parsedLoop = JSON.parse(loopOutput);
-        if (parsedLoop && (parsedLoop.reply || parsedLoop.action || (parsedLoop.words && parsedLoop.words.length > 0))) {
-          parsedData = parsedLoop;
-        } else {
-          break;
-        }
-      } catch (loopErr) {
-        console.error('On-demand data provider loop error:', loopErr);
-        break;
-      }
-    }
-
-    // Process article ONLY if model returned valid article content
-    if (parsedData.article && parsedData.article.content && parsedData.article.content.length > 50) {
-      const content = parsedData.article.content;
-      const wordCount = content.split(/\s+/).filter(Boolean).length;
-      parsedData.article = {
-        id: parsedData.article.id || `art-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        title: parsedData.article.title || 'Contextual Reading Article',
-        subtitle: parsedData.article.subtitle || 'Authentic Contextual Reading',
-        author: parsedData.article.author || 'AI Reading Scholar',
-        source: parsedData.article.source || (urlMatch ? urlMatch[0] : 'External Web'),
-        level: parsedData.article.level || 'B2',
-        category: parsedData.article.category || 'Science',
-        content: parsedData.article.content,
-        translationZh: parsedData.article.translationZh || '',
-        summary: parsedData.article.summary || '',
-        wordCount,
-        readTimeMinutes: Math.max(1, Math.round(wordCount / 120)),
-        savedWordTerms: [],
-        isCustom: true,
-        grammarPoints: Array.isArray(parsedData.article.grammarPoints) ? parsedData.article.grammarPoints : [],
-        keyVocabulary: Array.isArray(parsedData.article.keyVocabulary) ? parsedData.article.keyVocabulary : [],
-        quiz: Array.isArray(parsedData.article.quiz) ? parsedData.article.quiz : []
-      };
-
-      // Since an article is present, words array should be empty so UI displays article card cleanly
-      parsedData.words = [];
-      parsedData.action = {
-        type: 'save_article',
-        summary: `收錄文章《${parsedData.article.title}》至文章閱讀庫`,
-        saveArticle: parsedData.article
-      };
-    } else {
-      parsedData.article = undefined;
-    }
-
-    // Fallback intent checks & anti-hallucination interceptor for library management commands
-    const promptClean = rawUserPrompt.trim().toLowerCase();
-    const isQuestionOrHowTo = /(?:如何|怎麼|怎樣|教我|什麼是|能不能|可以嗎|如果|為甚麼|為什麼)/.test(promptClean);
-
-    // Detect category context
-    const isCategoryContext = /(?:分類|自訂分類)/i.test(promptClean) || (parsedData.action && String(parsedData.action.type).includes('category'));
-
-    // Category list from screen context (longest first so multi-word categories match accurately)
-    const customCats: string[] = Array.isArray(screenContext?.allCategories)
-      ? screenContext.allCategories
-      : (Array.isArray(screenContext?.customCategories) ? screenContext.customCategories : []);
-    const sortedCats = [...customCats].sort((a, b) => b.length - a.length);
-
-    // Intent: Delete category (PRIORITIZED FIRST to protect against misidentifying as word/article deletion,
-    // but DO NOT match when the user is deleting a specific word inside a category, e.g. "刪除分類 X 中的單字 Y")
-    const isDeletingWordInCategory =
-      /(?:分類).*(?:中的|裡的|裏的|裡面的)?.*(?:單字|單詞|生詞)/i.test(promptClean) ||
-      /(?:刪除|移除|清掉|拿掉)\s*(?:單字|單詞|生詞)/i.test(promptClean);
-
-    const isDeleteCategory =
-      !isQuestionOrHowTo &&
-      !isDeletingWordInCategory &&
-      (/(?:刪除|移除|清掉|拿掉).*(?:分類)/i.test(promptClean) ||
-       /(?:分類).*(?:刪除|移除|清掉|拿掉)/i.test(promptClean));
-
-    if (
-      isDeleteCategory ||
-      parsedData.action?.type === 'delete_category' ||
-      (parsedData.action as any)?.type === 'deleteCategory'
-    ) {
-      let catName = (
-        parsedData.action?.deleteCategory?.name ||
-        (parsedData.action as any)?.deleteCategory?.category ||
-        (parsedData.action as any)?.name ||
-        (parsedData.action as any)?.category ||
-        ''
-      ).trim();
-
-      if (!catName) {
-        const foundKnown = sortedCats.find((c) =>
-          promptClean.includes(c.toLowerCase()) || (parsedData.reply || '').toLowerCase().includes(c.toLowerCase())
-        );
-        if (foundKnown) {
-          catName = foundKnown;
-        } else {
-          // Strict quoted extract
-          const quotedMatch =
-            promptClean.match(/[「『"']([^「『"'」』\n\r]+)[」』"']\s*(?:這個)?分類/i) ||
-            promptClean.match(/分類\s*[「『"']([^「『"'」』\n\r]+)[」』"']/i);
-          if (quotedMatch) {
-            catName = quotedMatch[1].trim();
-          } else {
-            // Strict word extract right next to 分類 (no greedy cross-sentence verbs)
-            const strictMatch =
-              promptClean.match(/(?:刪除|移除|清掉|拿掉)\s*(?:這個)?分類\s*([a-zA-Z0-9_\u4e00-\u9fa5\s]{1,30}?)(?:$|[，,。])/i) ||
-              promptClean.match(/([a-zA-Z0-9_\u4e00-\u9fa5\s]{1,30}?)\s*(?:這個)?分類.*(?:刪除|移除|清掉|拿掉)/i);
-            if (strictMatch) {
-              const cand = strictMatch[1].replace(/(?:中的|分類)$/, '').trim();
-              if (cand && !/(?:將|把|變成|全部|所有|單字|生詞)/.test(cand)) {
-                catName = cand;
-              }
-            }
-          }
-        }
-      }
-
-      if (catName && /(?:中的|變成|全部|所有|單字|生詞|請幫我)/.test(catName)) {
-        catName = catName.replace(/^(?:請幫我|將|把|全部|所有)+/g, '').replace(/(?:中的|變成|全部|所有|單字|生詞)+$/g, '').trim();
-      }
-
-      if (catName) {
-        parsedData.action = {
-          type: 'delete_category',
-          summary: `刪除自訂分類「${catName}」（原單字保留並設為未分類）`,
-          deleteCategory: { name: catName }
-        };
-        parsedData.reply = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${catName}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
-      }
-    }
-
-    // Intent: Clear all articles (MUST NOT TRIGGER IN CATEGORY CONTEXT)
-    const isExplicitClearArticles =
-      !isCategoryContext &&
-      !isDeleteCategory &&
-      !isQuestionOrHowTo &&
-      ((/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|書架上的?|全庫|全部的|當前).*(?:文章|短文)/i.test(promptClean) ||
-        /(?:所有|全部|整庫|全庫|全部的).*(?:文章|短文).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
-        /(?:清空|清除|刪除).*(?:文章庫|閱讀庫|文章閱讀庫)/i.test(promptClean)));
-
-    // Intent: Clear all words (MUST NOT TRIGGER IN CATEGORY CONTEXT)
-    const isExplicitClearWords =
-      !isExplicitClearArticles &&
-      !isCategoryContext &&
-      !isDeleteCategory &&
-      !isQuestionOrHowTo &&
-      ((/(?:清空|清除|刪除|移除|清掉|刪掉|全刪|全清).*(?:所有|全部|所有收錄|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞)/i.test(promptClean) ||
-        /(?:所有|全部|整庫|全庫|全部的).*(?:單字|生詞|詞彙|單詞).*(?:清空|清除|刪除|移除|清掉|刪掉)/i.test(promptClean) ||
-        /(?:清空|清除).*(?:單字庫|生詞本|生字本|詞庫|字庫)/i.test(promptClean)));
-
-    // Intent: Delete specific article (MUST EXPLICITLY REQUIRE 文章/短文 OR 《...》, NEVER MATCH IN CATEGORY CONTEXT)
-    let deleteArticleMatch: RegExpMatchArray | null = null;
-    if (!isQuestionOrHowTo && !isExplicitClearArticles && !isCategoryContext && !isDeleteCategory) {
-      deleteArticleMatch =
-        promptClean.match(/(?:刪除|移除|刪掉)\s*(?:文章|短文)\s*[《「"']?([^》」"'\n\r]{2,80})[》」"']?/i) ||
-        promptClean.match(/(?:刪除|移除|刪掉)\s*《([^》\n\r]{2,80})》/i);
-
-      if (deleteArticleMatch) {
-        const titleCand = deleteArticleMatch[1].trim().toLowerCase();
-        if (titleCand.includes('分類') || sortedCats.some((c) => c.toLowerCase() === titleCand)) {
-          deleteArticleMatch = null;
-        }
-      }
-    }
-
-    // Intent: Delete specific word (MUST REQUIRE EXPLICIT 單字/生詞/單詞 OR QUOTES, NEVER MATCH IN CATEGORY DELETION)
-    let deleteWordMatch: RegExpMatchArray | null = null;
-    if (!isQuestionOrHowTo && !isExplicitClearWords && !isExplicitClearArticles && !isDeleteCategory) {
-      deleteWordMatch =
-        promptClean.match(/(?:刪除|移除|刪掉)\s*(?:單字|單詞|生詞)\s*[《「"']?([a-zA-Z\-\s]{2,40})[》」"']?/i) ||
-        (!isCategoryContext ? promptClean.match(/(?:刪除|移除|刪掉)\s*[「"']([a-zA-Z\-\s]{2,40})[」"']/i) : null);
-
-      if (deleteWordMatch) {
-        const wordCand = deleteWordMatch[1].trim().toLowerCase();
-        if (wordCand.includes('分類') || sortedCats.some((c) => c.toLowerCase() === wordCand)) {
-          deleteWordMatch = null;
-        }
-      }
-    }
-
-    // Strict Anti-Collision Quarantine for Categories: wipe out accidental article/all-words destruction
-    if (isCategoryContext || isDeleteCategory) {
-      if (
-        parsedData.action?.type === 'delete_article' ||
-        parsedData.action?.type === 'clear_all_articles' ||
-        parsedData.action?.type === 'clear_all_words'
-      ) {
-        parsedData.action = undefined;
-      }
-      if (parsedData.action?.type === 'delete_word') {
-        const term = (parsedData.action.deleteWord?.term || (parsedData.action as any).term || '').toLowerCase();
-        if (sortedCats.some((c) => c.toLowerCase() === term) || term.includes('分類')) {
-          parsedData.action = undefined;
-        }
-      }
-    }
-
-    const isExplicitDeduplicate =
-      !isQuestionOrHowTo &&
-      (promptClean.includes('合併重複') || promptClean.includes('單字去重') || promptClean.includes('字庫去重') || promptClean.includes('移除重複單字'));
-
-    const isExplicitResetMastery =
-      !isQuestionOrHowTo &&
-      (promptClean.includes('重置') || promptClean.includes('歸零') || promptClean.includes('重設')) &&
-      promptClean.includes('熟練度');
-
-    const isExplicitBatchEnrich =
-      !currentArticle &&
-      !promptClean.includes('文章') &&
-      !isQuestionOrHowTo &&
-      (promptClean.includes('全庫') || promptClean.includes('所有單字') || promptClean.includes('單字庫')) &&
-      (promptClean.includes('補') || promptClean.includes('完善') || promptClean.includes('補充') || promptClean.includes('填上') || promptClean.includes('加上')) &&
-      (promptClean.includes('解釋') || promptClean.includes('釋義') || promptClean.includes('例句') || promptClean.includes('翻譯'));
-
-    // Check if Gemini reply hallucinated an action completion claim in prose
-    const replyText = parsedData.reply || '';
-    const claimsArticleCleared = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:文章|短文|閱讀庫|書架)/i.test(replyText);
-    const claimsWordsCleared = /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除|移除).*(?:單字|生詞|詞庫|字庫)/i.test(replyText);
-
-    if (isExplicitClearArticles || claimsArticleCleared) {
-      const artCount = Array.isArray(existingArticlesSummary) ? existingArticlesSummary.length : 0;
-      parsedData.action = {
-        type: 'clear_all_articles',
-        summary: `清空文章閱讀庫中的所有文章（共 ${artCount} 篇）`,
-        clearAllArticles: { count: artCount }
-      };
-      parsedData.reply = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${artCount} 篇文章）。`;
-    } else if (isExplicitClearWords || claimsWordsCleared) {
-      const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
-      parsedData.action = {
-        type: 'clear_all_words',
-        summary: `清空單字庫中的所有單字（共 ${totalCount} 個）`,
-        clearAllWords: { count: totalCount }
-      };
-      parsedData.reply = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${totalCount} 個單字）。`;
-    } else if (deleteArticleMatch && (!parsedData.action || parsedData.action.type !== 'delete_article')) {
-      const targetTitle = deleteArticleMatch[1].trim();
-      parsedData.action = {
-        type: 'delete_article',
-        summary: `從文章閱讀庫刪除指定文章《${targetTitle}》`,
-        deleteArticle: { title: targetTitle }
-      };
-      parsedData.reply = `已為您建立刪除文章《${targetTitle}》的確認卡片，請點擊下方卡片按鈕確認刪除。`;
-    } else if (deleteWordMatch && (!parsedData.action || parsedData.action.type !== 'delete_word')) {
-      const targetTerm = deleteWordMatch[1].trim().toLowerCase();
-      parsedData.action = {
-        type: 'delete_word',
-        summary: `從單字庫刪除單字「${targetTerm}」`,
-        deleteWord: { term: targetTerm }
-      };
-      parsedData.reply = `已為您建立刪除單字「${targetTerm}」的確認卡片，請點擊下方卡片按鈕確認刪除。`;
-    } else if (isExplicitDeduplicate) {
-      parsedData.action = {
-        type: 'deduplicate_words',
-        summary: '合併單字庫中重複的項目並去重'
-      };
-      if (parsedData.reply && /(?:已為您|已成功|已經|已幫您).*(?:合併|去重)/i.test(parsedData.reply)) {
-        parsedData.reply = '已為您建立「合併重複單字」的操作確認卡片，請點擊下方卡片按鈕確認執行。';
-      }
-    } else if (isExplicitResetMastery) {
-      const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
-      parsedData.action = {
-        type: 'reset_mastery',
-        summary: '將所有單字熟練度重置為完全不熟練 (Level 0)',
-        resetMastery: { targetLevel: 0, count: totalCount }
-      };
-      if (parsedData.reply && /(?:已為您|已成功|已經|已幫您).*(?:重置|歸零)/i.test(parsedData.reply)) {
-        parsedData.reply = '已為您建立「重置單字熟練度」的操作確認卡片，請點擊下方卡片按鈕確認執行。';
-      }
-    } else if (isExplicitBatchEnrich && (!parsedData.action || parsedData.action.type === 'batch_standardize')) {
-      const wordsToEnrich = Array.isArray(existingWordsSummary) ? existingWordsSummary : [];
-      // Prioritize words that actually lack def, defEn, or ex, and cap network calls per request to avoid HTTP timeout
-      const candidates = wordsToEnrich.filter((w) => {
-        const def = (w.def || '').trim();
-        const defEn = (w.defEn || '').trim();
-        const ex = (w.ex || '').trim();
-        return !def || def.toLowerCase() === (w.term || '').toLowerCase() || !defEn || !ex;
-      });
-      const targetBatch = (candidates.length > 0 ? candidates : wordsToEnrich).slice(0, 20);
-
-      const updatedWords = await Promise.all(
-        targetBatch.map(async (w) => {
-          let def = (w.def || '').trim();
-          let defEn = (w.defEn || '').trim();
-          let ex = (w.ex || '').trim();
-          let pos = w.pos || 'n.';
-
-          if (!def || def.toLowerCase() === w.term.toLowerCase() || !defEn || !ex) {
-            try {
-              const details = await fetchBilingualWordDetails(w.term);
-              if (!def || def.toLowerCase() === w.term.toLowerCase()) def = details.def || def;
-              if (!defEn) defEn = details.defEn || defEn;
-              if (!ex) ex = details.ex || `Review how "${w.term}" is used in context.`;
-              if (pos === 'other' && details.pos) pos = details.pos;
-            } catch {}
-          }
-          return {
-            ...w,
-            pos,
-            def: def || `【${w.term}】`,
-            defEn: defEn || `English definition for ${w.term}`,
-            ex: ex || `Review how "${w.term}" is used in context.`
-          };
-        })
-      );
-
-      parsedData.action = {
-        type: 'batch_standardize',
-        summary: `為單字庫中的 ${updatedWords.length} 個單字補齊繁體中文釋義、英英定義與例句`,
-        words: updatedWords,
-        batchStandardize: {
-          originalCount: wordsToEnrich.length,
-          updatedWords
-        }
-      };
-      if (!parsedData.reply || parsedData.reply.length < 15) {
-        parsedData.reply = `已為您為字庫中的 ${updatedWords.length} 個單字補全繁體中文解釋、英英釋義與例句，請點擊下方「確認執行」卡片按鈕即可同步更新至單字庫！`;
-      }
-    }
-
-    // Fallback & Anti-Hallucination: Categorize unclassified words
-    const effectiveUncategorizedWords = uncategorizedWords.length > 0
-      ? uncategorizedWords
-      : (Array.isArray(existingWordsSummary)
-          ? existingWordsSummary
-              .filter((w: any) => !w.category || w.category === '未分類' || String(w.category).trim() === '')
-              .map((w: any) => w.term)
-          : []);
-
-    const isUncategorizedBatchCommand =
-      !isQuestionOrHowTo &&
-      (/(?:尚未分類|未分類).*(?:歸納|歸類|分類|配置|整理)|(?:歸納|歸類|分類|整理).*(?:尚未分類|未分類)/i.test(promptClean) ||
-        ((promptClean === '確認' || promptClean === '好的' || promptClean === '確定' || promptClean === '執行') &&
-         contents.some((c: any) => /(?:未分類|尚未分類).*(?:歸類|分類|需求)/.test(c.parts?.[0]?.text || ''))));
-
-    const claimsNoUncategorized =
-      effectiveUncategorizedWords.length > 0 &&
-      /(?:沒有任何單字|已經成功分好類|為 0 個|沒有尚未分類|皆已分類)/i.test(parsedData.reply || '');
-
-    const isLazyDeflectionWithoutAction =
-      !parsedData.action &&
-      /(?:我已為您發起|請確認此操作|進行智慧歸類的需求)/i.test(parsedData.reply || '');
-
-    if (
-      effectiveUncategorizedWords.length > 0 &&
-      (isUncategorizedBatchCommand || claimsNoUncategorized || isLazyDeflectionWithoutAction)
-    ) {
-      if (!parsedData.action || parsedData.action.type !== 'batch_set_category') {
-        const existingCategoryNames = (allCats.length > 0 ? allCats : ['General']).filter((c) => c !== '未分類');
-        const mentionedCat = existingCategoryNames.find((c) =>
-          (parsedData.reply || '').toLowerCase().includes(c.toLowerCase())
-        );
-        const targetCategory = mentionedCat || existingCategoryNames[0] || 'General';
-
-        parsedData.action = {
-          type: 'batch_set_category',
-          summary: `批次將 ${effectiveUncategorizedWords.length} 個未分類單字歸類至「${targetCategory}」`,
-          batchSetCategory: {
-            terms: effectiveUncategorizedWords,
-            category: targetCategory
-          }
-        };
-      }
-
-      if (claimsNoUncategorized || isLazyDeflectionWithoutAction || !parsedData.reply || parsedData.reply.length < 20) {
-        const catTarget = parsedData.action?.batchSetCategory?.category || '指定分類';
-        parsedData.reply = `已為您檢測並分析單字庫中 ${effectiveUncategorizedWords.length} 個未分類單字：[${effectiveUncategorizedWords.join(', ')}]。為避免誤觸並保障您的資料安全，已為您建立批次分類操作確認卡片，請點擊下方卡片確認按鈕以將其歸類至「${catTarget}」！`;
-      }
-    }
-
-    // Normalize returned action properties if present
-    if (parsedData.action) {
-      if (parsedData.action.type === 'delete_word') {
-        const term =
-          parsedData.action.deleteWord?.term ||
-          (parsedData.action as any).updateWord?.term ||
-          (parsedData.action as any).term ||
-          '';
-        parsedData.action.deleteWord = { term };
-      } else if (parsedData.action.type === 'delete_article') {
-        const title =
-          parsedData.action.deleteArticle?.title ||
-          (parsedData.action as any).title ||
-          (parsedData.action as any).saveArticle?.title ||
-          '';
-        parsedData.action.deleteArticle = { title };
-      } else if (parsedData.action.type === 'clear_all_articles') {
-        const artCount = Array.isArray(existingArticlesSummary) ? existingArticlesSummary.length : 0;
-        parsedData.action.clearAllArticles = { count: artCount };
-      } else if (parsedData.action.type === 'clear_all_words') {
-        const totalCount = Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0;
-        parsedData.action.clearAllWords = { count: totalCount };
-      } else if (parsedData.action.type === 'batch_standardize') {
-        let updatedWords = parsedData.action.batchStandardize?.updatedWords || parsedData.action.words;
-        if (!updatedWords || !Array.isArray(updatedWords) || updatedWords.length === 0) {
-          updatedWords = await enrichWordsWithEnglishDefinitions(ai, existingWordsSummary || []);
-        }
-        parsedData.action = {
-          type: 'batch_standardize',
-          summary: `為單字庫中現有的 ${updatedWords.length} 個單字補充英文釋義（defEn）並標準化`,
-          words: updatedWords,
-          batchStandardize: {
-            originalCount: existingWordsSummary ? existingWordsSummary.length : updatedWords.length,
-            updatedWords
-          }
-        };
-      } else if (parsedData.action.type === 'delete_category' || (parsedData.action as any).type === 'deleteCategory') {
-        parsedData.action.type = 'delete_category';
-        const name = (
-          parsedData.action.deleteCategory?.name ||
-          (parsedData.action as any).deleteCategory?.category ||
-          (parsedData.action as any).name ||
-          (parsedData.action as any).category ||
-          ''
-        ).trim();
-        parsedData.action.deleteCategory = { name };
-        if (!parsedData.action.summary) {
-          parsedData.action.summary = `刪除自訂分類「${name}」（原單字保留並設為未分類）`;
-        }
-      } else if (
-        parsedData.action.type === 'add_category' ||
-        (parsedData.action as any).type === 'addCategory' ||
-        (parsedData.action as any).type === 'create_category'
-      ) {
-        parsedData.action.type = 'add_category';
-        const name = (
-          parsedData.action.addCategory?.name ||
-          (parsedData.action as any).name ||
-          ''
-        ).trim();
-        parsedData.action.addCategory = { name };
-        if (!parsedData.action.summary) {
-          parsedData.action.summary = `新增自訂分類「${name}」`;
-        }
-      } else if (
-        parsedData.action.type === 'batch_set_category' ||
-        (parsedData.action as any).type === 'batchSetCategory' ||
-        (parsedData.action as any).type === 'categorize_words'
-      ) {
-        parsedData.action.type = 'batch_set_category';
-        const category = (
-          parsedData.action.batchSetCategory?.category ||
-          (parsedData.action as any).category ||
-          ''
-        ).trim();
-        const terms = (
-          parsedData.action.batchSetCategory?.terms ||
-          (parsedData.action as any).terms ||
-          []
-        );
-        parsedData.action.batchSetCategory = { category, terms };
-        if (!parsedData.action.summary) {
-          parsedData.action.summary = `批次將 ${terms.length} 個單字歸類至「${category || '未分類'}」`;
-        }
-      }
-    }
-
-    // Ensure that if any database action is present, reply NEVER falsely claims the action has already been performed
-    if (parsedData.action) {
-      if (parsedData.action.type === 'clear_all_articles') {
-        const artCount = parsedData.action.clearAllArticles?.count ?? (Array.isArray(existingArticlesSummary) ? existingArticlesSummary.length : 0);
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立「清空文章閱讀庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${artCount} 篇文章）。`;
-        }
-      } else if (parsedData.action.type === 'clear_all_words') {
-        const totalCount = parsedData.action.clearAllWords?.count ?? (Array.isArray(existingWordsSummary) ? existingWordsSummary.length : 0);
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:清除|清空|刪除)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立「清空單字庫」的操作確認卡片。為保障您的資料安全與避免誤觸，請點擊下方的操作卡片確認按鈕以執行清除（共 ${totalCount} 個單字）。`;
-        }
-      } else if (parsedData.action.type === 'delete_article') {
-        const title = parsedData.action.deleteArticle?.title || '';
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立刪除文章《${title}》的確認卡片，請點擊下方卡片按鈕確認刪除。`;
-        }
-      } else if (parsedData.action.type === 'delete_word') {
-        const term = parsedData.action.deleteWord?.term || '';
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立刪除單字「${term}」的確認卡片，請點擊下方卡片按鈕確認刪除。`;
-        }
-      } else if (parsedData.action.type === 'delete_category') {
-        const name = parsedData.action.deleteCategory?.name || '';
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:刪除|移除)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立「刪除自訂分類」的操作確認卡片。為保障您的資料安全，請點擊下方的操作卡片確認按鈕以刪除分類「${name}」（原屬於此分類的單字將安全保留並重設為未分類，絕不會刪除任何單字）。`;
-        }
-      } else if (parsedData.action.type === 'add_category') {
-        const name = parsedData.action.addCategory?.name || '';
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:新增|建立)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立「新增自訂分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以新增分類「${name}」。`;
-        }
-      } else if (parsedData.action.type === 'batch_set_category') {
-        const terms = parsedData.action.batchSetCategory?.terms || [];
-        const category = parsedData.action.batchSetCategory?.category || '未分類';
-        if (!parsedData.reply || /(?:已為您|已成功|已經|已幫您).*(?:歸類|分類|設定)/i.test(parsedData.reply)) {
-          parsedData.reply = `已為您建立「批次分類」的操作確認卡片。請點擊下方的操作卡片確認按鈕以將 ${terms.length} 個單字歸類至「${category}」。`;
-        }
-      }
-    }
-
-    // ── Fallback: Article intent detected but AI forgot to fill article field ──
-    // ONLY trigger when user clearly wants a BRAND NEW article generated from scratch.
-    // NEVER trigger when user is reading an existing article or asking about words/analysis!
-    if (!parsedData.article) {
-      const promptLower = rawUserPrompt.toLowerCase();
-
-      const isAskingAboutWords =
-        promptLower.includes('難字') ||
-        promptLower.includes('生詞') ||
-        promptLower.includes('單字') ||
-        promptLower.includes('挑出') ||
-        promptLower.includes('詞彙') ||
-        promptLower.includes('字彙') ||
-        promptLower.includes('單詞') ||
-        promptLower.includes('vocab');
-
-      const isAskingAboutAnalysis =
-        promptLower.includes('分析') ||
-        promptLower.includes('總結') ||
-        promptLower.includes('摘要') ||
-        promptLower.includes('文法') ||
-        promptLower.includes('句型') ||
-        promptLower.includes('意思') ||
-        promptLower.includes('翻譯') ||
-        promptLower.includes('解釋');
-
-      const wantsNewArticle =
-        !currentArticle &&
-        !isAskingAboutWords &&
-        !isAskingAboutAnalysis &&
-        (promptLower.includes('文章') || promptLower.includes('article') || promptLower.includes('短文')) &&
-        (promptLower.includes('生成') || promptLower.includes('寫一篇') || promptLower.includes('創作') ||
-         promptLower.includes('產生一篇') || promptLower.includes('建立一篇') ||
-         promptLower.includes('generate a new') || promptLower.includes('write an article'));
-
-      if (wantsNewArticle) {
-        try {
-          const levelMatch = rawUserPrompt.match(/\b(A1|A2|B1|B2|C1|C2)\b/i);
-          const requestedLevel = levelMatch ? levelMatch[1].toUpperCase() : 'B2';
-
-          const articlePrompt = `Based on this user request: "${rawUserPrompt}"
-
-Create a captivating, authentic English reading article at CEFR ${requestedLevel} level.
-
-Return ONLY valid JSON with these exact fields:
-{
-  "title": "English article title",
-  "subtitle": "Brief thematic subtitle",
-  "author": "VocabMin AI Scholar",
-  "source": "VocabMin AI",
-  "level": "${requestedLevel}",
-  "category": "Tech",
-  "content": "Full English article text (3-5 paragraphs, separated by \\n\\n)",
-  "translationZh": "Paragraph-by-paragraph Traditional Chinese translation",
-  "summary": "1-2 sentence Traditional Chinese summary",
-  "grammarPoints": [{"sentence":"...","structure":"...","explanation":"...","grammarType":"..."}],
-  "keyVocabulary": [{"term":"...","pos":"n.","def":"中文釋義","defEn":"English definition","level":"${requestedLevel}","ex":"Example sentence"}]
-}`;
-
-          const articleResponse = await generateWithModelFallback(
-            ai,
-            { temperature: 0.6, responseMimeType: 'application/json' },
-            [{ role: 'user', parts: [{ text: articlePrompt }] }]
-          );
-
-          const articleRaw = articleResponse.text || '{}';
-          let articleParsed: any;
-          try {
-            articleParsed = JSON.parse(articleRaw);
-          } catch {
-            articleParsed = null;
-          }
-
-          if (articleParsed && articleParsed.content && articleParsed.content.length > 50) {
-            const wordCount = articleParsed.content.split(/\s+/).filter(Boolean).length;
-            parsedData.article = {
-              id: `art-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              title: articleParsed.title || 'AI Generated Article',
-              subtitle: articleParsed.subtitle || '',
-              author: articleParsed.author || 'VocabMin AI Scholar',
-              source: articleParsed.source || 'VocabMin AI',
-              level: articleParsed.level || requestedLevel,
-              category: articleParsed.category || 'Custom',
-              content: articleParsed.content,
-              translationZh: articleParsed.translationZh || '',
-              summary: articleParsed.summary || '',
-              wordCount,
-              readTimeMinutes: Math.max(1, Math.round(wordCount / 120)),
-              savedWordTerms: [],
-              isCustom: true,
-              grammarPoints: Array.isArray(articleParsed.grammarPoints) ? articleParsed.grammarPoints : [],
-              keyVocabulary: Array.isArray(articleParsed.keyVocabulary) ? articleParsed.keyVocabulary : [],
-              quiz: Array.isArray(articleParsed.quiz) ? articleParsed.quiz : []
-            };
-            parsedData.words = [];
-            parsedData.action = {
-              type: 'save_article',
-              summary: `收錄文章《${parsedData.article.title}》至文章閱讀庫`,
-              saveArticle: parsedData.article
-            };
-            if (!parsedData.reply || parsedData.reply.length < 10) {
-              parsedData.reply = `已為您生成文章《${parsedData.article.title}》，請點擊下方卡片按鈕收錄至文章閱讀庫！`;
-            }
-          }
-        } catch (articleErr) {
-          console.error('Article fallback generation failed:', articleErr);
-        }
-      }
-    }
-
-    return res.json(parsedData);
+    const words = Array.isArray(parsed.recommendedWords) ? parsed.recommendedWords : [];
+    return res.json({
+      mode: 'tutor',
+      reply: parsed.reply || '',
+      words,
+      recommendedWords: words,
+      followUpSuggestions: Array.isArray(parsed.followUpSuggestions) ? parsed.followUpSuggestions : []
+    });
   } catch (error: any) {
-    console.error('Error generating vocabulary from Gemini:', error);
+    console.error('Error in VocabMin AI Assistant:', error);
     const parsedErr = parseGeminiApiError(error);
-
     return res.status(parsedErr.statusCode).json({
       error: parsedErr.userMessage,
       reason: parsedErr.reason,
@@ -1925,7 +1209,10 @@ Return ONLY valid JSON with these exact fields:
       suggestion: parsedErr.suggestion
     });
   }
-});
+}
+
+app.post('/api/ai/assistant', handleAIAssistantRequest);
+app.post('/api/ai/chat', handleAIAssistantRequest);
 
 // API: Dedicated External Article Import, Grammar Analysis & Bilingual Processing
 app.post('/api/ai/import-article', async (req, res) => {
