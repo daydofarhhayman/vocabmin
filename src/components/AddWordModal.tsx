@@ -147,14 +147,27 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   const t = TRANSLATIONS[lang];
   const [activeTab, setActiveTab] = useState<'single' | 'batch' | 'packs'>('single');
 
+  // Compute unified categories from settings prop and any categories already on existingWords
+  const availableCategories = useMemo(() => {
+    const set = new Set<string>();
+    (categories || []).forEach((c) => {
+      const clean = c?.trim();
+      if (clean && clean !== '未分類') set.add(clean);
+    });
+    (existingWords || []).forEach((w) => {
+      const clean = w.category?.trim();
+      if (clean && clean !== '未分類') set.add(clean);
+    });
+    return Array.from(set);
+  }, [categories, existingWords]);
+
   // Single word state
   const [term, setTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>(() => {
     if (
       sessionLastSelectedCategory !== '未分類' &&
-      categories &&
-      categories.length > 0 &&
-      !categories.includes(sessionLastSelectedCategory)
+      availableCategories.length > 0 &&
+      !availableCategories.includes(sessionLastSelectedCategory)
     ) {
       return '未分類';
     }
@@ -167,6 +180,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   ]);
   const [lookupSource, setLookupSource] = useState<'cambridge' | 'ai' | 'dictionary' | null>(null);
   const [lookupSourceLabel, setLookupSourceLabel] = useState<string | null>(null);
+  const [cambridgeBlocked, setCambridgeBlocked] = useState(false);
   const [candidateSuggestions, setCandidateSuggestions] = useState<string[]>([]);
   const [detectedClipboard, setDetectedClipboard] = useState<string | null>(null);
 
@@ -282,6 +296,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     setIsAllMeaningsLoading(true);
     setLookupSource(null);
     setLookupSourceLabel(null);
+    setCambridgeBlocked(false);
     setInflectionInfo(null);
     setTypoSuggestions([]);
     setIsInvalidWord(false);
@@ -303,6 +318,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || '查詢單字釋義失敗');
+      setCambridgeBlocked(!!data.cambridgeBlocked);
 
       // 1. Invalid Word (無意義亂碼 / 查無此英文單字)
       if (data.status === 'invalid') {
@@ -838,7 +854,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       )}
                     </button>
                     <a
-                      href={`https://dictionary.cambridge.org/zht/詞典/英語-漢語-繁體/${encodeURIComponent(term.trim().toLowerCase())}`}
+                      href={`https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(term.trim().toLowerCase())}`}
                       target="_blank"
                       rel="noreferrer noopener"
                       className="text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 transition active:scale-95"
@@ -858,6 +874,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                   value={term}
                   onChange={(e) => {
                     setTerm(e.target.value);
+                    setCambridgeBlocked(false);
                     setIsInvalidWord(false);
                     setInvalidWordMessage(null);
                     setTypoSuggestions([]);
@@ -984,7 +1001,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
               {/* Lookup Source Banner */}
               {lookupSource && (
                 <div
-                  className={`mt-2 p-3 rounded-2xl border text-xs flex items-center justify-between gap-2 animate-enter ${
+                  className={`mt-2 p-3 rounded-2xl border text-xs flex flex-col gap-1.5 animate-enter ${
                     lookupSource === 'cambridge'
                       ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
                       : lookupSource === 'ai'
@@ -992,50 +1009,57 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-base flex-shrink-0">
-                      {lookupSource === 'cambridge' ? '🏛️' : lookupSource === 'ai' ? '✨' : '📖'}
-                    </span>
-                    <div className="min-w-0">
-                      <span className="font-bold">
-                        {lookupSourceLabel ||
-                          (lookupSource === 'cambridge'
-                            ? '自劍橋英漢辭典 (Cambridge Dictionary) 抓取資料'
-                            : lookupSource === 'ai'
-                            ? '依劍橋辭典標準 · 由 Gemini AI 智能解析多種釋義'
-                            : '雙語辭典備援查詢')}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-base flex-shrink-0">
+                        {lookupSource === 'cambridge' ? '🏛️' : lookupSource === 'ai' ? '✨' : '📖'}
                       </span>
-                      <span className="opacity-80 ml-1.5 whitespace-nowrap">
-                        ・共為您整理 {definitions.length} 種釋義
+                      <div className="min-w-0">
+                        <span className="font-bold">
+                          {lookupSourceLabel ||
+                            (lookupSource === 'cambridge'
+                              ? '自劍橋英漢辭典 (Cambridge Dictionary) 抓取資料'
+                              : lookupSource === 'ai'
+                              ? '依劍橋辭典標準 · 由 Gemini AI 智能解析多種釋義'
+                              : '雙語辭典備援查詢')}
+                        </span>
+                        <span className="opacity-80 ml-1.5 whitespace-nowrap">
+                          ・共為您整理 {definitions.length} 種釋義
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {term.trim() && (
+                        <a
+                          href={`https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(
+                            term.trim().toLowerCase()
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="px-2 py-0.5 rounded-lg text-[10px] font-semibold border border-current opacity-80 hover:opacity-100 transition-opacity flex items-center gap-0.5"
+                          title="在劍橋字典官方網站中開啟"
+                        >
+                          劍橋字典 ↗
+                        </a>
+                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                          lookupSource === 'cambridge'
+                            ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300'
+                            : lookupSource === 'ai'
+                            ? 'bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300'
+                            : 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300'
+                        }`}
+                      >
+                        {lookupSource === 'cambridge' ? '權威劍橋辭典' : lookupSource === 'ai' ? 'AI 依劍橋標準' : '雙語辭典'}
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {term.trim() && (
-                      <a
-                        href={`https://dictionary.cambridge.org/zht/詞典/英語-漢語-繁體/${encodeURIComponent(
-                          term.trim().toLowerCase()
-                        )}`}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="px-2 py-0.5 rounded-lg text-[10px] font-semibold border border-current opacity-80 hover:opacity-100 transition-opacity flex items-center gap-0.5"
-                        title="在劍橋字典官方網站中開啟"
-                      >
-                        劍橋字典 ↗
-                      </a>
-                    )}
-                    <span
-                      className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
-                        lookupSource === 'cambridge'
-                          ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300'
-                          : lookupSource === 'ai'
-                          ? 'bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300'
-                          : 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300'
-                      }`}
-                    >
-                      {lookupSource === 'cambridge' ? '權威劍橋辭典' : lookupSource === 'ai' ? 'AI 依劍橋標準' : '雙語辭典'}
-                    </span>
-                  </div>
+                  {cambridgeBlocked && lookupSource !== 'cambridge' && (
+                    <p className="text-[11px] opacity-85 pl-6">
+                      ※ 說明：因劍橋辭典官網啟用了防爬蟲保護（HTTP 403 / Cloudflare 驗證），後端無法直接自動抓取其網頁，已自動改用上方備援來源解析；若需查看劍橋原文，可點擊右側「劍橋字典 ↗」於瀏覽器開啟。
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -1094,7 +1118,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                       className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
                     >
                       <option value="未分類">未分類 (預設)</option>
-                      {(categories || []).map((c) => (
+                      {availableCategories.map((c) => (
                         <option key={c} value={c}>
                           {c}
                         </option>
@@ -1440,7 +1464,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
                     className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
                   >
                     <option value="未分類">未分類 (預設)</option>
-                    {(categories || []).map((c) => (
+                    {availableCategories.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>

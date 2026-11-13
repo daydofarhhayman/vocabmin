@@ -1589,9 +1589,11 @@ app.post('/api/ai/article-lookup', async (req, res) => {
     }
   }
 
-  // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先查詢劍橋英漢辭典，若無收錄再交由 AI 生成)
+  // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先查詢劍橋英漢辭典，若遭防爬阻擋或無收錄再交由 AI 生成)
+  let cambridgeBlocked = false;
   try {
     const cambridgeParsed = await fetchCambridgeMeanings(cleanWord);
+    cambridgeBlocked = !!cambridgeParsed?.blockedByBotProtection;
     if (cambridgeParsed && cambridgeParsed.meanings && cambridgeParsed.meanings.length > 0) {
       const primary = cambridgeParsed.meanings[0];
       const isInflected = cambridgeParsed.isInflected && !!cambridgeParsed.baseForm;
@@ -1657,7 +1659,7 @@ app.post('/api/ai/article-lookup', async (req, res) => {
     console.warn('Article lookup Cambridge step skipped:', camErr?.message || camErr);
   }
 
-  // 2. SECOND PRIORITY: Gemini AI (劍橋未收錄時使用 AI 生成解釋)
+  // 2. SECOND PRIORITY: Gemini AI (劍橋遭防爬阻擋或未收錄時使用 AI 生成解釋)
   const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
   if (!ai) {
     // Intelligent reliable bilingual dictionary lookup
@@ -1666,7 +1668,10 @@ app.post('/api/ai/article-lookup', async (req, res) => {
       ...fallback,
       meanings: [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }],
       source: 'dictionary',
-      sourceLabel: '雙語辭典備援 (Google Dictionary)'
+      cambridgeBlocked,
+      sourceLabel: cambridgeBlocked
+        ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由雙語辭典備援'
+        : '雙語辭典備援 (Google Dictionary)'
     };
     setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
     return res.json({
@@ -1741,7 +1746,10 @@ Provide accurate contextual details in JSON:
         }
       ],
       source: 'ai',
-      sourceLabel: 'Gemini AI 智能解析 (劍橋未收錄 · AI 生成)'
+      cambridgeBlocked,
+      sourceLabel: cambridgeBlocked
+        ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由 Gemini AI 參照劍橋標準解析'
+        : 'Gemini AI 智能解析 (劍橋未收錄 · AI 生成)'
     };
     setCacheWithLimit(wordLookupCache, cacheKey, resultToCache);
 
@@ -1756,7 +1764,10 @@ Provide accurate contextual details in JSON:
       ...fallback,
       meanings: [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }],
       source: 'dictionary',
-      sourceLabel: '雙語辭典備援 (Google Dictionary)'
+      cambridgeBlocked,
+      sourceLabel: cambridgeBlocked
+        ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由雙語辭典備援'
+        : '雙語辭典備援 (Google Dictionary)'
     };
     setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
     return res.json({
@@ -1895,6 +1906,7 @@ export interface CambridgeParsedResult {
   baseForm?: string;
   inflectionType?: string;
   phonetic?: string;
+  blockedByBotProtection?: boolean;
 }
 
 // Robust parser for Cambridge Dictionary Traditional Chinese markdown (supports both EN & ZH-TW page layouts)
@@ -2268,7 +2280,7 @@ function parseCambridgeHtmlDirect(cleanWord: string, html: string): CambridgePar
   };
 }
 
-// Fetch authentic definitions directly from Cambridge HTML (fast 3.5s) with optional JINA_API_KEY fallback
+// Fetch authentic definitions directly from Cambridge HTML (fast 3.5s) and detect Cloudflare/anti-bot HTTP blocks cleanly
 async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResult | null> {
   const cleanWord = word.trim().toLowerCase();
   if (!cleanWord || !/^[a-zA-Z\s'-]+$/.test(cleanWord)) return null;
@@ -2286,7 +2298,6 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
 
   const primaryUrl = `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`;
 
-  // 1. Direct HTML fetch (fast, zero third-party proxy bottleneck)
   try {
     const res = await fetch(primaryUrl, {
       signal: AbortSignal.timeout(3500),
@@ -2297,12 +2308,28 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
       }
     });
 
+    if (res.status === 403 || res.status === 429 || res.status === 503) {
+      console.warn(`Cambridge Dictionary blocked automated server request (${res.status}) for "${cleanWord}"`);
+      return { meanings: [], isInflected: false, blockedByBotProtection: true };
+    }
+
+    const html = await res.text();
+    const isBotChallenge =
+      /<title>\s*Just a moment\.\.\.\s*<\/title>/i.test(html) ||
+      html.includes('cf-browser-verification') ||
+      html.includes('Enable JavaScript and cookies to continue') ||
+      (html.includes('Cloudflare') && !html.includes('ddef_d') && !html.includes('def-block'));
+
+    if (isBotChallenge) {
+      console.warn(`Cambridge Dictionary returned Cloudflare challenge page for "${cleanWord}"`);
+      return { meanings: [], isInflected: false, blockedByBotProtection: true };
+    }
+
     if (res.ok) {
       if (res.url.endsWith('/english-chinese-traditional/') || res.url.includes('/spellcheck/')) {
         return null;
       }
 
-      const html = await res.text();
       const isUnlistedHtml =
         html.includes('拼寫建議') ||
         html.includes('在拼寫或發音上近似的詞') ||
@@ -2326,55 +2353,6 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
     console.warn(`Cambridge direct HTML lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
   }
 
-  // 2. Optional Jina proxy backup ONLY when JINA_API_KEY is configured (single URL, short 3.5s timeout)
-  const jinaKey = process.env.JINA_API_KEY;
-  if (jinaKey) {
-    try {
-      const res = await fetch(`https://r.jina.ai/${primaryUrl}`, {
-        signal: AbortSignal.timeout(3500),
-        headers: {
-          'Accept': 'text/plain',
-          'Authorization': `Bearer ${jinaKey}`,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-        }
-      });
-
-      if (res.ok) {
-        const markdown = await res.text();
-        const isUnlistedOrSuggestions =
-          markdown.includes('拼寫建議') ||
-          markdown.includes('在拼寫或發音上近似的詞') ||
-          markdown.includes('近似的詞') ||
-          markdown.includes('Suggestions for') ||
-          markdown.includes('Search suggestions for') ||
-          markdown.includes('Did you mean') ||
-          markdown.includes('No results found') ||
-          markdown.includes('在該辭典中找不到') ||
-          markdown.includes('找不到任何結果') ||
-          markdown.includes('我們找不到');
-
-        if (isUnlistedOrSuggestions) {
-          return null;
-        }
-
-        const hasRealEntryHeader =
-          /# Translation of (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?/i.test(markdown) ||
-          /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英語-(?:中文|漢語)/i.test(markdown) ||
-          /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英(?:漢|語)/i.test(markdown);
-
-        if (hasRealEntryHeader) {
-          const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
-          if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
-            setCacheWithLimit(cambridgeMeaningsCache, cleanWord, parsedResult);
-            return parsedResult;
-          }
-        }
-      }
-    } catch (err: any) {
-      console.warn(`Cambridge Jina backup for "${cleanWord}" failed or timed out:`, err?.message || err);
-    }
-  }
-
   return null;
 }
 
@@ -2388,6 +2366,7 @@ export interface WordAllMeaningsPayload {
   meanings: any[];
   source: 'cambridge' | 'ai' | 'dictionary' | 'validator' | 'fallback';
   sourceLabel: string;
+  cambridgeBlocked?: boolean;
   message?: string;
 }
 
@@ -2428,8 +2407,10 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
   }
 
   // 1. FIRST PRIORITY: Authentic Cambridge Dictionary (優先從劍橋字典中抓資料與變形資訊)
+  let cambridgeBlocked = false;
   try {
     const cambridgeParsed = await fetchCambridgeMeanings(cleanWord);
+    cambridgeBlocked = !!cambridgeParsed?.blockedByBotProtection;
     if (cambridgeParsed && cambridgeParsed.meanings.length > 0) {
       const isInflected = cambridgeParsed.isInflected && !!cambridgeParsed.baseForm;
       const payload: WordAllMeaningsPayload = {
@@ -2581,7 +2562,10 @@ Return a JSON object conforming to the schema.`;
           suggestions: [],
           meanings: validMeanings,
           source: 'ai',
-          sourceLabel: `Gemini AI 智能解析 (偵測為「${(parsed.baseForm || cleanWord).toLowerCase()}」之變形)`
+          cambridgeBlocked,
+          sourceLabel: cambridgeBlocked
+            ? `劍橋官網防爬蟲攔截 (HTTP 403) · 已由 Gemini AI 解析「${(parsed.baseForm || cleanWord).toLowerCase()}」`
+            : `Gemini AI 智能解析 (偵測為「${(parsed.baseForm || cleanWord).toLowerCase()}」之變形)`
         };
         setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
         return res.json({ ...payload, fromCache: false });
@@ -2599,7 +2583,10 @@ Return a JSON object conforming to the schema.`;
             suggestions: [],
             meanings: validMeanings,
             source: 'ai',
-            sourceLabel: 'Gemini AI 智能解析 (參照劍橋辭典標準)'
+            cambridgeBlocked,
+            sourceLabel: cambridgeBlocked
+              ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由 Gemini AI 參照劍橋標準解析'
+              : 'Gemini AI 智能解析 (參照劍橋辭典標準)'
           };
           setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
           return res.json({ ...payload, fromCache: false });
@@ -2727,7 +2714,10 @@ Return a JSON object conforming to the schema.`;
         suggestions: [],
         meanings: fallbackMeanings,
         source: 'dictionary',
-        sourceLabel: '雙語辭典備援 (Google Dictionary)'
+        cambridgeBlocked,
+        sourceLabel: cambridgeBlocked
+          ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由雙語辭典備援'
+          : '雙語辭典備援 (Google Dictionary)'
       };
       setCacheWithLimit(wordAllMeaningsCache, cacheKey, payload);
       return res.json({

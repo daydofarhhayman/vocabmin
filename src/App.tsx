@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
 import { Word, WordGroup, DailyStats, AppSettings, ViewTab, POS, Article } from './types';
-import { storage, DEFAULT_SETTINGS, DEFAULT_CATEGORIES, getLocalDateString } from './services/storage';
+import { storage, DEFAULT_SETTINGS, DEFAULT_CATEGORIES, getLocalDateString, getAllWordCategories } from './services/storage';
 import { applySRSDecay } from './services/srs';
 import { Header } from './components/Header';
 import { MobileNav } from './components/MobileNav';
@@ -35,6 +35,14 @@ export default function App() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [dailyStats, setDailyStats] = useState<DailyStats>({});
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+  const allCategories = useMemo(
+    () => getAllWordCategories(words, settings),
+    [words, settings]
+  );
   const [activeStudyQuestion, setActiveStudyQuestion] = useState<ActiveStudyQuestion | null>(null);
 
   // Authentication State
@@ -347,7 +355,9 @@ export default function App() {
   const handleUpdateSettings = useCallback(
     (newSettings: Partial<AppSettings>) => {
       setSettings((prev) => {
-        const merged = { ...prev, ...newSettings };
+        const base = settingsRef.current || prev;
+        const merged = { ...base, ...newSettings };
+        settingsRef.current = merged;
         storage.saveLocalSettings(merged, user?.uid);
         if (user) {
           storage.saveCloudSettings(merged, user.uid);
@@ -546,14 +556,15 @@ export default function App() {
     (newCat: string) => {
       const clean = newCat.trim();
       if (!clean || clean === '未分類') return;
-      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const baseSettings = settingsRef.current || settings;
+      const currentCats = getAllWordCategories(wordsRef.current, baseSettings);
       if (currentCats.some((c) => c.trim().toLowerCase() === clean.toLowerCase())) return;
 
       const updated = [...currentCats, clean];
       handleUpdateSettings({ customCategories: updated });
       showToast(`已建立分類「${clean}」`);
     },
-    [settings.customCategories, handleUpdateSettings, showToast]
+    [settings, handleUpdateSettings, showToast]
   );
 
   const handleRenameCategory = useCallback(
@@ -562,11 +573,13 @@ export default function App() {
       const cleanNew = newName.trim();
       if (!cleanOld || !cleanNew || cleanOld.toLowerCase() === cleanNew.toLowerCase()) return;
 
-      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const baseSettings = settingsRef.current || settings;
+      const currentCats = getAllWordCategories(wordsRef.current, baseSettings);
       const updatedCats = currentCats.map((c) =>
         c.trim().toLowerCase() === cleanOld.toLowerCase() ? cleanNew : c
       );
-      const updatedSettings = { ...settings, customCategories: updatedCats };
+      const updatedSettings = { ...baseSettings, customCategories: updatedCats };
+      settingsRef.current = updatedSettings;
       setSettings(updatedSettings);
       storage.saveLocalSettings(updatedSettings, user?.uid);
 
@@ -604,9 +617,11 @@ export default function App() {
       const clean = categoryName.trim();
       if (!clean) return;
 
-      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const baseSettings = settingsRef.current || settings;
+      const currentCats = getAllWordCategories(wordsRef.current, baseSettings);
       const updatedCats = currentCats.filter((c) => c.trim().toLowerCase() !== clean.toLowerCase());
-      const updatedSettings = { ...settings, customCategories: updatedCats };
+      const updatedSettings = { ...baseSettings, customCategories: updatedCats };
+      settingsRef.current = updatedSettings;
       setSettings(updatedSettings);
       storage.saveLocalSettings(updatedSettings, user?.uid);
 
@@ -645,7 +660,8 @@ export default function App() {
     async (term: string, newCategory?: string) => {
       const cleanTerm = term.trim().toLowerCase();
       const cleanCat = newCategory?.trim();
-      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const baseSettings = settingsRef.current || settings;
+      const currentCats = getAllWordCategories(wordsRef.current, baseSettings);
       const matchedCat = cleanCat ? currentCats.find((c) => c.trim().toLowerCase() === cleanCat.toLowerCase()) : undefined;
       const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : (matchedCat || cleanCat);
 
@@ -672,7 +688,8 @@ export default function App() {
       if (finalCat) {
         if (!currentCats.some((c) => c.trim().toLowerCase() === finalCat.toLowerCase())) {
           const updatedCats = [...currentCats, finalCat];
-          const updatedSettings = { ...settings, customCategories: updatedCats };
+          const updatedSettings = { ...baseSettings, customCategories: updatedCats };
+          settingsRef.current = updatedSettings;
           setSettings(updatedSettings);
           storage.saveLocalSettings(updatedSettings, user?.uid);
           if (user) {
@@ -700,7 +717,8 @@ export default function App() {
       if (!terms.length) return;
       const termsSet = new Set(terms.map((t) => t.trim().toLowerCase()));
       const cleanCat = newCategory?.trim();
-      const currentCats = settings.customCategories || DEFAULT_CATEGORIES;
+      const baseSettings = settingsRef.current || settings;
+      const currentCats = getAllWordCategories(wordsRef.current, baseSettings);
       const matchedCat = cleanCat ? currentCats.find((c) => c.trim().toLowerCase() === cleanCat.toLowerCase()) : undefined;
       const finalCat = !cleanCat || cleanCat === '未分類' ? undefined : (matchedCat || cleanCat);
 
@@ -730,7 +748,8 @@ export default function App() {
       if (finalCat) {
         if (!currentCats.some((c) => c.trim().toLowerCase() === finalCat.toLowerCase())) {
           const updatedCats = [...currentCats, finalCat];
-          const updatedSettings = { ...settings, customCategories: updatedCats };
+          const updatedSettings = { ...baseSettings, customCategories: updatedCats };
+          settingsRef.current = updatedSettings;
           setSettings(updatedSettings);
           storage.saveLocalSettings(updatedSettings, user?.uid);
           if (user) {
@@ -1547,7 +1566,7 @@ export default function App() {
             lang={settings.lang}
             existingWords={words}
             initialTerm={addModalInitialTerm}
-            categories={settings.customCategories || DEFAULT_CATEGORIES}
+            categories={allCategories}
             onAddCategory={handleAddCategory}
             apiKey={settings.geminiApiKey}
           />
@@ -1561,7 +1580,7 @@ export default function App() {
             allWords={words}
             onUpdateGroup={handleUpdateWordGroup}
             lang={settings.lang}
-            categories={settings.customCategories || DEFAULT_CATEGORIES}
+            categories={allCategories}
             onAddCategory={handleAddCategory}
             apiKey={settings.geminiApiKey}
           />

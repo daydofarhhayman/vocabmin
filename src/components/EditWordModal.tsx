@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Edit2, Plus, Trash2, X, Check, Sparkles, Loader2 } from 'lucide-react';
 import { POS, Word } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
@@ -51,6 +51,19 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAiFetchMeaningsLoading, setIsAiFetchMeaningsLoading] = useState(false);
   const [editFeedback, setEditFeedback] = useState<string | null>(null);
+
+  const availableCategories = useMemo(() => {
+    const set = new Set<string>();
+    (categories || []).forEach((c) => {
+      const clean = c?.trim();
+      if (clean && clean !== '未分類') set.add(clean);
+    });
+    (allWords || []).forEach((w) => {
+      const clean = w.category?.trim();
+      if (clean && clean !== '未分類') set.add(clean);
+    });
+    return Array.from(set);
+  }, [categories, allWords]);
 
   // AI auto standardize / polish definition #0 without deleting other definitions
   const handleAiPolish = async () => {
@@ -409,7 +422,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
                     className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 text-xs font-bold text-slate-800 dark:text-white outline-none cursor-pointer"
                   >
                     <option value="未分類">未分類 (預設)</option>
-                    {(categories || []).map((c) => (
+                    {availableCategories.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>

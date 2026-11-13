@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { Word, POS, AppSettings, Article, ViewTab, DailyStats } from '../types';
 import { tts } from '../services/tts';
-import { storage } from '../services/storage';
+import { storage, getAllWordCategories } from '../services/storage';
 import { normalizePos } from '../utils/pos';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { buildAIStudyContextStats } from '../utils/aiContext';
@@ -388,7 +388,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
             levelDistribution: studyStats.levelDistribution,
             categoryBreakdown: studyStats.categoryBreakdown,
             totalArticlesCount: existingArticles.length,
-            allCategories: settings?.customCategories || []
+            allCategories: getAllWordCategories(existingWords, settings)
           }
         })
       });
@@ -582,7 +582,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
             def: w.def
           })),
           screenContext: {
-            allCategories: settings?.customCategories || []
+            allCategories: getAllWordCategories(existingWords, settings)
           }
         })
       });

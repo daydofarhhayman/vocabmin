@@ -26,7 +26,7 @@ import {
 } from '../types';
 import type { ActiveStudyQuestion } from './StudyHubView';
 import { tts } from '../services/tts';
-import { storage } from '../services/storage';
+import { storage, getAllWordCategories } from '../services/storage';
 import { normalizePos } from '../utils/pos';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { buildAIStudyContextStats } from '../utils/aiContext';
@@ -297,7 +297,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
             activeStudyQuestion:
               currentTab === 'review' || currentTab === 'quiz' ? activeStudyQuestion : null,
             activeInspectedWord,
-            allCategories: settings?.customCategories || []
+            allCategories: getAllWordCategories(words, settings)
           }
         })
       });
