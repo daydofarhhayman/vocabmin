@@ -170,7 +170,7 @@ export function parseGeminiApiError(error: any): ParsedAIError {
   };
 }
 
-// Helper: Try official models with retry and graceful fallback
+// Helper: Try official models with single-pass fallback, hard timeout, and fast error classification
 async function generateWithModelFallback(
   ai: GoogleGenAI,
   config: any,
@@ -178,81 +178,98 @@ async function generateWithModelFallback(
   preferredModels = [
     'gemini-3.8-flash',
     'gemini-3.5-flash-lite',
-    'gemini-3.1-flash-lite',
-    'gemini-4-argon'
-  ]
+    'gemini-3.1-flash-lite'
+  ],
+  timeoutMs = 18000
 ) {
   let lastError: any = null;
   let quotaExhaustedError: any = null;
+  let quotaHitCount = 0;
   const attemptedLog: string[] = [];
 
-  for (const model of preferredModels) {
-    let isFatalKeyError = false;
-    let isQuotaExhausted = false;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await ai.models.generateContent({
+  const runWithTimeout = async (model: string, reqConfig: any) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const effectiveConfig =
+        reqConfig?.thinkingConfig === undefined && model.includes('gemini-3.8')
+          ? { ...(reqConfig || {}), thinkingConfig: { thinkingLevel: 'LOW' } }
+          : reqConfig;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Request timed out after ${timeoutMs}ms (${model})`)), timeoutMs);
+      });
+      return await Promise.race([
+        ai.models.generateContent({
           model,
           contents,
-          config
-        });
-        if (response) {
-          console.log(`[Gemini Fallback] Successfully generated content using model: ${model}`);
-          return response;
-        }
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = err?.message || String(err);
-        attemptedLog.push(`[${model}] Attempt ${attempt + 1}: ${errMsg}`);
-        console.warn(`[Gemini Fallback] Model ${model} (attempt ${attempt + 1}) failed:`, errMsg);
+          config: effectiveConfig
+        }),
+        timeoutPromise
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
 
-        // If API key is invalid or permission denied, no need to loop other models
-        if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('PERMISSION_DENIED')) {
-          isFatalKeyError = true;
+  for (const model of preferredModels) {
+    try {
+      const response = await runWithTimeout(model, config);
+      if (response) {
+        console.log(`[Gemini Fallback] Successfully generated content using model: ${model}`);
+        return response;
+      }
+    } catch (err: any) {
+      lastError = err;
+      const errMsg = err?.message || String(err);
+      attemptedLog.push(`[${model}]: ${errMsg}`);
+      console.warn(`[Gemini Fallback] Model ${model} failed:`, errMsg);
+
+      // If API key is invalid or permission denied, abort immediately
+      if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid') || errMsg.includes('PERMISSION_DENIED')) {
+        throw err;
+      }
+
+      const is429 =
+        errMsg.includes('429') ||
+        errMsg.includes('RESOURCE_EXHAUSTED') ||
+        errMsg.includes('Quota exceeded') ||
+        errMsg.toLowerCase().includes('quota');
+      if (is429) {
+        quotaExhaustedError = quotaExhaustedError || err;
+        quotaHitCount += 1;
+        // Try at most one lite fallback if primary hit rate limit, then stop immediately
+        if (quotaHitCount >= 2 || model.includes('lite')) {
           break;
         }
+        continue;
+      }
 
-        // If model is discontinued or not found, break immediately to try next fallback model
-        if (errMsg.includes('not found') || errMsg.includes('NOT_FOUND') || errMsg.includes('404')) {
-          break;
+      // If schema or thinkingConfig invalid (400), retry once on the same model with stripped optional fields
+      if (
+        (errMsg.includes('INVALID_ARGUMENT') ||
+          errMsg.includes('schema') ||
+          errMsg.includes('propertyOrdering') ||
+          errMsg.toLowerCase().includes('thinking')) &&
+        (config?.responseSchema || config?.thinkingConfig || model.includes('gemini-3.8'))
+      ) {
+        try {
+          console.warn(`[Gemini Fallback] Retrying ${model} without strict schema/thinkingConfig...`);
+          const fallbackConfig = { ...(config || {}) };
+          delete fallbackConfig.responseSchema;
+          delete fallbackConfig.thinkingConfig;
+          const fallbackRes = await ai.models.generateContent({
+            model,
+            contents,
+            config: fallbackConfig
+          });
+          if (fallbackRes) return fallbackRes;
+        } catch (schemaErr: any) {
+          attemptedLog.push(`[${model} schema-fallback]: ${schemaErr?.message || String(schemaErr)}`);
         }
-
-        const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded') || errMsg.toLowerCase().includes('quota');
-        if (is429) {
-          quotaExhaustedError = err;
-          isQuotaExhausted = true;
-          break;
-        }
-
-        // If schema invalid (400), try fallback config without responseSchema on attempt 1
-        if (attempt === 0 && (errMsg.includes('INVALID_ARGUMENT') || errMsg.includes('schema') || errMsg.includes('propertyOrdering')) && config?.responseSchema) {
-          try {
-            console.warn(`[Gemini Fallback] Retrying ${model} without responseSchema...`);
-            const fallbackConfig = { ...config };
-            delete fallbackConfig.responseSchema;
-            const fallbackRes = await ai.models.generateContent({
-              model,
-              contents,
-              config: fallbackConfig
-            });
-            if (fallbackRes) return fallbackRes;
-          } catch (schemaErr: any) {
-            // continue normal flow
-          }
-        }
-
-        await new Promise((res) => setTimeout(res, 500));
       }
     }
-
-    if (isFatalKeyError) {
-      throw lastError;
-    }
-    if (isQuotaExhausted) continue;
   }
 
-  // Prioritize Quota Exhausted error if any model hit 429 so quota limit is not masked by 404
+  // Prioritize Quota Exhausted error if any model hit 429 so quota limit is not masked
   const errorToThrow = quotaExhaustedError || lastError || new Error('所有可用 Gemini 模型皆無回應，請稍後重試。');
   if (attemptedLog.length > 0) {
     (errorToThrow as any).fallbackDetails = attemptedLog.join('\n');
@@ -420,11 +437,12 @@ async function fetchBilingualWordDetails(
   };
 }
 
-// Helper: Fast generation of English definitions (defEn)
+// Helper: Enrich missing Traditional Chinese definitions (def), English definitions (defEn), and example sentences (ex)
 async function enrichWordsWithEnglishDefinitions(ai: GoogleGenAI, words: any[]) {
   if (!words || words.length === 0) return [];
   try {
     const wordList = words.map((w) => ({
+      ...w,
       id: w.id,
       term: w.term,
       pos: w.pos || 'n.',
@@ -434,23 +452,44 @@ async function enrichWordsWithEnglishDefinitions(ai: GoogleGenAI, words: any[]) 
       level: w.level !== undefined ? w.level : 0
     }));
 
-    const prompt = `Provide clear, authentic English definitions (defEn) in English for each of these English vocabulary words.
-Return JSON array with "term" and "defEn":
-${JSON.stringify(wordList.map((w) => ({ term: w.term, pos: w.pos, def: w.def })))}`;
+    const itemsNeedingEnrichment = wordList.filter(
+      (w) => !w.def?.trim() || !w.defEn?.trim() || !w.ex?.trim()
+    );
+    if (itemsNeedingEnrichment.length === 0) return wordList;
+
+    const prompt = `For each English vocabulary entry below, fill in any missing fields while respecting existing non-empty fields:
+- "def": concise, natural Taiwan Traditional Chinese definition (繁體中文釋義)
+- "defEn": clear, authentic English learner definition
+- "ex": natural modern English example sentence (10-16 words) demonstrating the word in that part of speech
+Preserve the exact "id" (if provided) and "term" for each entry. Return JSON array:
+${JSON.stringify(
+      itemsNeedingEnrichment.map((w) => ({
+        id: w.id || '',
+        term: w.term,
+        pos: w.pos,
+        def: w.def,
+        defEn: w.defEn,
+        ex: w.ex
+      }))
+    )}`;
 
     const response = await generateWithModelFallback(
       ai,
       {
         responseMimeType: 'application/json',
+        thinkingConfig: { thinkingLevel: 'MINIMAL' },
         responseSchema: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
+              id: { type: Type.STRING },
               term: { type: Type.STRING },
-              defEn: { type: Type.STRING }
+              def: { type: Type.STRING },
+              defEn: { type: Type.STRING },
+              ex: { type: Type.STRING }
             },
-            required: ['term', 'defEn']
+            required: ['term', 'def', 'defEn', 'ex']
           }
         }
       },
@@ -458,21 +497,27 @@ ${JSON.stringify(wordList.map((w) => ({ term: w.term, pos: w.pos, def: w.def }))
     );
 
     const parsed = JSON.parse(response.text || '[]');
-    const enMap = new Map<string, string>();
+    const byIdMap = new Map<string, any>();
+    const byTermMap = new Map<string, any>();
     if (Array.isArray(parsed)) {
       parsed.forEach((item: any) => {
-        if (item.term && item.defEn) {
-          enMap.set(item.term.trim().toLowerCase(), item.defEn.trim());
-        }
+        if (item?.id) byIdMap.set(String(item.id), item);
+        if (item?.term) byTermMap.set(item.term.trim().toLowerCase(), item);
       });
     }
 
-    return wordList.map((w) => ({
-      ...w,
-      defEn: enMap.get(w.term.trim().toLowerCase()) || w.defEn || ''
-    }));
+    return wordList.map((w) => {
+      const match = (w.id && byIdMap.get(String(w.id))) || byTermMap.get(w.term.trim().toLowerCase());
+      if (!match) return w;
+      return {
+        ...w,
+        def: w.def?.trim() ? w.def : (match.def || '').trim(),
+        defEn: w.defEn?.trim() ? w.defEn : (match.defEn || '').trim(),
+        ex: w.ex?.trim() ? w.ex : (match.ex || '').trim()
+      };
+    });
   } catch (err) {
-    console.error('Failed to generate defEn:', err);
+    console.error('Failed to enrich word library fields:', err);
     return words;
   }
 }
@@ -556,7 +601,11 @@ async function fetchExternalUrlContent(url: string): Promise<{ title: string; te
 // VocabMin Next-Gen AI Assistant Engine (Task-Isolated, Zero-Hallucination)
 // ============================================================================
 
-function buildCleanContextualGrounding(screenContext: any, currentArticle: any): string {
+function buildCleanContextualGrounding(
+  screenContext: any,
+  currentArticle: any,
+  topLevelWordsSummary: any[] = []
+): string {
   const parts: string[] = [];
 
   if (screenContext) {
@@ -570,7 +619,8 @@ function buildCleanContextualGrounding(screenContext: any, currentArticle: any):
     };
     const statsLine = [
       screenContext.currentTab ? `當前畫面：${tabLabels[screenContext.currentTab] || screenContext.currentTab}` : '',
-      screenContext.totalWordsCount !== undefined ? `單字總數：${screenContext.totalWordsCount} 個` : '',
+      screenContext.totalWordsCount !== undefined ? `不重複單字總數：${screenContext.totalWordsCount} 個` : '',
+      screenContext.totalDefinitionsCount !== undefined ? `詞條釋義總筆數：${screenContext.totalDefinitionsCount} 筆` : '',
       screenContext.dueWordsCount !== undefined ? `待複習：${screenContext.dueWordsCount} 個` : '',
       screenContext.totalArticlesCount !== undefined ? `收錄文章：${screenContext.totalArticlesCount} 篇` : '',
       screenContext.dailyStreak !== undefined ? `連續學習：${screenContext.dailyStreak} 天` : ''
@@ -579,11 +629,60 @@ function buildCleanContextualGrounding(screenContext: any, currentArticle: any):
       .join(' ｜ ');
 
     if (statsLine) {
-      parts.push(`【使用者目前學習狀態】\n${statsLine}`);
+      parts.push(`【使用者目前學習狀態（準確統計數據，回答數量/進度問題時請直接引用）】\n${statsLine}`);
+    }
+
+    if (screenContext.levelDistribution && typeof screenContext.levelDistribution === 'object') {
+      const ld = screenContext.levelDistribution;
+      const distText = [
+        ld.level0 !== undefined ? `Lv.0 新單字: ${ld.level0}` : '',
+        ld.level1 !== undefined ? `Lv.1 學習中: ${ld.level1}` : '',
+        ld.level2 !== undefined ? `Lv.2 熟悉: ${ld.level2}` : '',
+        ld.level3 !== undefined ? `Lv.3 已精通: ${ld.level3}` : ''
+      ]
+        .filter(Boolean)
+        .join(' ｜ ');
+      if (distText) {
+        parts.push(`【熟練度分布】\n${distText}`);
+      }
+    }
+
+    if (screenContext.categoryBreakdown && typeof screenContext.categoryBreakdown === 'object') {
+      const entries = Object.entries(screenContext.categoryBreakdown as Record<string, number>)
+        .filter(([, count]) => typeof count === 'number' && count > 0)
+        .map(([cat, count]) => `${cat}: ${count}`);
+      if (entries.length > 0) {
+        parts.push(`【各分類單字分布】\n${entries.join('、')}`);
+      }
     }
 
     if (Array.isArray(screenContext.allCategories) && screenContext.allCategories.length > 0) {
       parts.push(`【現有自訂分類】\n${screenContext.allCategories.join('、')}`);
+    }
+
+    const wordsSummarySource =
+      Array.isArray(topLevelWordsSummary) && topLevelWordsSummary.length > 0
+        ? topLevelWordsSummary
+        : Array.isArray(screenContext.existingWordsSummary)
+        ? screenContext.existingWordsSummary
+        : [];
+    if (wordsSummarySource.length > 0) {
+      const formattedWords = wordsSummarySource
+        .slice(0, 200)
+        .map((w: any) => {
+          if (typeof w === 'string') return w;
+          const posStr = w.pos ? `(${w.pos})` : '';
+          const defStr = w.def ? `: ${String(w.def).slice(0, 40)}` : '';
+          const catStr = w.category ? ` [${w.category}]` : '';
+          const lvStr = w.level !== undefined ? ` Lv.${w.level}` : '';
+          return `${w.term || ''}${posStr}${defStr}${catStr}${lvStr}`.trim();
+        })
+        .filter(Boolean);
+      if (formattedWords.length > 0) {
+        parts.push(
+          `【使用者字庫單字摘要（共附上 ${formattedWords.length} 筆代表性詞條）】\n${formattedWords.join('；')}`
+        );
+      }
     }
 
     // Active Quiz / Review Question Grounding
@@ -1094,18 +1193,18 @@ ${STRICT_LANGUAGE_RULE}`;
         : '';
     const cleanPrompt =
       (String(userPrompt || '').trim() || '請根據我目前的學習內容提供協助。') + rawWordsHint;
-    const groundingText = buildCleanContextualGrounding(screenContext, currentArticle);
+    const groundingText = buildCleanContextualGrounding(screenContext, currentArticle, existingWordsSummary);
 
     const tutorSystemInstruction = `你是 VocabMin AI 首席英語學習家教與隨身語言助教。
 你的任務是精準理解使用者的問題，提供條理分明、深入淺出、零幻覺的專業解答。
 ${STRICT_LANGUAGE_RULE}
 
 ### 回答準則：
-1. **緊扣問題核心**：直接回答使用者的問題（如文法解析、句意翻譯、單字比較、記憶方法、學習建議、文章段落解讀、測驗題目解析）。
-2. **善用清晰排版**：適度使用 Markdown 標題、重點粗體與條列清單，讓閱讀體驗清爽易懂。
+1. **緊扣問題核心**：直接回答使用者的問題（如文法解析、句意翻譯、單字比較、記憶方法、學習建議、文章段落解讀、測驗題目解析）。若使用者詢問單字數量、待複習數、分類分布或字庫有哪些字，請直接根據下方「使用者目前學習狀態與字庫摘要」精準回答。
+2. **善用清晰排版**：簡單問題請簡明扼要直擊重點，避免冗長廢話；複雜問題再適度使用 Markdown 標題、重點粗體與條列清單。
 3. **何時提供 recommendedWords**：
    - 當使用者「明確要求推薦單字、查詢特定單字、從目前閱讀的文章挑出難字/生詞、或詢問某主題有哪些英文單字」時，請將這些單字填入 \`recommendedWords\` 陣列，方便使用者一鍵加入單字庫。
-   - 若使用者只是進行一般文法問答、句子翻譯或概念討論，\`recommendedWords\` 請保持空陣列 \`[]\`。
+   - 若使用者只是進行一般文法問答、字數統計詢問、句子翻譯或概念討論，\`recommendedWords\` 請保持空陣列 \`[]\`。
 4. **延伸追問建議 (\`followUpSuggestions\`)**：
    - 根據當下話題，提供 2 到 3 個使用者可能會想繼續追問的簡短問題（每個問題 8～18 字以內）。
 ${groundingText ? `\n### 使用者當前畫面與學習情境參考：\n${groundingText}` : ''}`;
@@ -1144,6 +1243,7 @@ ${groundingText ? `\n### 使用者當前畫面與學習情境參考：\n${ground
       {
         systemInstruction: tutorSystemInstruction,
         temperature: 0.4,
+        thinkingConfig: { thinkingLevel: 'MINIMAL' },
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -1413,10 +1513,18 @@ app.post('/api/ai/enrich-library', async (req, res) => {
     if (!ai) {
       const enriched = await Promise.all(
         (words || []).map(async (w: any) => {
-          if (!w.defEn) {
+          const needsDef = !w.def?.trim();
+          const needsDefEn = !w.defEn?.trim();
+          const needsEx = !w.ex?.trim();
+          if (needsDef || needsDefEn || needsEx) {
             try {
               const details = await fetchBilingualWordDetails(w.term);
-              return { ...w, defEn: details.defEn || '' };
+              return {
+                ...w,
+                def: needsDef ? (details.def || w.def || '') : w.def,
+                defEn: needsDefEn ? (details.defEn || w.defEn || '') : w.defEn,
+                ex: needsEx ? (details.ex || w.ex || '') : w.ex
+              };
             } catch {
               return w;
             }
@@ -1488,32 +1596,37 @@ app.post('/api/ai/article-lookup', async (req, res) => {
       const primary = cambridgeParsed.meanings[0];
       const isInflected = cambridgeParsed.isInflected && !!cambridgeParsed.baseForm;
 
-      // Enrich phonetic & Chinese translation of example sentence if needed
-      let phonetic = '';
-      let exZh = '';
-      try {
-        const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`, {
-          signal: AbortSignal.timeout(2500)
-        });
-        if (dictRes.ok) {
-          const dictData = await dictRes.json();
-          if (Array.isArray(dictData) && dictData[0]) {
-            phonetic = dictData[0].phonetic || (dictData[0].phonetics?.find((p: any) => p.text)?.text) || '';
-          }
-        }
-      } catch {}
+      // Enrich phonetic & Chinese translation of example sentence in parallel only when missing
+      let phonetic = cambridgeParsed.phonetic || '';
+      let exZh = primary.exZh || '';
 
-      if (primary.ex) {
-        try {
-          const exRes = await fetch(
-            `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(primary.ex)}`,
-            { signal: AbortSignal.timeout(2500) }
-          );
-          if (exRes.ok) {
-            const exData = await exRes.json();
-            exZh = exData[0]?.[0]?.[0] || '';
-          }
-        } catch {}
+      const [phoneticResult, exZhResult] = await Promise.allSettled([
+        !phonetic
+          ? fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`, {
+              signal: AbortSignal.timeout(2000)
+            })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((dictData) =>
+                Array.isArray(dictData) && dictData[0]
+                  ? dictData[0].phonetic || dictData[0].phonetics?.find((p: any) => p.text)?.text || ''
+                  : ''
+              )
+          : Promise.resolve(phonetic),
+        primary.ex && !exZh
+          ? fetch(
+              `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(primary.ex)}`,
+              { signal: AbortSignal.timeout(2000) }
+            )
+              .then((r) => (r.ok ? r.json() : null))
+              .then((exData) => exData?.[0]?.[0]?.[0] || '')
+          : Promise.resolve(exZh)
+      ]);
+
+      if (phoneticResult.status === 'fulfilled' && phoneticResult.value) {
+        phonetic = phoneticResult.value;
+      }
+      if (exZhResult.status === 'fulfilled' && exZhResult.value) {
+        exZh = exZhResult.value;
       }
 
       const cambridgePayload = {
@@ -1781,6 +1894,7 @@ export interface CambridgeParsedResult {
   isInflected: boolean;
   baseForm?: string;
   inflectionType?: string;
+  phonetic?: string;
 }
 
 // Robust parser for Cambridge Dictionary Traditional Chinese markdown (supports both EN & ZH-TW page layouts)
@@ -2024,7 +2138,137 @@ function parseCambridgeMarkdown(word: string, markdown: string): CambridgeParsed
 // Memory cache for Cambridge Dictionary lookups
 const cambridgeMeaningsCache = new Map<string, CambridgeParsedResult>();
 
-// Fetch authentic definitions from Cambridge Dictionary with quick timeout fallback
+function decodeHtmlEntities(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripCambridgeHtml(html: string): string {
+  if (!html) return '';
+  return decodeHtmlEntities(html.replace(/<[^>]+>/g, ' '));
+}
+
+function normalizeCambridgePosTag(rawPos: string): string {
+  const lower = (rawPos || '').toLowerCase();
+  if (lower.includes('phrasal verb') || lower.includes('idiom') || lower.includes('preposition')) return 'phr.';
+  if (lower.startsWith('adv') || lower.includes('adverb')) return 'adv.';
+  if (lower.startsWith('adj') || lower.includes('adjective')) return 'adj.';
+  if (lower.startsWith('pron') || lower.includes('pronoun')) return 'other';
+  if (lower.startsWith('v') || lower.includes('verb')) return 'v.';
+  if (lower.startsWith('n') || lower.includes('noun')) return 'n.';
+  return 'other';
+}
+
+function parseCambridgeHtmlDirect(cleanWord: string, html: string): CambridgeParsedResult | null {
+  if (!html || (!html.includes('ddef_d') && !html.includes('def-block'))) {
+    return null;
+  }
+
+  const hwMatch = html.match(/<span class="hw dhw"[^>]*>([\s\S]*?)<\/span>/i);
+  const headerWord = hwMatch ? stripCambridgeHtml(hwMatch[1]).toLowerCase() : cleanWord;
+  if (!headerWord || headerWord.includes('拼寫建議') || headerWord.includes('找不到')) {
+    return null;
+  }
+
+  let phonetic = '';
+  const usPronMatch = html.match(/class="us dpron-i[\s\S]*?<span class="ipa dipa[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+  const anyPronMatch = html.match(/<span class="ipa dipa[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+  const rawIpa = usPronMatch ? stripCambridgeHtml(usPronMatch[1]) : anyPronMatch ? stripCambridgeHtml(anyPronMatch[1]) : '';
+  if (rawIpa) {
+    phonetic = rawIpa.startsWith('/') ? rawIpa : `/${rawIpa}/`;
+  }
+
+  // Inflection detection from subtitle or headword redirect
+  let baseForm: string | undefined;
+  let inflectionType: string | undefined;
+  const inflText = stripCambridgeHtml(html.slice(0, 12000));
+  const inflMatch = inflText.match(
+    /(past simple|past participle|present participle|plural|comparative|superlative)(?:\s+and\s+past\s+participle)?\s+of\s+([a-zA-Z'-]+)/i
+  );
+  if (inflMatch) {
+    const rawInflType = inflMatch[1].toLowerCase();
+    baseForm = inflMatch[2].toLowerCase();
+    if (rawInflType.includes('past')) inflectionType = '動詞過去式 / 過去分詞';
+    else if (rawInflType.includes('present')) inflectionType = '動詞現在分詞 / 動名詞';
+    else if (rawInflType.includes('plural')) inflectionType = '名詞複數 (Plural)';
+    else if (rawInflType.includes('comparative')) inflectionType = '形容詞/副詞比較級 (Comparative)';
+    else if (rawInflType.includes('superlative')) inflectionType = '形容詞/副詞最高級 (Superlative)';
+    else inflectionType = '單字變形';
+  } else if (headerWord && headerWord !== cleanWord) {
+    baseForm = headerWord;
+    const ruleMatch = detectRuleInflection(cleanWord);
+    inflectionType = ruleMatch?.type || '單字變形';
+  } else {
+    const ruleMatch = detectRuleInflection(cleanWord);
+    if (ruleMatch) {
+      baseForm = ruleMatch.base;
+      inflectionType = ruleMatch.type;
+    }
+  }
+
+  const meanings: any[] = [];
+  const entryBlocks = html.split(/<div class="pr entry-body__el|<div class="entry-body__el/i);
+  const blocksToScan = entryBlocks.length > 1 ? entryBlocks.slice(1) : [html];
+
+  for (const entryHtml of blocksToScan) {
+    const posMatch = entryHtml.match(/<span class="pos dpos"[^>]*>([\s\S]*?)<\/span>/i);
+    const currentPos = posMatch ? normalizeCambridgePosTag(stripCambridgeHtml(posMatch[1])) : 'n.';
+
+    const defBlocks = entryHtml.split(/<div class="def-block ddef_block/i).slice(1);
+    for (const block of defBlocks) {
+      const defEnMatch = block.match(/<div class="def ddef_d db"[^>]*>([\s\S]*?)<\/div>/i);
+      const defZhMatch = block.match(/<span class="trans dtrans dtrans-se[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+      if (!defEnMatch || !defZhMatch) continue;
+
+      const defEn = stripCambridgeHtml(defEnMatch[1]).replace(/:\s*$/, '').trim();
+      const defZh = stripCambridgeHtml(defZhMatch[1]).trim();
+      if (!defZh || !/[\u4e00-\u9fa5]/.test(defZh) || defZh.includes('{{')) continue;
+
+      let ex = '';
+      let exZh = '';
+      const exBlockMatch = block.match(/<div class="examp dexamp"[^>]*>([\s\S]*?)<\/div>/i);
+      if (exBlockMatch) {
+        const exEnMatch = exBlockMatch[1].match(/<span class="eg deg"[^>]*>([\s\S]*?)<\/span>/i);
+        const exTransMatch = exBlockMatch[1].match(/<span class="trans dtrans[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+        if (exEnMatch) ex = stripCambridgeHtml(exEnMatch[1]);
+        if (exTransMatch) exZh = stripCambridgeHtml(exTransMatch[1]);
+      }
+
+      if (!meanings.some((m) => m.def === defZh && m.pos === currentPos)) {
+        meanings.push({
+          pos: currentPos,
+          def: defZh,
+          defEn,
+          ex: ex || '',
+          exZh: exZh || ''
+        });
+      }
+      if (meanings.length >= 6) break;
+    }
+    if (meanings.length >= 6) break;
+  }
+
+  if (meanings.length === 0) return null;
+
+  return {
+    meanings,
+    headerWord: baseForm || headerWord,
+    isInflected: !!baseForm && baseForm !== cleanWord,
+    baseForm,
+    inflectionType,
+    phonetic: phonetic || undefined
+  };
+}
+
+// Fetch authentic definitions directly from Cambridge HTML (fast 3.5s) with optional JINA_API_KEY fallback
 async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResult | null> {
   const cleanWord = word.trim().toLowerCase();
   if (!cleanWord || !/^[a-zA-Z\s'-]+$/.test(cleanWord)) return null;
@@ -2040,68 +2284,94 @@ async function fetchCambridgeMeanings(word: string): Promise<CambridgeParsedResu
     cambridgeMeaningsCache.delete(cleanWord);
   }
 
-  const targetUrls = [
-    `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`,
-    `https://dictionary.cambridge.org/zht/%E8%A9%9E%E5%85%B8/%E8%8B%B1%E8%AA%9E-%E6%BC%A2%E8%AA%9E-%E7%B9%81%E9%AB%94/${encodeURIComponent(cleanWord)}`
-  ];
+  const primaryUrl = `https://dictionary.cambridge.org/dictionary/english-chinese-traditional/${encodeURIComponent(cleanWord)}`;
 
-  const jinaKey = process.env.JINA_API_KEY;
-
-  for (const targetUrl of targetUrls) {
-    try {
-      const url = `https://r.jina.ai/${targetUrl}`;
-      const headers: Record<string, string> = {
-        'Accept': 'text/plain',
+  // 1. Direct HTML fetch (fast, zero third-party proxy bottleneck)
+  try {
+    const res = await fetch(primaryUrl, {
+      signal: AbortSignal.timeout(3500),
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-      };
-      if (jinaKey) {
-        headers['Authorization'] = `Bearer ${jinaKey}`;
+      }
+    });
+
+    if (res.ok) {
+      if (res.url.endsWith('/english-chinese-traditional/') || res.url.includes('/spellcheck/')) {
+        return null;
       }
 
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(9500),
-        headers
+      const html = await res.text();
+      const isUnlistedHtml =
+        html.includes('拼寫建議') ||
+        html.includes('在拼寫或發音上近似的詞') ||
+        html.includes('Search suggestions for') ||
+        html.includes('在該辭典中找不到') ||
+        html.includes('找不到任何結果') ||
+        html.includes('我們找不到');
+
+      if (isUnlistedHtml) {
+        // Word is not indexed in Cambridge Dictionary -> bail immediately to AI/dictionary fallback
+        return null;
+      }
+
+      const directParsed = parseCambridgeHtmlDirect(cleanWord, html);
+      if (directParsed && directParsed.meanings.length > 0) {
+        setCacheWithLimit(cambridgeMeaningsCache, cleanWord, directParsed);
+        return directParsed;
+      }
+    }
+  } catch (err: any) {
+    console.warn(`Cambridge direct HTML lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
+  }
+
+  // 2. Optional Jina proxy backup ONLY when JINA_API_KEY is configured (single URL, short 3.5s timeout)
+  const jinaKey = process.env.JINA_API_KEY;
+  if (jinaKey) {
+    try {
+      const res = await fetch(`https://r.jina.ai/${primaryUrl}`, {
+        signal: AbortSignal.timeout(3500),
+        headers: {
+          'Accept': 'text/plain',
+          'Authorization': `Bearer ${jinaKey}`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+        }
       });
 
-      if (!res.ok) continue;
-      const markdown = await res.text();
+      if (res.ok) {
+        const markdown = await res.text();
+        const isUnlistedOrSuggestions =
+          markdown.includes('拼寫建議') ||
+          markdown.includes('在拼寫或發音上近似的詞') ||
+          markdown.includes('近似的詞') ||
+          markdown.includes('Suggestions for') ||
+          markdown.includes('Search suggestions for') ||
+          markdown.includes('Did you mean') ||
+          markdown.includes('No results found') ||
+          markdown.includes('在該辭典中找不到') ||
+          markdown.includes('找不到任何結果') ||
+          markdown.includes('我們找不到');
 
-      // 🚨 CRITICAL: Check for Cambridge Dictionary "Unlisted Word" / "Spelling Suggestions" pages
-      // When a word is NOT in Cambridge Dictionary, Cambridge returns spelling advice page like "關於 ... 的拼寫建議"
-      const isUnlistedOrSuggestions =
-        markdown.includes('拼寫建議') ||
-        markdown.includes('在拼寫或發音上近似的詞') ||
-        markdown.includes('近似的詞') ||
-        markdown.includes('Suggestions for') ||
-        markdown.includes('Search suggestions for') ||
-        markdown.includes('Did you mean') ||
-        markdown.includes('No results found') ||
-        markdown.includes('在該辭典中找不到') ||
-        markdown.includes('找不到任何結果') ||
-        markdown.includes('我們找不到');
+        if (isUnlistedOrSuggestions) {
+          return null;
+        }
 
-      if (isUnlistedOrSuggestions) {
-        // Word is definitely not indexed by Cambridge Dictionary! Skip Cambridge scraper and fallback to Gemini AI.
-        continue;
-      }
+        const hasRealEntryHeader =
+          /# Translation of (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?/i.test(markdown) ||
+          /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英語-(?:中文|漢語)/i.test(markdown) ||
+          /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英(?:漢|語)/i.test(markdown);
 
-      // 🚨 CRITICAL: Legitimate entry MUST have an explicit headword title
-      const hasRealEntryHeader =
-        /# Translation of (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?/i.test(markdown) ||
-        /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英語-(?:中文|漢語)/i.test(markdown) ||
-        /# (?:\*\*)?([^*#\n\r]+?)(?:\*\*)?\s+在英(?:漢|語)/i.test(markdown);
-
-      if (!hasRealEntryHeader) {
-        continue;
-      }
-
-      const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
-      if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
-        setCacheWithLimit(cambridgeMeaningsCache, cleanWord, parsedResult);
-        return parsedResult;
+        if (hasRealEntryHeader) {
+          const parsedResult = parseCambridgeMarkdown(cleanWord, markdown);
+          if (parsedResult && parsedResult.meanings && parsedResult.meanings.length > 0) {
+            setCacheWithLimit(cambridgeMeaningsCache, cleanWord, parsedResult);
+            return parsedResult;
+          }
+        }
       }
     } catch (err: any) {
-      console.warn(`Cambridge direct lookup for "${cleanWord}" failed or timed out:`, err?.message || err);
+      console.warn(`Cambridge Jina backup for "${cleanWord}" failed or timed out:`, err?.message || err);
     }
   }
 
@@ -2113,6 +2383,7 @@ export interface WordAllMeaningsPayload {
   status: 'valid' | 'inflected' | 'typo' | 'invalid';
   baseForm?: string;
   inflectionType?: string;
+  phonetic?: string;
   suggestions?: string[];
   meanings: any[];
   source: 'cambridge' | 'ai' | 'dictionary' | 'validator' | 'fallback';
@@ -2166,6 +2437,7 @@ app.post('/api/ai/word-all-meanings', async (req, res) => {
         status: isInflected ? 'inflected' : 'valid',
         baseForm: isInflected ? cambridgeParsed.baseForm : undefined,
         inflectionType: isInflected ? cambridgeParsed.inflectionType : undefined,
+        phonetic: cambridgeParsed.phonetic || undefined,
         suggestions: [],
         meanings: cambridgeParsed.meanings,
         source: 'cambridge',

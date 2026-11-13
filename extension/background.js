@@ -4,7 +4,7 @@
  */
 
 const DEFAULT_SETTINGS = {
-  vocabmin_api_url: 'https://vocabmin.ai.studio',
+  vocabmin_api_url: 'http://localhost:3000',
   gemini_api_key: '',
   enable_selection_bubble: true,
   auto_pronounce: false,
@@ -56,7 +56,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'vocabmin_open_app') {
     const data = await chrome.storage.local.get('vocabmin_api_url');
-    const targetUrl = data.vocabmin_api_url || 'https://vocabmin.ai.studio/';
+    const targetUrl = data.vocabmin_api_url || 'http://localhost:3000/';
     chrome.tabs.create({ url: targetUrl });
     return;
   }
@@ -256,7 +256,7 @@ If "valid" or "inflected", provide 1-4 distinct meanings with:
 Also provide "phonetic" (IPA pronunciation).
 Return ONLY valid JSON: {"term":"...","status":"valid|inflected|typo|invalid","baseForm":"...","inflectionType":"...","phonetic":"...","suggestions":[],"meanings":[{"pos":"n.","def":"...","defEn":"...","ex":"...","exZh":"..."}]}`;
 
-  const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+  const models = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
   for (const model of models) {
     try {
       const res = await fetch(
@@ -573,7 +573,7 @@ async function handleLookupWord({ word, sentence }) {
   if (!cleanWord) return { error: '請輸入要查詢的單字' };
 
   const store = await chrome.storage.local.get(['vocabmin_api_url', 'gemini_api_key']);
-  const apiUrl = (store.vocabmin_api_url || 'https://vocabmin.ai.studio').replace(/\/+$/, '');
+  const apiUrl = (store.vocabmin_api_url || 'http://localhost:3000').replace(/\/+$/, '');
   const apiKey = store.gemini_api_key || '';
 
   // Step 1: Direct Cambridge Dictionary lookup from extension background worker (fast & works even if server is offline)
@@ -586,7 +586,7 @@ async function handleLookupWord({ word, sentence }) {
   try {
     const res = await fetch(`${apiUrl}/api/ai/word-all-meanings`, {
       method: 'POST',
-      signal: AbortSignal.timeout(11000),
+      signal: AbortSignal.timeout(4500),
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
@@ -617,7 +617,7 @@ async function handleLookupWord({ word, sentence }) {
 // Sentence analysis via VocabMin API or fallback
 async function handleAnalyzeSentence({ sentence }) {
   const store = await chrome.storage.local.get(['vocabmin_api_url', 'gemini_api_key']);
-  const apiUrl = (store.vocabmin_api_url || 'https://vocabmin.ai.studio').replace(/\/+$/, '');
+  const apiUrl = (store.vocabmin_api_url || 'http://localhost:3000').replace(/\/+$/, '');
   const apiKey = store.gemini_api_key || '';
 
   try {
@@ -729,7 +729,7 @@ async function handleSaveWordsBulk(wordItems) {
 // Sync saved words to active VocabMin tab
 async function handleSyncToVocabMinTab(words) {
   const store = await chrome.storage.local.get('vocabmin_api_url');
-  const targetDomain = (store.vocabmin_api_url || 'https://vocabmin.ai.studio').replace(/\/+$/, '');
+  const targetDomain = (store.vocabmin_api_url || 'http://localhost:3000').replace(/\/+$/, '');
 
   const tabs = await chrome.tabs.query({});
   let foundTab = null;

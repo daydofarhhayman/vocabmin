@@ -28,17 +28,20 @@ import {
   Flame,
   ExternalLink
 } from 'lucide-react';
-import { Word, POS, AppSettings, Article, ViewTab } from '../types';
+import { Word, POS, AppSettings, Article, ViewTab, DailyStats } from '../types';
 import { tts } from '../services/tts';
 import { storage } from '../services/storage';
 import { normalizePos } from '../utils/pos';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { buildAIStudyContextStats } from '../utils/aiContext';
 
 interface AIAssistantViewProps {
   userUid?: string | null;
   settings?: AppSettings;
   existingWords: Word[];
   existingArticles?: Article[];
+  dueWordsCount?: number;
+  dailyStats?: DailyStats;
   onAddWords: (newWords: Partial<Word>[]) => any;
   onUpdateWordGroup: (oldTerm: string, updatedList: Partial<Word>[], category?: string) => any;
   onDeleteWordGroup: (term: string, skipConfirm?: boolean) => any;
@@ -156,6 +159,8 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   settings,
   existingWords,
   existingArticles = [],
+  dueWordsCount = 0,
+  dailyStats,
   onAddWords,
   onBatchStandardizeWords,
   onDeduplicateWords,
@@ -365,6 +370,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
     setIsTutorLoading(true);
 
     try {
+      const studyStats = buildAIStudyContextStats(existingWords, dailyStats);
       const response = await apiFetch('/api/ai/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -372,9 +378,15 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
           mode: 'tutor',
           userPrompt: promptText,
           messages: historyForApi,
+          existingWordsSummary: studyStats.existingWordsSummary,
           screenContext: {
             currentTab: 'ai',
-            totalWordsCount: uniqueExistingWords.length,
+            totalWordsCount: studyStats.totalWordsCount,
+            totalDefinitionsCount: studyStats.totalDefinitionsCount,
+            dueWordsCount,
+            dailyStreak: studyStats.dailyStreak,
+            levelDistribution: studyStats.levelDistribution,
+            categoryBreakdown: studyStats.categoryBreakdown,
             totalArticlesCount: existingArticles.length,
             allCategories: settings?.customCategories || []
           }
@@ -1045,6 +1057,21 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
             {uniqueExistingWords.length > 0 && (
               <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-bold text-slate-400">從您的字庫快速點選：</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const pick =
+                      uniqueExistingWords[Math.floor(Math.random() * uniqueExistingWords.length)];
+                    if (pick?.term) {
+                      setXrayInput(pick.term);
+                      handleRunWordXRay(pick.term);
+                    }
+                  }}
+                  disabled={isXrayLoading}
+                  className="text-xs font-bold px-2.5 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-900/80 transition-colors cursor-pointer"
+                >
+                  🎲 隨機抽 1 字剖析
+                </button>
                 {uniqueExistingWords.slice(0, 10).map((w) => (
                   <button
                     key={w.id}

@@ -29,6 +29,7 @@ import { tts } from '../services/tts';
 import { storage } from '../services/storage';
 import { normalizePos } from '../utils/pos';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { buildAIStudyContextStats } from '../utils/aiContext';
 
 interface FloatingAIAssistantProps {
   userUid?: string | null;
@@ -92,6 +93,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   words,
   articles,
   dueWordsCount,
+  dailyStats,
   activeReaderArticleId,
   activeStudyQuestion,
   activeInspectedWord,
@@ -271,6 +273,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
     setIsLoading(true);
 
     try {
+      const studyStats = buildAIStudyContextStats(words, dailyStats);
       const response = await apiFetch('/api/ai/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -279,10 +282,15 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
           userPrompt: promptText,
           messages: historyForApi,
           currentArticle: activeArticle,
+          existingWordsSummary: studyStats.existingWordsSummary,
           screenContext: {
             currentTab,
-            totalWordsCount: words.length,
+            totalWordsCount: studyStats.totalWordsCount,
+            totalDefinitionsCount: studyStats.totalDefinitionsCount,
             dueWordsCount,
+            dailyStreak: studyStats.dailyStreak,
+            levelDistribution: studyStats.levelDistribution,
+            categoryBreakdown: studyStats.categoryBreakdown,
             totalArticlesCount: articles.length,
             isReadingArticle: !!activeArticle,
             activeArticleTitle: activeArticle?.title,

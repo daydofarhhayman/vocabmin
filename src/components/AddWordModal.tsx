@@ -36,6 +36,7 @@ interface AddWordModalProps {
   initialTerm?: string;
   categories?: string[];
   onAddCategory?: (categoryName: string) => void;
+  apiKey?: string;
 }
 
 interface DefinitionInput {
@@ -140,7 +141,8 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
   existingWords = [],
   initialTerm = '',
   categories = [],
-  onAddCategory
+  onAddCategory,
+  apiKey: propApiKey
 }) => {
   const t = TRANSLATIONS[lang];
   const [activeTab, setActiveTab] = useState<'single' | 'batch' | 'packs'>('single');
@@ -258,6 +260,8 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     return () => clearTimeout(timer);
   }, [term]);
 
+  const lookupAbortRef = useRef<AbortController | null>(null);
+
   if (!isOpen) return null;
 
   // Multi-definition lookup (Priority: Cambridge Dictionary -> AI Generation -> Bilingual Fallback)
@@ -265,10 +269,15 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
   const handleLookupAllMeanings = async (targetTerm?: string) => {
     const cleanTerm = (targetTerm || term).trim();
-    if (!cleanTerm || isAllMeaningsLoading) return;
+    if (!cleanTerm) return;
+
+    // Abort any in-flight lookup so rapid successive queries never overwrite newer results
+    lookupAbortRef.current?.abort();
+    const controller = new AbortController();
+    lookupAbortRef.current = controller;
 
     const currentSettings = storage.getLocalSettings();
-    const apiKey = currentSettings?.geminiApiKey;
+    const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     setIsAllMeaningsLoading(true);
     setLookupSource(null);
@@ -281,6 +290,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     try {
       const res = await fetch('/api/ai/word-all-meanings', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
@@ -291,8 +301,8 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
         })
       });
 
-      if (!res.ok) throw new Error('Query failed');
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || '查詢單字釋義失敗');
 
       // 1. Invalid Word (無意義亂碼 / 查無此英文單字)
       if (data.status === 'invalid') {
@@ -386,10 +396,15 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
         setInvalidWordMessage(`查無「${cleanTerm}」之有效繁體中文釋義。`);
         setDefinitions([{ pos: 'n.', def: '', ex: '', selected: true }]);
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       console.warn('Lookup all meanings error:', err);
+      setIsInvalidWord(true);
+      setInvalidWordMessage(err?.message || '查詢釋義時發生連線錯誤，請稍後重試。');
     } finally {
-      setIsAllMeaningsLoading(false);
+      if (lookupAbortRef.current === controller) {
+        setIsAllMeaningsLoading(false);
+      }
     }
   };
 
@@ -566,49 +581,50 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
       setBatchStatusMessage(`🔄 正在為 ${uniqueTerms.length} 個單字批次查詢權威中文釋義與例句...`);
 
       const currentSettings = storage.getLocalSettings();
-      const apiKey = currentSettings?.geminiApiKey;
+      const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
-      // Parallel lookup with throttling
+      // Parallel lookup in chunks of 5 with progress feedback
       const parsedItems: ParsedWordItem[] = [];
-      for (const t of uniqueTerms) {
-        try {
-          const res = await fetch('/api/ai/article-lookup', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
-            },
-            body: JSON.stringify({ word: t, apiKey })
-          });
-          if (res.ok) {
-            const data = await res.json();
-            parsedItems.push({
-              term: t,
-              pos: normalizePos(data.pos),
-              def: data.def || `【${t}】`,
-              defEn: data.defEn,
-              ex: data.ex,
-              selected: true,
-              alreadyExists: existingTermsMap.has(t.toLowerCase())
-            });
-          } else {
-            parsedItems.push({
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < uniqueTerms.length; i += BATCH_SIZE) {
+        const chunk = uniqueTerms.slice(i, i + BATCH_SIZE);
+        const chunkResults = await Promise.all(
+          chunk.map(async (t): Promise<ParsedWordItem> => {
+            try {
+              const res = await fetch('/api/ai/article-lookup', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
+                },
+                body: JSON.stringify({ word: t, apiKey })
+              });
+              if (res.ok) {
+                const data = await res.json();
+                return {
+                  term: t,
+                  pos: normalizePos(data.pos),
+                  def: data.def || `【${t}】`,
+                  defEn: data.defEn,
+                  ex: data.ex,
+                  selected: true,
+                  alreadyExists: existingTermsMap.has(t.toLowerCase())
+                };
+              }
+            } catch {}
+            return {
               term: t,
               pos: 'n.',
               def: `【${t}】`,
               selected: true,
               alreadyExists: existingTermsMap.has(t.toLowerCase())
-            });
-          }
-        } catch {
-          parsedItems.push({
-            term: t,
-            pos: 'n.',
-            def: `【${t}】`,
-            selected: true,
-            alreadyExists: existingTermsMap.has(t.toLowerCase())
-          });
-        }
+            };
+          })
+        );
+        parsedItems.push(...chunkResults);
+        setBatchStatusMessage(
+          `🔄 正在為 ${uniqueTerms.length} 個單字批次查詢釋義... (${Math.min(i + chunk.length, uniqueTerms.length)}/${uniqueTerms.length})`
+        );
       }
 
       setParsedWordsList(parsedItems);
@@ -630,7 +646,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     setBatchStatusMessage('🧠 AI 正在閱讀段落並為您提煉關鍵生詞與釋義...');
 
     const currentSettings = storage.getLocalSettings();
-    const apiKey = currentSettings?.geminiApiKey;
+    const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     try {
       const res = await fetch('/api/ai/extract-vocabulary', {

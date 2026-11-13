@@ -1442,6 +1442,8 @@ export default function App() {
             settings={settings}
             existingWords={words}
             existingArticles={articles}
+            dueWordsCount={dueWordsCount}
+            dailyStats={dailyStats}
             onAddWords={handleAddWords}
             onUpdateWordGroup={handleUpdateWordGroup}
             onDeleteWordGroup={handleDeleteWordGroup}
@@ -1547,6 +1549,7 @@ export default function App() {
             initialTerm={addModalInitialTerm}
             categories={settings.customCategories || DEFAULT_CATEGORIES}
             onAddCategory={handleAddCategory}
+            apiKey={settings.geminiApiKey}
           />
         )}
 
@@ -1560,6 +1563,7 @@ export default function App() {
             lang={settings.lang}
             categories={settings.customCategories || DEFAULT_CATEGORIES}
             onAddCategory={handleAddCategory}
+            apiKey={settings.geminiApiKey}
           />
         )}
 

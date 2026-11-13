@@ -214,6 +214,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const [importLevel, setImportLevel] = useState<CEFRLevel>('B1');
   const [importCategory, setImportCategory] = useState<ArticleCategory>('Custom');
   const [importTranslation, setImportTranslation] = useState('');
+  const [importUrl, setImportUrl] = useState('');
+  const [isImportingByAI, setIsImportingByAI] = useState(false);
 
   // AI Generate Article Modal
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
@@ -1110,6 +1112,60 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     }
   };
 
+  // AI Smart URL / Raw Text Article Import
+  const handleAiImportArticle = async () => {
+    const cleanUrl = importUrl.trim();
+    const cleanRaw = importContent.trim();
+    if ((!cleanUrl && !cleanRaw) || isImportingByAI) {
+      if (!cleanUrl && !cleanRaw) {
+        showReaderToast('請先輸入文章網址，或在下方貼上原始英文文本');
+      }
+      return;
+    }
+
+    const currentSettings = storage.getLocalSettings();
+    const apiKey = appSettings?.geminiApiKey || currentSettings?.geminiApiKey;
+
+    setIsImportingByAI(true);
+    try {
+      const res = await fetch('/api/ai/import-article', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
+        },
+        body: JSON.stringify({
+          url: cleanUrl || undefined,
+          text: cleanRaw || undefined,
+          level: importLevel,
+          category: importCategory,
+          apiKey
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.article) {
+        throw new Error(data?.error || 'AI 智慧擷取文章失敗，請確認網址可公開存取或直接貼上文本');
+      }
+
+      const art = data.article;
+      if (art.title) setImportTitle(art.title);
+      if (art.content) setImportContent(art.content);
+      if (art.translationZh) setImportTranslation(art.translationZh);
+      if (art.level && ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].includes(art.level)) {
+        setImportLevel(art.level as CEFRLevel);
+      }
+      if (art.category && ['Tech', 'Science', 'Story', 'News', 'Business', 'Daily', 'Custom'].includes(art.category)) {
+        setImportCategory(art.category as ArticleCategory);
+      }
+      showReaderToast('✨ AI 已完成文章擷取與雙語翻譯排版！請檢視後點擊確認建立。');
+    } catch (err: any) {
+      showReaderToast(err?.message || 'AI 擷取文章時發生錯誤，請稍後重試');
+    } finally {
+      setIsImportingByAI(false);
+    }
+  };
+
   // Custom Import Article
   const handleSaveImportArticle = () => {
     if (!importTitle.trim() || !importContent.trim()) {
@@ -1141,6 +1197,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     setImportTitle('');
     setImportContent('');
     setImportTranslation('');
+    setImportUrl('');
   };
 
   // Filtered Articles Shelf
@@ -3741,6 +3798,34 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             </div>
 
             <div className="space-y-4">
+              {/* AI Smart URL / Raw Text Importer */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-br from-indigo-50/90 to-purple-50/70 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/80 dark:border-indigo-800/70 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold text-indigo-800 dark:text-indigo-200 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    🌐 貼上網址或原始雜亂文本，交給 AI 智慧擷取與雙語排版
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={importUrl}
+                    onChange={(e) => setImportUrl(e.target.value)}
+                    placeholder="https://... (可選，或直接在下方貼入原文後點擊 AI 整理)"
+                    className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-700 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAiImportArticle}
+                    disabled={isImportingByAI}
+                    className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                  >
+                    <Wand2 className={`w-3.5 h-3.5 ${isImportingByAI ? 'animate-spin' : ''}`} />
+                    <span>{isImportingByAI ? '擷取整理中...' : 'AI 智慧擷取'}</span>
+                  </button>
+                </div>
+              </div>
+
               {/* File Upload Shortcut */}
               <div className="p-3.5 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/40 text-center hover:border-indigo-500 transition group cursor-pointer">
                 <input

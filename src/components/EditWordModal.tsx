@@ -14,6 +14,7 @@ interface EditWordModalProps {
   lang: 'zh' | 'en';
   categories?: string[];
   onAddCategory?: (categoryName: string) => void;
+  apiKey?: string;
 }
 
 interface DefinitionRow {
@@ -38,7 +39,8 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
   onUpdateGroup,
   lang,
   categories = [],
-  onAddCategory
+  onAddCategory,
+  apiKey: propApiKey
 }) => {
   const t = TRANSLATIONS[lang];
   const [term, setTerm] = useState('');
@@ -56,37 +58,36 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     if (!cleanTerm || isAiLoading) return;
 
     const currentSettings = storage.getLocalSettings();
-    const apiKey = currentSettings?.geminiApiKey;
+    const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     setIsAiLoading(true);
     setEditFeedback(null);
     try {
-      const res = await fetch('/api/ai/chat', {
+      const res = await fetch('/api/ai/article-lookup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'x-gemini-api-key': apiKey } : {})
         },
         body: JSON.stringify({
-          userPrompt: `請幫我標準化潤飾與優化單字「${cleanTerm}」，提供精準標準的詞性、中文解釋與自然的現代英文例句。`,
-          rawInputWords: [cleanTerm],
+          word: cleanTerm,
+          sentence: definitions[0]?.ex || '',
           apiKey
         })
       });
 
-      if (!res.ok) throw new Error('AI lookup failed');
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'AI 潤飾查詢失敗');
 
-      if (data.words && data.words.length > 0) {
-        const found = data.words[0];
+      if (data && (data.def || data.defEn || data.ex)) {
         setDefinitions((prev) => {
           if (prev.length === 0) {
             return [
               {
-                pos: normalizePos(found.pos) || 'n.',
-                def: found.def || '',
-                defEn: found.defEn || '',
-                ex: found.ex || '',
+                pos: normalizePos(data.pos) || 'n.',
+                def: data.def || '',
+                defEn: data.defEn || '',
+                ex: data.ex || '',
                 level: 0
               }
             ];
@@ -95,16 +96,19 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
           const updated = [...prev];
           updated[0] = {
             ...updated[0],
-            pos: normalizePos(found.pos) || updated[0].pos || 'n.',
-            def: found.def || updated[0].def || '',
-            defEn: found.defEn || updated[0].defEn || '',
-            ex: found.ex || updated[0].ex || ''
+            pos: normalizePos(data.pos) || updated[0].pos || 'n.',
+            def: data.def || updated[0].def || '',
+            defEn: data.defEn || updated[0].defEn || '',
+            ex: data.ex || updated[0].ex || ''
           };
           return updated;
         });
+      } else {
+        setEditFeedback(`查無「${cleanTerm}」之補充釋義或例句。`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI Polish error:', err);
+      setEditFeedback(err?.message || 'AI 潤飾失敗，請確認網路連線或 Gemini API Key。');
     } finally {
       setIsAiLoading(false);
     }
@@ -116,7 +120,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     if (!cleanTerm || isAiFetchMeaningsLoading) return;
 
     const currentSettings = storage.getLocalSettings();
-    const apiKey = currentSettings?.geminiApiKey;
+    const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     setIsAiFetchMeaningsLoading(true);
     setEditFeedback(null);
@@ -194,8 +198,9 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
       } else {
         setEditFeedback(`查無「${cleanTerm}」之繁體中文釋義。`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Fetch all meanings error:', err);
+      setEditFeedback(err?.message || '查詢多種釋義失敗，請稍後重試。');
     } finally {
       setIsAiFetchMeaningsLoading(false);
     }
