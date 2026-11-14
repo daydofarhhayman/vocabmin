@@ -2,10 +2,614 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 嚴格使用者資料隔離規則
-    // 登入的使用者僅能存取與操作屬於自己 UID 的文檔及其所有子集合（如 words, articles, data 等）
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Root Policy:
+    //   Default-deny all reads and writes across the entire database.
+    //   Parent document /users/{userId} is not used by the app and remains denied.
+    //   Every accessible subcollection requires strict ownership isolation:
+    //   request.auth != null && request.auth.uid == userId.
+    //
+    // Collection: /users/{userId}/data/{docId}
+    // Allowed Document IDs: 'meta', 'stats', 'settings', 'readerSettings', 'homeConfig'
+    //
+    //   1) Document ID: 'meta' (Cloud sync & count metadata; written with merge: true)
+    //      Fields (all optional, at least 1 field required per write):
+    //        - hasSynced: bool (optional)
+    //        - hasArticlesSynced: bool (optional)
+    //        - wordCount: int (optional, 0..1000000)
+    //        - articleCount: int (optional, 0..100000)
+    //        - lastSyncedAt: number (optional, 0..100000000000000)
+    //        - lastClearedAt: number (optional, 0..100000000000000)
+    //        - lastArticleUpdated: number (optional, 0..100000000000000)
+    //        - articlesLastClearedAt: number (optional, 0..100000000000000)
+    //
+    //   2) Document ID: 'stats' (DailyStats map: date string -> DayStat; allows empty {})
+    //      Fields: dynamic YYYY-MM-DD / date string keys (1..32 chars, max 3650 entries),
+    //              each mapping to { added?: number, reviewed?: number, quizzes?: number } (0..1000000).
+    //              'geminiApiKey' is explicitly forbidden.
+    //
+    //   3) Document ID: 'settings' (AppSettings; client strips geminiApiKey via deleteField())
+    //      Fields (all optional to support partial merge: true writes, at least 1 required):
+    //        - darkMode: bool
+    //        - lang: string ('zh' | 'en')
+    //        - themeStyle: string ('glass' | 'simple')
+    //        - listViewMode: string ('grid' | 'list')
+    //        - basicMode: bool
+    //        - reviewLimit: number (1..100000)
+    //        - showTimerInReview: bool
+    //        - showFeedbackInReview: bool
+    //        - cambridgeLang: string ('en' | 'zh-tw')
+    //        - autoAILookup: bool
+    //        - accentColor: string ('indigo' | 'ocean' | 'emerald' | 'sunset' | 'cyber' | 'mocha' | 'rose')
+    //        - fontSize: string ('normal' | 'medium' | 'large')
+    //        - appNickname: string (0..100)
+    //        - customCategories: list<string> (max 50 items, each 1..100 chars)
+    //        - speechRate: number (0.1..5.0)
+    //        - voiceURI: string (0..300)
+    //        - mergeReview: bool (legacy compat)
+    //        - autoPlayAudio: bool (legacy compat)
+    //        - srsDecayEnabled: bool (legacy compat)
+    //        - geminiApiKey: FORBIDDEN on create; cannot be added/modified on update,
+    //                        but deleteField() and unchanged legacy values during
+    //                        partial category updates are safely permitted.
+    //
+    //   4) Document ID: 'readerSettings' (ReaderSettings; written with merge: true)
+    //      Fields (all optional, at least 1 required):
+    //        - fontSize: string ('sm' | 'base' | 'lg' | 'xl' | '2xl')
+    //        - fontFamily: string ('sans' | 'serif' | 'mono')
+    //        - lineSpacing: string ('normal' | 'relaxed' | 'loose')
+    //        - showBilingual: bool
+    //        - highlightSavedWords: bool
+    //        - showSentenceAudio: bool
+    //        - showSentenceGrammar: bool
+    //        - showParagraphControls: bool
+    //        - cleanReadingMode: bool
+    //        - speechRate: number (0.1..5.0)
+    //        - voiceURI: string (0..300)
+    //        - hideLookupTip: bool
+    //
+    //   5) Document ID: 'homeConfig' (HomeConfig; written with merge: true)
+    //      Fields (all optional, at least 1 required):
+    //        - accentColor: string ('indigo' | 'ocean' | 'emerald' | 'sunset' | 'cyber' | 'mocha' | 'rose')
+    //        - cardStyle: string ('modern' | 'glass' | 'vibrant')
+    //        - dailyGoalTarget: number (1..10000)
+    //        - widgets: list<map> (max 30 items, each { id: string (1..64), enabled: bool, width?: 'full'|'half' })
+    //
+    // Collection: /users/{userId}/words/{wordId}
+    // Fields:
+    //   - term: string (required on create and update, 1..200 chars)
+    //   - id: string (optional for legacy backfill, 1..200 chars, immutable once set)
+    //   - pos: string (optional, 0..30 chars)
+    //   - def: string (optional, 0..5000 chars)
+    //   - defEn: string (optional, 0..5000 chars)
+    //   - ex: string (optional, 0..5000 chars)
+    //   - category: string (optional, 0..100 chars; may be deleted via deleteField())
+    //   - level: number (optional, 0..10)
+    //   - interval: number (optional, 0..100000)
+    //   - easeFactor: number (optional, 0..10.0)
+    //   - timestamp: number (optional, 0..100000000000000)
+    //   - lastReview: number (optional, 0..100000000000000; 0 valid on mastery reset)
+    //   - nextReview: number (optional, 0..100000000000000)
+    //
+    // Collection: /users/{userId}/articles/{articleId}
+    // Fields:
+    //   - title: string (required on create and update, 1..500 chars)
+    //   - id: string (optional for legacy backfill, 1..200 chars, immutable once set)
+    //   - subtitle: string (optional, 0..1000 chars)
+    //   - author: string (optional, 0..300 chars)
+    //   - source: string (optional, 0..2000 chars)
+    //   - level: string (optional, 0..50 chars)
+    //   - category: string (optional, 0..100 chars)
+    //   - content: string (optional, 0..200000 chars)
+    //   - translationZh: string (optional, 0..200000 chars)
+    //   - summary: string (optional, 0..5000 chars)
+    //   - wordCount: number (optional, 0..500000)
+    //   - readTimeMinutes: number (optional, 0..10000)
+    //   - savedWordTerms: list<string> (optional, max 2000 items; sampled strings 0..200 chars)
+    //   - isRead: bool (optional)
+    //   - lastReadTimestamp: number (optional, 0..100000000000000)
+    //   - keyVocabulary: list (optional, max 100 items)
+    //   - quiz: list (optional, max 50 items)
+    //   - isCustom: bool (optional)
+    //   - sentenceAnalyses: map (optional, max 500 entries)
+    //   - grammarPoints: list (optional, max 100 items)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    function isOptStr(data, field, minLen, maxLen) {
+      return !(field in data) ||
+        (data[field] is string &&
+         data[field].size() >= minLen &&
+         data[field].size() <= maxLen);
+    }
+
+    function isOptBool(data, field) {
+      return !(field in data) || data[field] is bool;
+    }
+
+    function isOptIntRange(data, field, minVal, maxVal) {
+      return !(field in data) ||
+        (data[field] is int && data[field] >= minVal && data[field] <= maxVal);
+    }
+
+    function isOptNumRange(data, field, minVal, maxVal) {
+      return !(field in data) ||
+        (data[field] is number && data[field] >= minVal && data[field] <= maxVal);
+    }
+
+    function isOptTimestampMs(data, field) {
+      return isOptNumRange(data, field, 0, 100000000000000);
+    }
+
+    function isOptListMax(data, field, maxSize) {
+      return !(field in data) || (data[field] is list && data[field].size() <= maxSize);
+    }
+
+    function isValidAccentColor(val) {
+      return val in ['indigo', 'ocean', 'emerald', 'sunset', 'cyber', 'mocha', 'rose'];
+    }
+
+    function isStringAt(list, idx, minLen, maxLen) {
+      return idx >= list.size() ||
+        (list[idx] is string && list[idx].size() >= minLen && list[idx].size() <= maxLen);
+    }
+
+    function isValidStringSlice10(list, start, minLen, maxLen) {
+      return isStringAt(list, start + 0, minLen, maxLen) &&
+        isStringAt(list, start + 1, minLen, maxLen) &&
+        isStringAt(list, start + 2, minLen, maxLen) &&
+        isStringAt(list, start + 3, minLen, maxLen) &&
+        isStringAt(list, start + 4, minLen, maxLen) &&
+        isStringAt(list, start + 5, minLen, maxLen) &&
+        isStringAt(list, start + 6, minLen, maxLen) &&
+        isStringAt(list, start + 7, minLen, maxLen) &&
+        isStringAt(list, start + 8, minLen, maxLen) &&
+        isStringAt(list, start + 9, minLen, maxLen);
+    }
+
+    function isValidCustomCategories(list) {
+      return list is list &&
+        list.size() <= 50 &&
+        isValidStringSlice10(list, 0, 1, 100) &&
+        isValidStringSlice10(list, 10, 1, 100) &&
+        isValidStringSlice10(list, 20, 1, 100) &&
+        isValidStringSlice10(list, 30, 1, 100) &&
+        isValidStringSlice10(list, 40, 1, 100);
+    }
+
+    function isValidWidgetAt(list, idx) {
+      return idx >= list.size() || (
+        list[idx] is map &&
+        list[idx].keys().hasOnly(['id', 'enabled', 'width']) &&
+        list[idx].keys().hasAll(['id', 'enabled']) &&
+        list[idx].id is string &&
+        list[idx].id.size() >= 1 &&
+        list[idx].id.size() <= 64 &&
+        list[idx].enabled is bool &&
+        (!('width' in list[idx]) || list[idx].width in ['full', 'half'])
+      );
+    }
+
+    function isValidWidgetSlice10(list, start) {
+      return isValidWidgetAt(list, start + 0) &&
+        isValidWidgetAt(list, start + 1) &&
+        isValidWidgetAt(list, start + 2) &&
+        isValidWidgetAt(list, start + 3) &&
+        isValidWidgetAt(list, start + 4) &&
+        isValidWidgetAt(list, start + 5) &&
+        isValidWidgetAt(list, start + 6) &&
+        isValidWidgetAt(list, start + 7) &&
+        isValidWidgetAt(list, start + 8) &&
+        isValidWidgetAt(list, start + 9);
+    }
+
+    function isValidDayStat(entry) {
+      return entry is map &&
+        entry.keys().hasOnly(['added', 'reviewed', 'quizzes']) &&
+        isOptNumRange(entry, 'added', 0, 1000000) &&
+        isOptNumRange(entry, 'reviewed', 0, 1000000) &&
+        isOptNumRange(entry, 'quizzes', 0, 1000000);
+    }
+
+    function isValidStatsEntryAt(data, keys, idx) {
+      return idx >= keys.size() || (
+        keys[idx] is string &&
+        keys[idx].size() >= 1 &&
+        keys[idx].size() <= 32 &&
+        isValidDayStat(data[keys[idx]])
+      );
+    }
+
+    function isValidStatsSlice10(data, keys, start) {
+      return isValidStatsEntryAt(data, keys, start + 0) &&
+        isValidStatsEntryAt(data, keys, start + 1) &&
+        isValidStatsEntryAt(data, keys, start + 2) &&
+        isValidStatsEntryAt(data, keys, start + 3) &&
+        isValidStatsEntryAt(data, keys, start + 4) &&
+        isValidStatsEntryAt(data, keys, start + 5) &&
+        isValidStatsEntryAt(data, keys, start + 6) &&
+        isValidStatsEntryAt(data, keys, start + 7) &&
+        isValidStatsEntryAt(data, keys, start + 8) &&
+        isValidStatsEntryAt(data, keys, start + 9);
+    }
+
+    // ===============================================================
+    // Domain Validators (Called on both create and update)
+    // ===============================================================
+
+    function isValidDataDocId(docId) {
+      return docId in ['meta', 'stats', 'settings', 'readerSettings', 'homeConfig'];
+    }
+
+    function isValidMetaData(data) {
+      return data is map &&
+        data.keys().size() >= 1 &&
+        data.keys().hasOnly([
+          'hasSynced',
+          'hasArticlesSynced',
+          'wordCount',
+          'articleCount',
+          'lastSyncedAt',
+          'lastClearedAt',
+          'lastArticleUpdated',
+          'articlesLastClearedAt'
+        ]) &&
+        isOptBool(data, 'hasSynced') &&
+        isOptBool(data, 'hasArticlesSynced') &&
+        isOptIntRange(data, 'wordCount', 0, 1000000) &&
+        isOptIntRange(data, 'articleCount', 0, 100000) &&
+        isOptTimestampMs(data, 'lastSyncedAt') &&
+        isOptTimestampMs(data, 'lastClearedAt') &&
+        isOptTimestampMs(data, 'lastArticleUpdated') &&
+        isOptTimestampMs(data, 'articlesLastClearedAt');
+    }
+
+    function isValidStatsData(data) {
+      return data is map &&
+        data.keys().size() <= 3650 &&
+        !('geminiApiKey' in data) &&
+        isValidStatsSlice10(data, data.keys(), 0) &&
+        isValidStatsSlice10(data, data.keys(), 10);
+    }
+
+    function isValidSettingsCommonFields(data) {
+      return data.keys().size() >= 1 &&
+        isOptBool(data, 'darkMode') &&
+        (!('lang' in data) || data.lang in ['zh', 'en']) &&
+        (!('themeStyle' in data) || data.themeStyle in ['glass', 'simple']) &&
+        (!('listViewMode' in data) || data.listViewMode in ['grid', 'list']) &&
+        isOptBool(data, 'basicMode') &&
+        isOptNumRange(data, 'reviewLimit', 1, 100000) &&
+        isOptBool(data, 'showTimerInReview') &&
+        isOptBool(data, 'showFeedbackInReview') &&
+        (!('cambridgeLang' in data) || data.cambridgeLang in ['en', 'zh-tw']) &&
+        isOptBool(data, 'autoAILookup') &&
+        (!('accentColor' in data) || isValidAccentColor(data.accentColor)) &&
+        (!('fontSize' in data) || data.fontSize in ['normal', 'medium', 'large']) &&
+        isOptStr(data, 'appNickname', 0, 100) &&
+        (!('customCategories' in data) || isValidCustomCategories(data.customCategories)) &&
+        isOptNumRange(data, 'speechRate', 0.1, 5.0) &&
+        isOptStr(data, 'voiceURI', 0, 300) &&
+        isOptBool(data, 'mergeReview') &&
+        isOptBool(data, 'autoPlayAudio') &&
+        isOptBool(data, 'srsDecayEnabled');
+    }
+
+    function isValidSettingsOnCreate(data) {
+      return data is map &&
+        !('geminiApiKey' in data) &&
+        data.keys().hasOnly([
+          'darkMode',
+          'lang',
+          'themeStyle',
+          'listViewMode',
+          'basicMode',
+          'reviewLimit',
+          'showTimerInReview',
+          'showFeedbackInReview',
+          'cambridgeLang',
+          'autoAILookup',
+          'accentColor',
+          'fontSize',
+          'appNickname',
+          'customCategories',
+          'speechRate',
+          'voiceURI',
+          'mergeReview',
+          'autoPlayAudio',
+          'srsDecayEnabled'
+        ]) &&
+        isValidSettingsCommonFields(data);
+    }
+
+    function isValidSettingsOnUpdate(data) {
+      return data is map &&
+        data.keys().hasOnly([
+          'darkMode',
+          'lang',
+          'themeStyle',
+          'listViewMode',
+          'basicMode',
+          'reviewLimit',
+          'showTimerInReview',
+          'showFeedbackInReview',
+          'cambridgeLang',
+          'autoAILookup',
+          'accentColor',
+          'fontSize',
+          'appNickname',
+          'geminiApiKey',
+          'customCategories',
+          'speechRate',
+          'voiceURI',
+          'mergeReview',
+          'autoPlayAudio',
+          'srsDecayEnabled'
+        ]) &&
+        // Never allow adding or modifying geminiApiKey; permits deleteField() and
+        // partial category updates on legacy docs prior to key cleanup.
+        (!('geminiApiKey' in data) ||
+          (areImmutableFieldsUnchanged(['geminiApiKey']) &&
+           data.geminiApiKey is string &&
+           data.geminiApiKey.size() <= 500)) &&
+        isValidSettingsCommonFields(data);
+    }
+
+    function isValidReaderSettingsData(data) {
+      return data is map &&
+        data.keys().size() >= 1 &&
+        data.keys().hasOnly([
+          'fontSize',
+          'fontFamily',
+          'lineSpacing',
+          'showBilingual',
+          'highlightSavedWords',
+          'showSentenceAudio',
+          'showSentenceGrammar',
+          'showParagraphControls',
+          'cleanReadingMode',
+          'speechRate',
+          'voiceURI',
+          'hideLookupTip'
+        ]) &&
+        (!('fontSize' in data) || data.fontSize in ['sm', 'base', 'lg', 'xl', '2xl']) &&
+        (!('fontFamily' in data) || data.fontFamily in ['sans', 'serif', 'mono']) &&
+        (!('lineSpacing' in data) || data.lineSpacing in ['normal', 'relaxed', 'loose']) &&
+        isOptBool(data, 'showBilingual') &&
+        isOptBool(data, 'highlightSavedWords') &&
+        isOptBool(data, 'showSentenceAudio') &&
+        isOptBool(data, 'showSentenceGrammar') &&
+        isOptBool(data, 'showParagraphControls') &&
+        isOptBool(data, 'cleanReadingMode') &&
+        isOptNumRange(data, 'speechRate', 0.1, 5.0) &&
+        isOptStr(data, 'voiceURI', 0, 300) &&
+        isOptBool(data, 'hideLookupTip');
+    }
+
+    function isValidHomeConfigData(data) {
+      return data is map &&
+        data.keys().size() >= 1 &&
+        data.keys().hasOnly(['accentColor', 'cardStyle', 'widgets', 'dailyGoalTarget']) &&
+        (!('accentColor' in data) || isValidAccentColor(data.accentColor)) &&
+        (!('cardStyle' in data) || data.cardStyle in ['modern', 'glass', 'vibrant']) &&
+        isOptNumRange(data, 'dailyGoalTarget', 1, 10000) &&
+        (!('widgets' in data) || (
+          data.widgets is list &&
+          data.widgets.size() <= 30 &&
+          isValidWidgetSlice10(data.widgets, 0) &&
+          isValidWidgetSlice10(data.widgets, 10) &&
+          isValidWidgetSlice10(data.widgets, 20)
+        ));
+    }
+
+    function isValidDataDocOnCreate(docId, data) {
+      return (docId == 'meta' && isValidMetaData(data)) ||
+        (docId == 'stats' && isValidStatsData(data)) ||
+        (docId == 'settings' && isValidSettingsOnCreate(data)) ||
+        (docId == 'readerSettings' && isValidReaderSettingsData(data)) ||
+        (docId == 'homeConfig' && isValidHomeConfigData(data));
+    }
+
+    function isValidDataDocOnUpdate(docId, data) {
+      return (docId == 'meta' && isValidMetaData(data)) ||
+        (docId == 'stats' && isValidStatsData(data)) ||
+        (docId == 'settings' && isValidSettingsOnUpdate(data)) ||
+        (docId == 'readerSettings' && isValidReaderSettingsData(data)) ||
+        (docId == 'homeConfig' && isValidHomeConfigData(data));
+    }
+
+    function isValidWord(data) {
+      return data is map &&
+        data.keys().hasOnly([
+          'id',
+          'term',
+          'pos',
+          'def',
+          'defEn',
+          'ex',
+          'category',
+          'level',
+          'interval',
+          'easeFactor',
+          'timestamp',
+          'lastReview',
+          'nextReview'
+        ]) &&
+        data.keys().hasAll(['term']) &&
+        data.term is string &&
+        data.term.size() >= 1 &&
+        data.term.size() <= 200 &&
+        isOptStr(data, 'id', 1, 200) &&
+        isOptStr(data, 'pos', 0, 30) &&
+        isOptStr(data, 'def', 0, 5000) &&
+        isOptStr(data, 'defEn', 0, 5000) &&
+        isOptStr(data, 'ex', 0, 5000) &&
+        isOptStr(data, 'category', 0, 100) &&
+        isOptNumRange(data, 'level', 0, 10) &&
+        isOptNumRange(data, 'interval', 0, 100000) &&
+        isOptNumRange(data, 'easeFactor', 0, 10.0) &&
+        isOptTimestampMs(data, 'timestamp') &&
+        isOptTimestampMs(data, 'lastReview') &&
+        isOptTimestampMs(data, 'nextReview');
+    }
+
+    function isValidWordOnCreate(data) {
+      return isValidWord(data);
+    }
+
+    function isValidWordOnUpdate(data) {
+      return isValidWord(data) &&
+        (!('id' in resource.data) || ('id' in data && data.id == resource.data.id));
+    }
+
+    function isValidArticle(data) {
+      return data is map &&
+        data.keys().hasOnly([
+          'id',
+          'title',
+          'subtitle',
+          'author',
+          'source',
+          'level',
+          'category',
+          'content',
+          'translationZh',
+          'summary',
+          'wordCount',
+          'readTimeMinutes',
+          'savedWordTerms',
+          'isRead',
+          'lastReadTimestamp',
+          'keyVocabulary',
+          'quiz',
+          'isCustom',
+          'sentenceAnalyses',
+          'grammarPoints'
+        ]) &&
+        data.keys().hasAll(['title']) &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 500 &&
+        isOptStr(data, 'id', 1, 200) &&
+        isOptStr(data, 'subtitle', 0, 1000) &&
+        isOptStr(data, 'author', 0, 300) &&
+        isOptStr(data, 'source', 0, 2000) &&
+        isOptStr(data, 'level', 0, 50) &&
+        isOptStr(data, 'category', 0, 100) &&
+        isOptStr(data, 'content', 0, 200000) &&
+        isOptStr(data, 'translationZh', 0, 200000) &&
+        isOptStr(data, 'summary', 0, 5000) &&
+        isOptNumRange(data, 'wordCount', 0, 500000) &&
+        isOptNumRange(data, 'readTimeMinutes', 0, 10000) &&
+        (!('savedWordTerms' in data) || (
+          data.savedWordTerms is list &&
+          data.savedWordTerms.size() <= 2000 &&
+          isValidStringSlice10(data.savedWordTerms, 0, 0, 200)
+        )) &&
+        isOptBool(data, 'isRead') &&
+        isOptTimestampMs(data, 'lastReadTimestamp') &&
+        isOptListMax(data, 'keyVocabulary', 100) &&
+        isOptListMax(data, 'quiz', 50) &&
+        isOptBool(data, 'isCustom') &&
+        (!('sentenceAnalyses' in data) ||
+          (data.sentenceAnalyses is map && data.sentenceAnalyses.keys().size() <= 500)) &&
+        isOptListMax(data, 'grammarPoints', 100);
+    }
+
+    function isValidArticleOnCreate(data) {
+      return isValidArticle(data);
+    }
+
+    function isValidArticleOnUpdate(data) {
+      return isValidArticle(data) &&
+        (!('id' in resource.data) || ('id' in data && data.id == resource.data.id));
+    }
+
+    // ===============================================================
+    // Match Rules (Default-Deny Root + Strict Per-User Subcollections)
+    // ===============================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /users/{userId} {
+      // /users/{userId}/data/{docId}: Restricted to exact known document IDs
+      match /data/{docId} {
+        allow get, list: if isOwner(userId) && isValidDataDocId(docId);
+        allow create: if isOwner(userId) &&
+          isValidDataDocId(docId) &&
+          isValidDataDocOnCreate(docId, request.resource.data);
+        allow update: if isOwner(userId) &&
+          isValidDataDocId(docId) &&
+          isValidDataDocOnUpdate(docId, request.resource.data);
+        allow delete: if isOwner(userId) && isValidDataDocId(docId);
+      }
+
+      // /users/{userId}/words/{wordId}: Personal vocabulary & SRS state
+      match /words/{wordId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidWordOnCreate(request.resource.data);
+        allow update: if isOwner(userId) && isValidWordOnUpdate(request.resource.data);
+        allow delete: if isOwner(userId);
+      }
+
+      // /users/{userId}/articles/{articleId}: Personal saved/generated articles
+      match /articles/{articleId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidArticleOnCreate(request.resource.data);
+        allow update: if isOwner(userId) && isValidArticleOnUpdate(request.resource.data);
+        allow delete: if isOwner(userId);
+      }
     }
   }
 }

@@ -10,6 +10,7 @@ export interface FormattedVoiceOption {
 
 class TTSService {
   private activeUtterance: SpeechSynthesisUtterance | null = null;
+  private activeOnCancel: (() => void) | null = null;
   private voices: SpeechSynthesisVoice[] = [];
   private voiceLoaded: boolean = false;
   private listeners: (() => void)[] = [];
@@ -99,14 +100,23 @@ class TTSService {
     return this.voices.find((v) => v.lang.startsWith('en')) || null;
   }
 
+  public getChineseVoice(): SpeechSynthesisVoice | null {
+    if (!this.voices.length) this.loadVoices();
+    const tw = this.voices.find((v) => v.lang.toLowerCase().includes('zh-tw'));
+    if (tw) return tw;
+    return this.voices.find((v) => v.lang.toLowerCase().startsWith('zh')) || null;
+  }
+
   public speak(
     text: string,
     options?: {
       rate?: number;
       pitch?: number;
       voiceURI?: string;
+      lang?: string;
       onEnd?: () => void;
       onError?: (err: any) => void;
+      onCancel?: () => void;
     }
   ): void {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -114,34 +124,55 @@ class TTSService {
       return;
     }
 
-    const clean = text.trim();
+    const clean = text
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[#*_`~>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!clean) return;
 
     this.stop();
 
     try {
       const utterance = new SpeechSynthesisUtterance(clean);
-      utterance.lang = 'en-US';
+      const isChinese = options?.lang?.toLowerCase().startsWith('zh');
+      utterance.lang = isChinese ? 'zh-TW' : 'en-US';
       utterance.rate = options?.rate ?? 1.0;
       utterance.pitch = options?.pitch ?? 1.0;
 
-      const voice = this.getEnglishVoice(options?.voiceURI);
+      const voice = isChinese ? this.getChineseVoice() : this.getEnglishVoice(options?.voiceURI);
       if (voice) {
         utterance.voice = voice;
       }
 
+      this.activeOnCancel = options?.onCancel || null;
+
       utterance.onend = () => {
-        this.activeUtterance = null;
+        if (this.activeUtterance === utterance) {
+          this.activeUtterance = null;
+          this.activeOnCancel = null;
+        }
         if (options?.onEnd) options.onEnd();
       };
 
       utterance.onerror = (e) => {
-        this.activeUtterance = null;
-        // Don't treat user-interrupted or cancelled speech as error
-        if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          console.warn('TTS Speech error:', e);
-          if (options?.onError) options.onError(e);
+        if (this.activeUtterance === utterance) {
+          this.activeUtterance = null;
         }
+        // If interrupted or canceled, notify caller via onCancel so UI playback indicators reset properly
+        if (e.error === 'interrupted' || e.error === 'canceled') {
+          if (this.activeOnCancel) {
+            const cb = this.activeOnCancel;
+            this.activeOnCancel = null;
+            try {
+              cb();
+            } catch {}
+          }
+          return;
+        }
+        this.activeOnCancel = null;
+        console.warn('TTS Speech error:', e);
+        if (options?.onError) options.onError(e);
       };
 
       // Keep strong reference to prevent GC from killing utterance prematurely
@@ -149,11 +180,19 @@ class TTSService {
       window.speechSynthesis.speak(utterance);
     } catch (err) {
       console.error('TTS speak invocation error:', err);
+      this.activeOnCancel = null;
       if (options?.onError) options.onError(err);
     }
   }
 
   public stop(): void {
+    if (this.activeOnCancel) {
+      const cancelCb = this.activeOnCancel;
+      this.activeOnCancel = null;
+      try {
+        cancelCb();
+      } catch {}
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       this.activeUtterance = null;

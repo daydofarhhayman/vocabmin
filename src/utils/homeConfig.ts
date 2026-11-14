@@ -288,10 +288,10 @@ function getHomeConfigKey(uid?: string): string {
 
 export function loadHomeConfig(uid?: string): HomeConfig {
   try {
-    const raw =
-      (uid ? localStorage.getItem(getHomeConfigKey(uid)) : null) ||
-      localStorage.getItem(STORAGE_KEY_HOME_CONFIG);
-    if (!raw) return DEFAULT_HOME_CONFIG;
+    const raw = uid
+      ? localStorage.getItem(getHomeConfigKey(uid))
+      : localStorage.getItem(STORAGE_KEY_HOME_CONFIG);
+    if (!raw) return { ...DEFAULT_HOME_CONFIG };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return DEFAULT_HOME_CONFIG;
 

@@ -152,11 +152,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const currentTheme = COLOR_THEMES[homeConfig.accentColor] || COLOR_THEMES.indigo;
 
-  // Daily target setting (stored locally and synced with homeConfig)
+  // Daily target setting (stored per-user locally and synced with homeConfig)
+  const dailyTargetStorageKey = `vocabmin_daily_target_${user?.uid || 'guest'}`;
   const [dailyGoalTarget, setDailyGoalTarget] = useState<number>(() => {
     if (homeConfig.dailyGoalTarget) return homeConfig.dailyGoalTarget;
     try {
-      const saved = localStorage.getItem('vocabmin_daily_target');
+      const saved = localStorage.getItem(`vocabmin_daily_target_${user?.uid || 'guest'}`);
       return saved ? parseInt(saved, 10) : 15;
     } catch {
       return 15;
@@ -164,16 +165,25 @@ export const HomeView: React.FC<HomeViewProps> = ({
   });
 
   useEffect(() => {
-    if (homeConfig.dailyGoalTarget && homeConfig.dailyGoalTarget !== dailyGoalTarget) {
-      setDailyGoalTarget(homeConfig.dailyGoalTarget);
+    if (homeConfig.dailyGoalTarget) {
+      if (homeConfig.dailyGoalTarget !== dailyGoalTarget) {
+        setDailyGoalTarget(homeConfig.dailyGoalTarget);
+      }
+      return;
     }
-  }, [homeConfig.dailyGoalTarget]);
+    try {
+      const saved = localStorage.getItem(dailyTargetStorageKey);
+      setDailyGoalTarget(saved ? parseInt(saved, 10) : 15);
+    } catch {
+      setDailyGoalTarget(15);
+    }
+  }, [homeConfig.dailyGoalTarget, dailyTargetStorageKey]);
 
   const handleUpdateDailyTarget = (newTarget: number) => {
     const val = Math.max(5, Math.min(100, newTarget));
     setDailyGoalTarget(val);
     try {
-      localStorage.setItem('vocabmin_daily_target', val.toString());
+      localStorage.setItem(dailyTargetStorageKey, val.toString());
     } catch {}
     if (onUpdateHomeConfig) {
       onUpdateHomeConfig({
@@ -305,12 +315,22 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [pomoSessionsCompleted, setPomoSessionsCompleted] = useState<number>(() => {
     try {
       const today = getLocalDateString();
-      const saved = localStorage.getItem(`vocabmin_pomo_${today}`);
+      const saved = localStorage.getItem(`vocabmin_pomo_${today}_${user?.uid || 'guest'}`);
       return saved ? parseInt(saved, 10) : 0;
     } catch {
       return 0;
     }
   });
+
+  useEffect(() => {
+    try {
+      const today = getLocalDateString();
+      const saved = localStorage.getItem(`vocabmin_pomo_${today}_${user?.uid || 'guest'}`);
+      setPomoSessionsCompleted(saved ? parseInt(saved, 10) : 0);
+    } catch {
+      setPomoSessionsCompleted(0);
+    }
+  }, [user?.uid]);
 
   useEffect(() => {
     let timer: NodeJS.Timeout | null = null;
@@ -323,7 +343,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
             setPomoSessionsCompleted(nextCompleted);
             try {
               const today = getLocalDateString();
-              localStorage.setItem(`vocabmin_pomo_${today}`, nextCompleted.toString());
+              localStorage.setItem(
+                `vocabmin_pomo_${today}_${user?.uid || 'guest'}`,
+                nextCompleted.toString()
+              );
               confetti({ particleCount: 40, spread: 70 });
             } catch {}
             return pomoPresetMinutes * 60;
@@ -335,7 +358,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [pomoIsActive, pomoSecondsLeft, pomoPresetMinutes, pomoSessionsCompleted]);
+  }, [pomoIsActive, pomoSecondsLeft, pomoPresetMinutes, pomoSessionsCompleted, user?.uid]);
 
   const handleSwitchPomoPreset = (mins: number) => {
     setPomoIsActive(false);

@@ -240,6 +240,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
   const handleSaveWord = (w: CopilotWord) => {
     const cleanTerm = w.term.trim();
     if (!cleanTerm) return;
+    const cleanCat = (w.category || '').trim();
     onAddWords([
       {
         term: cleanTerm,
@@ -247,7 +248,7 @@ export const FloatingAIAssistant: React.FC<FloatingAIAssistantProps> = ({
         def: w.def.trim(),
         defEn: (w.defEn || '').trim(),
         ex: (w.ex || '').trim(),
-        category: w.category || '未分類'
+        category: cleanCat && cleanCat !== '未分類' ? cleanCat : undefined
       }
     ]);
     setSavedToastMap((prev) => ({ ...prev, [cleanTerm.toLowerCase()]: true }));

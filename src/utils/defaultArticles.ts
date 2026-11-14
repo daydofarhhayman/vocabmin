@@ -79,7 +79,7 @@ To cultivate flow in daily life, eliminate external interruptions and delineate 
           'Only when listening to classical music in silence'
         ],
         correctAnswerIndex: 1,
-        explanation: 'The text states that flow blossoms at the frontier where challenge slightly outpaces existing proficiency.'
+        explanation: '文章明確指出，心流最常發生於任務挑戰度略高於個人現有技能水準的交界處（frontier）。'
       },
       {
         question: 'What is "transient hypofrontality" as described in the passage?',
@@ -90,7 +90,7 @@ To cultivate flow in daily life, eliminate external interruptions and delineate 
           'An inability to perceive visual colors during exercise'
         ],
         correctAnswerIndex: 2,
-        explanation: 'Transient hypofrontality temporarily quiets the inner critic and self-referential doubt in the prefrontal cortex.'
+        explanation: '「暫時性低額葉功能 (transient hypofrontality)」是指前額葉皮質暫時性降調，使內在批判與自我懷疑靜音的腦神經現象。'
       }
     ]
   },
@@ -172,7 +172,18 @@ However, this technological renaissance demands critical vigilance. Over-relianc
           'Teachers would immediately lose their professional licenses'
         ],
         correctAnswerIndex: 1,
-        explanation: 'The passage warns that over-reliance on automated solutions might attenuate genuine critical inquiry and creative friction.'
+        explanation: '文章提醒，過度依賴自動化解答可能會削弱學習者真正的批判性思考（critical inquiry）與創造性的認知碰撞。'
+      },
+      {
+        question: 'According to the author, what is the ideal role of human educators in the AI era?',
+        options: [
+          'To manually grade standardized bubble sheets faster than computers',
+          'To serve as custodians of empathy, ethics, and inspirational wisdom alongside AI tools',
+          'To prohibit students from using adaptive learning platforms',
+          'To teach every student at the exact same fixed pace'
+        ],
+        correctAnswerIndex: 1,
+        explanation: '文章結論提出人機「共生（symbiotic）」模式：讓 AI 負責自動化演練與診斷，人類教師則專注於同理心、倫理引導與啟發智慧。'
       }
     ]
   },
@@ -254,7 +265,18 @@ Next time you cradle a warm porcelain cup, appreciate both the agricultural toil
           'The water cools down instantly below freezing'
         ],
         correctAnswerIndex: 1,
-        explanation: 'Over-extraction pulls out harsh tannins and bitter alkaloids, overpowering the pleasant fruit and caramel notes.'
+        explanation: '萃取時間過長（過度萃取）會釋放出大量單寧酸與苦味生物鹼，掩蓋掉原本宜人的果香與焦糖甜味。'
+      },
+      {
+        question: 'Why do different brewing methods require distinct grind sizes?',
+        options: [
+          'Grind consistency directly controls water flow rate and extraction efficiency',
+          'Coarser beans contain substantially more caffeine than fine grounds',
+          'Fine grounds prevent hot water from dissolving any organic acids',
+          'French press filters dissolve when touching dark roast espresso beans'
+        ],
+        correctAnswerIndex: 0,
+        explanation: '文中有提及研磨均勻度與粗細會決定水流速度：法式濾壓壺等浸泡法適合粗研磨，而高壓濃縮咖啡則需要極細研磨。'
       }
     ]
   },
@@ -336,7 +358,18 @@ If microbes thrive in the perpetual darkness of extraterrestrial seafloors, life
           'Solar mirrors reflect intense light onto its north pole'
         ],
         correctAnswerIndex: 1,
-        explanation: 'Jupiter’s colossal gravitational pull creates tidal flexing and friction, generating the geothermal heat required to keep Europa’s deep ocean liquid.'
+        explanation: '木星龐大的重力引力會持續拉扯與彎折木衛二的岩石核心，透過潮汐加熱（tidal heating）產生維持液態海洋所需的地熱。'
+      },
+      {
+        question: 'What did spacecraft samples from Enceladus’s cryovolcanic plumes reveal?',
+        options: [
+          'Evidence of artificial satellites buried under the crater',
+          'Seafloor hydrothermal vents remarkably similar to those on early Earth',
+          'Thick layers of breathable oxygen surrounding its equator',
+          'Proof that liquid water cannot exist anywhere near Saturn'
+        ],
+        correctAnswerIndex: 1,
+        explanation: '土衛二南極「虎紋」裂縫噴發的羽流採樣證實其海底存在熱液噴口，環境與早期地球生命可能起源的海底山脊極為相似。'
       }
     ]
   },
@@ -418,7 +451,18 @@ The future of architecture does not lie in sterile towers isolated from the elem
           'It prevents humans from falling asleep permanently'
         ],
         correctAnswerIndex: 1,
-        explanation: 'Clinical studies cited in the article demonstrate that exposure to nature reduces cortisol and stabilizes blood pressure.'
+        explanation: '文章引用的臨床研究顯示，接觸自然綠植、陽光與流水有助於降低皮質醇壓力荷爾蒙、穩定血壓並提升專注力。'
+      },
+      {
+        question: 'Beyond aesthetics, how do sky terraces and vertical greenery benefit cities like Singapore?',
+        options: [
+          'They completely replace public subways and highway systems',
+          'They mitigate the urban heat island effect, filter air pollutants, and support biodiversity',
+          'They lower concrete curing time by fifteen minutes',
+          'They absorb all ocean waves along coastal highways'
+        ],
+        correctAnswerIndex: 1,
+        explanation: '第三段說明這些空中與垂直植栽設施並非單純裝飾，更能有效緩解城市熱島效應、過濾大氣污染物並促進城市生物多樣性。'
       }
     ]
   },
@@ -500,7 +544,18 @@ As French microbiologist Louis Pasteur famously proclaimed, "Fortune favors the 
           'The mold had turned into edible blue cheese'
         ],
         correctAnswerIndex: 1,
-        explanation: 'Fleming noticed a clear zone of lysis (dissolution) where bacteria were unable to grow around the Penicillium mold.'
+        explanation: '弗萊明敏銳觀察到青黴菌菌落周圍出現一圈使細菌無法生長並溶解的環狀區域，進而開啟了抗生素世代。'
+      },
+      {
+        question: 'What does Louis Pasteur’s quote "Fortune favors the prepared mind" imply about serendipity?',
+        options: [
+          'Scientific breakthroughs depend purely on blind luck with no observation needed',
+          'Serendipity requires keen perceptive readiness and active curiosity to recognize chance clues',
+          'Scientists should avoid taking vacations so experiments never get contaminated',
+          'Only writers from Persia can coin scientific terminology'
+        ],
+        correctAnswerIndex: 1,
+        explanation: '文章強調 serendipity 並非被動等待好運，而是當隨機巧遇發生時，擁有充分準備與好奇洞察力的心靈才能看見其中的突破契機。'
       }
     ]
   }

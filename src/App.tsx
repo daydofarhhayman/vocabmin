@@ -25,6 +25,110 @@ import { User } from 'firebase/auth';
 import { HomeConfig, loadHomeConfig, saveHomeConfig, DEFAULT_HOME_CONFIG } from './utils/homeConfig';
 import type { ActiveStudyQuestion } from './components/StudyHubView';
 
+const normalizeCategory = (cat?: string): string | undefined => {
+  const clean = (cat || '').trim();
+  if (!clean || clean === '未分類' || clean.toLowerCase() === 'uncategorized') {
+    return undefined;
+  }
+  return clean;
+};
+
+const mergeArticleRecords = (
+  cloudArticles: Article[] | undefined,
+  localArticles: Article[],
+  lastSyncedAt?: number
+): { merged: Article[]; changed: boolean } => {
+  if (cloudArticles === undefined) {
+    return { merged: localArticles, changed: false };
+  }
+
+  const cloudMap = new Map<string, Article>();
+  cloudArticles.forEach((a) => {
+    if (a && a.id) cloudMap.set(a.id, a);
+  });
+
+  let changed = false;
+  const mergedMap = new Map<string, Article>(cloudMap);
+
+  localArticles.forEach((localArt) => {
+    if (!localArt || !localArt.id) return;
+    const cloudArt = cloudMap.get(localArt.id);
+    if (!cloudArt) {
+      const idMatch = localArt.id.match(/(\d{13})/);
+      const artTs = localArt.lastReadTimestamp || (idMatch ? Number(idMatch[1]) : 0);
+      if (lastSyncedAt && lastSyncedAt > 0 && artTs > 0 && artTs <= lastSyncedAt) {
+        // Existed before last cloud sync and is missing remotely -> deleted on another device
+        return;
+      }
+      mergedMap.set(localArt.id, localArt);
+      changed = true;
+    } else {
+      const unionTerms = Array.from(
+        new Set([...(cloudArt.savedWordTerms || []), ...(localArt.savedWordTerms || [])])
+      );
+      const localLastRead = localArt.lastReadTimestamp || 0;
+      const cloudLastRead = cloudArt.lastReadTimestamp || 0;
+      const mergedAnalyses = localArt.sentenceAnalyses
+        ? { ...(cloudArt.sentenceAnalyses || {}), ...localArt.sentenceAnalyses }
+        : cloudArt.sentenceAnalyses;
+
+      const hasMoreTerms = unionTerms.length > (cloudArt.savedWordTerms || []).length;
+      const hasTranslationDiff = Boolean(localArt.translationZh && !cloudArt.translationZh);
+      const hasQuizDiff = Boolean(
+        localArt.quiz && localArt.quiz.length > 0 && (!cloudArt.quiz || cloudArt.quiz.length === 0)
+      );
+      const hasVocabDiff = Boolean(
+        localArt.keyVocabulary &&
+          localArt.keyVocabulary.length > 0 &&
+          (!cloudArt.keyVocabulary || cloudArt.keyVocabulary.length === 0)
+      );
+      const hasGrammarDiff = Boolean(
+        localArt.grammarPoints &&
+          localArt.grammarPoints.length > 0 &&
+          (!cloudArt.grammarPoints || cloudArt.grammarPoints.length === 0)
+      );
+      const hasAnalysisDiff =
+        Boolean(localArt.sentenceAnalyses) &&
+        Object.keys(localArt.sentenceAnalyses || {}).some(
+          (k) => !cloudArt.sentenceAnalyses || !cloudArt.sentenceAnalyses[k]
+        );
+      const hasReadDiff =
+        localLastRead > cloudLastRead || Boolean(localArt.isRead && !cloudArt.isRead);
+
+      if (
+        hasReadDiff ||
+        hasMoreTerms ||
+        hasTranslationDiff ||
+        hasQuizDiff ||
+        hasVocabDiff ||
+        hasGrammarDiff ||
+        hasAnalysisDiff
+      ) {
+        changed = true;
+        mergedMap.set(localArt.id, {
+          ...cloudArt,
+          translationZh: cloudArt.translationZh || localArt.translationZh,
+          quiz: cloudArt.quiz && cloudArt.quiz.length > 0 ? cloudArt.quiz : localArt.quiz,
+          keyVocabulary:
+            cloudArt.keyVocabulary && cloudArt.keyVocabulary.length > 0
+              ? cloudArt.keyVocabulary
+              : localArt.keyVocabulary,
+          grammarPoints:
+            cloudArt.grammarPoints && cloudArt.grammarPoints.length > 0
+              ? cloudArt.grammarPoints
+              : localArt.grammarPoints,
+          sentenceAnalyses: mergedAnalyses,
+          savedWordTerms: unionTerms,
+          isRead: Boolean(cloudArt.isRead || localArt.isRead),
+          lastReadTimestamp: Math.max(cloudLastRead, localLastRead) || undefined
+        });
+      }
+    }
+  });
+
+  return { merged: Array.from(mergedMap.values()), changed };
+};
+
 export default function App() {
   // Core Data State
   const [words, setWords] = useState<Word[]>([]);
@@ -33,6 +137,10 @@ export default function App() {
     wordsRef.current = words;
   }, [words]);
   const [articles, setArticles] = useState<Article[]>([]);
+  const articlesRef = useRef<Article[]>([]);
+  useEffect(() => {
+    articlesRef.current = articles;
+  }, [articles]);
   const [dailyStats, setDailyStats] = useState<DailyStats>({});
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
@@ -155,7 +263,7 @@ export default function App() {
     setArticles(updated);
     storage.saveLocalArticles(updated, user?.uid);
     if (user) {
-      storage.saveCloudArticles(updated).catch(console.error);
+      storage.saveCloudArticles(updated, user.uid).catch(console.error);
     }
   }, [user]);
 
@@ -163,7 +271,7 @@ export default function App() {
     const updated = storage.saveArticle(article, user?.uid);
     setArticles(updated);
     if (user) {
-      storage.saveCloudArticles(updated).catch(console.error);
+      storage.saveCloudArticles(updated, user.uid).catch(console.error);
     }
     setActiveReaderArticleId(article.id);
     setCurrentTab('reader');
@@ -174,7 +282,7 @@ export default function App() {
     const updated = storage.saveArticle(article, user?.uid);
     setArticles(updated);
     if (user) {
-      storage.saveCloudArticles(updated).catch(console.error);
+      storage.saveCloudArticles(updated, user.uid).catch(console.error);
     }
     showToast(`📚 已成功收錄文章《${article.title}》至文章閱讀庫！`);
   }, [user, showToast]);
@@ -183,7 +291,7 @@ export default function App() {
     storage.clearAllArticles(user?.uid);
     setArticles([]);
     if (user) {
-      storage.clearCloudArticles().catch(console.error);
+      storage.clearCloudArticles(user.uid).catch(console.error);
     }
     showToast('已清空文章閱讀庫中的所有文章');
   }, [user, showToast]);
@@ -199,7 +307,7 @@ export default function App() {
     const updated = storage.deleteArticle(targetId, user?.uid);
     setArticles(updated);
     if (user) {
-      storage.deleteCloudArticle(targetId).catch(console.error);
+      storage.deleteCloudArticle(targetId, user.uid).catch(console.error);
     }
     showToast(`已從文章閱讀庫刪除文章「${targetTitle}」`);
   }, [articles, user, showToast]);
@@ -239,14 +347,25 @@ export default function App() {
             let authoritativeWords: Word[];
 
             if (cloudData.words.length === 0 && localWords.length > 0) {
-              // Cloud has 0 words, but local has words (e.g. first login or unsynced words):
-              // Seed local words into cloud rather than wiping them out!
-              authoritativeWords = localWords;
-              storage.saveCloudWordsOnly(localWords, currentUser.uid).catch(console.error);
+              const lastSyncedAt = cloudData.lastSyncedAt || 0;
+              const hasUnsyncedLocal =
+                !lastSyncedAt || localWords.some((lw) => (lw.timestamp || 0) > lastSyncedAt);
+              if (hasUnsyncedLocal) {
+                // Cloud has 0 words, but local has unsynced words (e.g. first login or offline creation):
+                // Seed local words into cloud rather than wiping them out!
+                authoritativeWords = localWords;
+                storage.saveCloudWordsOnly(localWords, currentUser.uid).catch(console.error);
+              } else {
+                authoritativeWords = [];
+              }
             } else if (cloudData.words.length > 0) {
               const cloudIds = new Set(cloudData.words.map((w) => w.id));
-              // Detect any words created locally that haven't reached cloud yet (e.g. refresh before write completed)
-              const localUnsynced = localWords.filter((lw) => !cloudIds.has(lw.id));
+              const lastSyncedAt = cloudData.lastSyncedAt || 0;
+              // Detect any words created locally after lastSyncedAt that haven't reached cloud yet;
+              // older local words missing from cloud were deleted on another device.
+              const localUnsynced = localWords.filter(
+                (lw) => !cloudIds.has(lw.id) && (lw.timestamp || 0) > lastSyncedAt
+              );
               if (localUnsynced.length > 0) {
                 authoritativeWords = [...localUnsynced, ...cloudData.words];
                 storage.saveCloudWordsOnly(authoritativeWords, currentUser.uid).catch(console.error);
@@ -267,8 +386,17 @@ export default function App() {
             }
 
             if (cloudData.articles !== undefined) {
-              setArticles(cloudData.articles);
-              storage.saveLocalArticles(cloudData.articles, currentUser.uid);
+              const { merged: mergedArticles, changed: articlesChanged } = mergeArticleRecords(
+                cloudData.articles,
+                localArticles,
+                cloudData.lastSyncedAt
+              );
+              articlesRef.current = mergedArticles;
+              setArticles(mergedArticles);
+              storage.saveLocalArticles(mergedArticles, currentUser.uid);
+              if (articlesChanged) {
+                storage.saveCloudArticles(mergedArticles, currentUser.uid).catch(console.error);
+              }
             }
             if (cloudData.stats) {
               setDailyStats(cloudData.stats);
@@ -412,7 +540,7 @@ export default function App() {
           def,
           defEn: (item.defEn || '').trim() || undefined,
           ex: (item.ex || '').trim(),
-          category: item.category ? item.category.trim() : undefined,
+          category: normalizeCategory(item.category),
           level: item.level !== undefined ? item.level : 0,
           interval: item.interval || 1,
           easeFactor: item.easeFactor || 2.5,
@@ -460,7 +588,7 @@ export default function App() {
 
   // Single word review update
   const handleUpdateWordReview = useCallback(
-    (wordId: string, updates: Partial<Word>) => {
+    (wordId: string, updates: Partial<Word>, skipStatsCount: boolean = false) => {
       const currentWords = wordsRef.current;
       const updated = currentWords.map((w) => (w.id === wordId ? { ...w, ...updates } : w));
       wordsRef.current = updated;
@@ -469,7 +597,9 @@ export default function App() {
       if (user) {
         storage.updateCloudWord(wordId, updates, user.uid).catch(console.error);
       }
-      recordActivity('reviewed', 1);
+      if (!skipStatsCount) {
+        recordActivity('reviewed', 1);
+      }
     },
     [user, recordActivity]
   );
@@ -508,7 +638,18 @@ export default function App() {
         (w) => w.term.trim().toLowerCase() !== cleanOldTerm
       );
       const now = Date.now();
-      const newEntries: Word[] = updatedList.map((item, idx) => {
+      const seenIds = new Set(clean.map((w) => w.id));
+      const seenSemanticKeys = new Set(
+        clean.map(
+          (w) =>
+            `${w.term.trim().toLowerCase()}||${(w.pos || '').trim().toLowerCase()}||${w.def
+              .trim()
+              .toLowerCase()}`
+        )
+      );
+
+      const newEntries: Word[] = [];
+      updatedList.forEach((item, idx) => {
         const matchedOld =
           (item.id && oldEntries.find((o) => o.id === item.id)) ||
           oldEntries.find(
@@ -517,26 +658,38 @@ export default function App() {
               o.def.trim().toLowerCase() === (item.def || '').trim().toLowerCase()
           );
 
-        return {
-          id: item.id || matchedOld?.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`,
-          term: item.term || oldTerm,
-          pos: item.pos || matchedOld?.pos || 'n.',
-          def: item.def || matchedOld?.def || '',
+        const nextTerm = (item.term || oldTerm).trim();
+        const nextPos = normalizePos(item.pos || matchedOld?.pos);
+        const nextDef = (item.def !== undefined ? item.def : matchedOld?.def || '').trim();
+        const candidateId =
+          item.id || matchedOld?.id || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
+        const semanticKey = `${nextTerm.toLowerCase()}||${nextPos.toLowerCase()}||${nextDef.toLowerCase()}`;
+
+        // Deduplicate if renamed into an existing term/definition or duplicated in the edit list
+        if (seenIds.has(candidateId) || seenSemanticKeys.has(semanticKey)) {
+          return;
+        }
+        seenIds.add(candidateId);
+        seenSemanticKeys.add(semanticKey);
+
+        newEntries.push({
+          id: candidateId,
+          term: nextTerm,
+          pos: nextPos,
+          def: nextDef,
           defEn: item.defEn !== undefined ? item.defEn : matchedOld?.defEn,
-          ex: item.ex !== undefined ? item.ex : (matchedOld?.ex || ''),
+          ex: item.ex !== undefined ? item.ex : matchedOld?.ex || '',
           category:
             item.category !== undefined
-              ? item.category
-                ? item.category.trim()
-                : undefined
-              : matchedOld?.category,
-          level: item.level !== undefined ? item.level : (matchedOld?.level ?? 0),
+              ? normalizeCategory(item.category)
+              : normalizeCategory(matchedOld?.category),
+          level: item.level !== undefined ? item.level : matchedOld?.level ?? 0,
           interval: item.interval || matchedOld?.interval || 1,
           easeFactor: item.easeFactor || matchedOld?.easeFactor || 2.5,
           timestamp: matchedOld?.timestamp || item.timestamp || now,
           lastReview: matchedOld?.lastReview || item.lastReview || now,
-          nextReview: matchedOld?.nextReview || item.nextReview || (now + 86400000)
-        };
+          nextReview: matchedOld?.nextReview || item.nextReview || now + 86400000
+        });
       });
 
       const finalWords = [...newEntries, ...clean];
@@ -546,6 +699,44 @@ export default function App() {
       if (user) {
         storage.reconcileCloudWordGroup(oldEntries.map((o) => o.id), newEntries, user.uid).catch(console.error);
       }
+
+      // If oldTerm was renamed completely away, update savedWordTerms in articles
+      const stillHasOldTerm = finalWords.some(
+        (w) => w.term.trim().toLowerCase() === cleanOldTerm
+      );
+      if (!stillHasOldTerm && articlesRef.current.length > 0) {
+        const renamedToTerm = newEntries[0]?.term?.trim();
+        let articlesChanged = false;
+        const nextArticles = articlesRef.current.map((art) => {
+          const existingTerms = art.savedWordTerms || [];
+          if (!existingTerms.some((t) => t.trim().toLowerCase() === cleanOldTerm)) {
+            return art;
+          }
+          articlesChanged = true;
+          const mapped = existingTerms
+            .map((t) => (t.trim().toLowerCase() === cleanOldTerm ? renamedToTerm || '' : t))
+            .filter(Boolean);
+          const deduped: string[] = [];
+          const seenTermLower = new Set<string>();
+          mapped.forEach((t) => {
+            const lower = t.trim().toLowerCase();
+            if (!seenTermLower.has(lower)) {
+              seenTermLower.add(lower);
+              deduped.push(t);
+            }
+          });
+          return { ...art, savedWordTerms: deduped };
+        });
+        if (articlesChanged) {
+          articlesRef.current = nextArticles;
+          setArticles(nextArticles);
+          storage.saveLocalArticles(nextArticles, user?.uid);
+          if (user) {
+            storage.saveCloudArticles(nextArticles, user.uid).catch(console.error);
+          }
+        }
+      }
+
       showToast('單字修改成功！');
     },
     [user, showToast]
@@ -862,6 +1053,35 @@ export default function App() {
   }, [user]);
 
   // Clear all words
+  const pruneArticlesSavedTerms = useCallback(
+    (removedTermsLower: Set<string> | null) => {
+      const currentArticles = articlesRef.current;
+      if (!currentArticles.length) return;
+      let anyChanged = false;
+      const nextArticles = currentArticles.map((art) => {
+        const existing = art.savedWordTerms || [];
+        if (!existing.length) return art;
+        const filtered = removedTermsLower
+          ? existing.filter((t) => !removedTermsLower.has(t.trim().toLowerCase()))
+          : [];
+        if (filtered.length !== existing.length) {
+          anyChanged = true;
+          return { ...art, savedWordTerms: filtered };
+        }
+        return art;
+      });
+      if (anyChanged) {
+        articlesRef.current = nextArticles;
+        setArticles(nextArticles);
+        storage.saveLocalArticles(nextArticles, user?.uid);
+        if (user) {
+          storage.saveCloudArticles(nextArticles, user.uid).catch(console.error);
+        }
+      }
+    },
+    [user]
+  );
+
   const handleClearAllWords = useCallback(() => {
     const count = wordsRef.current.length;
     wordsRef.current = [];
@@ -870,9 +1090,10 @@ export default function App() {
     if (user) {
       storage.clearCloudWords(user.uid).catch((err) => console.error('Cloud clear error:', err));
     }
+    pruneArticlesSavedTerms(null);
     showToast(`已成功清空單字庫（共清除 ${count} 個單字）`);
     return count;
-  }, [user, showToast]);
+  }, [user, showToast, pruneArticlesSavedTerms]);
 
   // Reset all words mastery to 0
   const handleResetAllMastery = useCallback(() => {
@@ -913,6 +1134,7 @@ export default function App() {
             console.error('Cloud delete term error:', err)
           );
         }
+        pruneArticlesSavedTerms(new Set([clean]));
         setConfirmConfig((c) => ({ ...c, isOpen: false }));
         showToast(`已刪除「${term}」`);
       };
@@ -931,7 +1153,7 @@ export default function App() {
         onConfirm: executeDelete
       });
     },
-    [user, showToast]
+    [user, showToast, pruneArticlesSavedTerms]
   );
 
   // Delete a single definition of a word without affecting other definitions
@@ -954,29 +1176,57 @@ export default function App() {
               console.error('Cloud delete word error:', err)
             );
           }
+          const cleanTerm = term.trim().toLowerCase();
+          const stillHasTerm = updated.some((w) => w.term.trim().toLowerCase() === cleanTerm);
+          if (!stillHasTerm) {
+            pruneArticlesSavedTerms(new Set([cleanTerm]));
+          }
           setConfirmConfig((c) => ({ ...c, isOpen: false }));
           showToast(`已刪除「${term}」的該項釋義`);
         }
       });
     },
-    [user, showToast]
+    [user, showToast, pruneArticlesSavedTerms]
   );
 
   // Batch standardize words
   const handleBatchStandardizeWords = useCallback(
     (updatedList: Partial<Word>[]) => {
-      const updateByTerm = new Map(
-        updatedList.map((u) => [(u.term || '').trim().toLowerCase(), u])
-      );
       const currentWords = wordsRef.current;
+      const termFreq = new Map<string, number>();
+      currentWords.forEach((w) => {
+        const k = (w.term || '').trim().toLowerCase();
+        if (k) termFreq.set(k, (termFreq.get(k) || 0) + 1);
+      });
+
+      const updateById = new Map<string, Partial<Word>>();
+      const updateByTermPos = new Map<string, Partial<Word>>();
+      const updateByTerm = new Map<string, Partial<Word>>();
+      updatedList.forEach((u) => {
+        if (u.id) updateById.set(u.id, u);
+        const cleanTerm = (u.term || '').trim().toLowerCase();
+        if (!cleanTerm) return;
+        const normUPos = u.pos ? normalizePos(u.pos).toLowerCase() : '';
+        if (normUPos) {
+          updateByTermPos.set(`${cleanTerm}||${normUPos}`, u);
+        }
+        updateByTerm.set(cleanTerm, u);
+      });
+
       const changedBatch: { id: string; data: Partial<Word> }[] = [];
       const merged = currentWords.map((w) => {
-        const u = updateByTerm.get((w.term || '').trim().toLowerCase());
+        const cleanTerm = (w.term || '').trim().toLowerCase();
+        const normWPos = normalizePos(w.pos).toLowerCase();
+        const u =
+          updateById.get(w.id) ||
+          updateByTermPos.get(`${cleanTerm}||${normWPos}`) ||
+          (termFreq.get(cleanTerm) === 1 ? updateByTerm.get(cleanTerm) : undefined);
+
         if (u) {
-          const nextPos = u.pos ? normalizePos(u.pos) : w.pos;
-          const nextDef = (u.def && u.def.trim()) ? u.def.trim() : w.def;
-          const nextDefEn = (u.defEn && u.defEn.trim()) ? u.defEn.trim() : w.defEn;
-          const nextEx = (u.ex && u.ex.trim()) ? u.ex.trim() : w.ex;
+          const nextPos = u.pos && u.pos.trim() ? normalizePos(u.pos) : w.pos;
+          const nextDef = u.def && u.def.trim() ? u.def.trim() : w.def;
+          const nextDefEn = u.defEn && u.defEn.trim() ? u.defEn.trim() : w.defEn;
+          const nextEx = u.ex && u.ex.trim() ? u.ex.trim() : w.ex;
           changedBatch.push({
             id: w.id,
             data: { pos: nextPos, def: nextDef, defEn: nextDefEn, ex: nextEx }
@@ -1018,30 +1268,33 @@ export default function App() {
     reader.onload = (e) => {
       try {
         const data = JSON.parse(e.target?.result as string);
-        let count = 0;
-        let mergedWordsList: Word[] = wordsRef.current;
-        let mergedStatsData: DailyStats = dailyStats;
-        let mergedSettingsData: AppSettings = settings;
-        let mergedArticlesData: Article[] = articles;
-        let mergedHomeConfigData: HomeConfig = homeConfig;
+        if (!data || (typeof data !== 'object' && !Array.isArray(data))) {
+          showToast('JSON 內容無效，無法匯入');
+          return;
+        }
 
-        if (data.vocab_data && Array.isArray(data.vocab_data)) {
-          const now = Date.now();
-          const currentIds = new Set(wordsRef.current.map((w) => w.id));
-          const currentSemanticKeys = new Set(
-            wordsRef.current.map(
-              (w) =>
-                `${(w.term || '').trim().toLowerCase()}||${(w.pos || '').trim().toLowerCase()}||${(w.def || '').trim().toLowerCase()}`
-            )
-          );
+        const now = Date.now();
+        const currentIds = new Set(wordsRef.current.map((w) => w.id));
+        const currentSemanticKeys = new Set(
+          wordsRef.current.map(
+            (w) =>
+              `${(w.term || '').trim().toLowerCase()}||${(w.pos || '').trim().toLowerCase()}||${(w.def || '').trim().toLowerCase()}`
+          )
+        );
+
+        const mergeWordsArray = (rawList: any[]) => {
+          let importedCount = 0;
           const merged = [...wordsRef.current];
-          data.vocab_data.forEach((raw: Partial<Word>, idx: number) => {
+          rawList.forEach((raw: Partial<Word>, idx: number) => {
+            if (!raw || typeof raw !== 'object') return;
             const term = (raw.term || '').trim();
             const def = (raw.def || '').trim();
             if (!term || !def) return;
             const pos = normalizePos(raw.pos);
             const semanticKey = `${term.toLowerCase()}||${pos.toLowerCase()}||${def.toLowerCase()}`;
-            const safeId = (raw.id && String(raw.id).trim()) || `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
+            const safeId =
+              (raw.id && String(raw.id).trim()) ||
+              `w-${now}-${Math.random().toString(36).substring(2, 7)}-${idx}`;
             if (!currentIds.has(safeId) && !currentSemanticKeys.has(semanticKey)) {
               currentIds.add(safeId);
               currentSemanticKeys.add(semanticKey);
@@ -1052,7 +1305,7 @@ export default function App() {
                 def,
                 defEn: raw.defEn ? String(raw.defEn).trim() : undefined,
                 ex: raw.ex ? String(raw.ex).trim() : '',
-                category: raw.category ? String(raw.category).trim() : undefined,
+                category: normalizeCategory(raw.category),
                 level: typeof raw.level === 'number' ? raw.level : 0,
                 interval: typeof raw.interval === 'number' && raw.interval > 0 ? raw.interval : 1,
                 easeFactor: typeof raw.easeFactor === 'number' && raw.easeFactor > 0 ? raw.easeFactor : 2.5,
@@ -1060,9 +1313,42 @@ export default function App() {
                 lastReview: raw.lastReview || now,
                 nextReview: raw.nextReview || now + 86400000
               });
-              count++;
+              importedCount++;
             }
           });
+          return { merged, importedCount };
+        };
+
+        // Support top-level array export (e.g., Chrome extension backup)
+        if (Array.isArray(data)) {
+          const { merged, importedCount } = mergeWordsArray(data);
+          wordsRef.current = merged;
+          setWords(merged);
+          storage.saveLocalWords(merged, user?.uid);
+          if (user) {
+            storage.saveCloudWordsOnly(merged, user.uid).catch(console.error);
+          }
+          showToast(`成功匯入 ${importedCount} 個單字${user ? '，已自動同步至雲端資料庫！' : '！'}`);
+          return;
+        }
+
+        let count = 0;
+        let mergedWordsList: Word[] = wordsRef.current;
+        let mergedStatsData: DailyStats = dailyStats;
+        let mergedSettingsData: AppSettings = settings;
+        let mergedArticlesData: Article[] = articlesRef.current;
+        let mergedHomeConfigData: HomeConfig = homeConfig;
+        let mergedReaderSettingsData = storage.getLocalReaderSettings(user?.uid);
+
+        const rawWords = Array.isArray(data.vocab_data)
+          ? data.vocab_data
+          : Array.isArray(data.words)
+          ? data.words
+          : null;
+
+        if (rawWords) {
+          const { merged, importedCount } = mergeWordsArray(rawWords);
+          count = importedCount;
           mergedWordsList = merged;
           wordsRef.current = merged;
           setWords(merged);
@@ -1075,23 +1361,36 @@ export default function App() {
           storage.saveLocalStats(mergedStats, user?.uid);
         }
         if (data.settings && typeof data.settings === 'object') {
-          mergedSettingsData = { ...settings, ...data.settings };
+          const { geminiApiKey: importedKey, ...restSettings } = data.settings;
+          mergedSettingsData = {
+            ...settings,
+            ...restSettings,
+            geminiApiKey: settings.geminiApiKey || importedKey || ''
+          };
           setSettings(mergedSettingsData);
           storage.saveLocalSettings(mergedSettingsData, user?.uid);
         }
         if (Array.isArray(data.articles) && data.articles.length > 0) {
-          const existingArtIds = new Set(articles.map((a) => a.id));
-          const extraArticles = data.articles.filter((a: Article) => a && a.id && !existingArtIds.has(a.id));
-          if (extraArticles.length > 0) {
-            mergedArticlesData = [...extraArticles, ...articles];
-            setArticles(mergedArticlesData);
-            storage.saveLocalArticles(mergedArticlesData, user?.uid);
+          const { merged: nextArticles, changed: artChanged } = mergeArticleRecords(
+            articlesRef.current,
+            data.articles,
+            undefined
+          );
+          if (artChanged) {
+            mergedArticlesData = nextArticles;
+            articlesRef.current = nextArticles;
+            setArticles(nextArticles);
+            storage.saveLocalArticles(nextArticles, user?.uid);
           }
         }
         if (data.homeConfig && typeof data.homeConfig === 'object') {
           mergedHomeConfigData = { ...homeConfig, ...data.homeConfig };
           setHomeConfig(mergedHomeConfigData);
           saveHomeConfig(mergedHomeConfigData, user?.uid);
+        }
+        if (data.readerSettings && typeof data.readerSettings === 'object') {
+          mergedReaderSettingsData = { ...mergedReaderSettingsData, ...data.readerSettings };
+          storage.saveLocalReaderSettings(mergedReaderSettingsData, user?.uid);
         }
 
         if (user) {
@@ -1101,7 +1400,7 @@ export default function App() {
             mergedSettingsData,
             mergedArticlesData,
             mergedHomeConfigData,
-            undefined,
+            mergedReaderSettingsData,
             user.uid
           ).catch(console.error);
         }
@@ -1131,6 +1430,7 @@ export default function App() {
           storage.clearCloudWords(user.uid).catch(console.error);
           storage.saveCloudStats({}, user.uid).catch(console.error);
         }
+        pruneArticlesSavedTerms(null);
         setConfirmConfig((c) => ({ ...c, isOpen: false }));
         setIsSettingsOpen(false);
         showToast('所有單字與學習記錄已從本地與雲端清空！');
@@ -1203,6 +1503,7 @@ export default function App() {
     try {
       await storage.signOut();
       wordsRef.current = [];
+      articlesRef.current = [];
       setUser(null);
       setWords([]);
       setDailyStats({});
@@ -1253,10 +1554,13 @@ export default function App() {
       const cloudData = await storage.syncFromCloud(user.uid);
       if (cloudData) {
         const cloudWords = Array.isArray(cloudData.words) ? cloudData.words : [];
-        const { updated } = applySRSDecay(cloudWords);
+        const { updated, count: decayedCount } = applySRSDecay(cloudWords);
         wordsRef.current = updated;
         setWords(updated);
         storage.saveLocalWords(updated, user.uid);
+        if (decayedCount > 0) {
+          storage.saveCloudWordsOnly(updated, user.uid).catch(console.error);
+        }
         if (cloudData.settings) {
           setSettings(cloudData.settings);
           storage.saveLocalSettings(cloudData.settings, user.uid);
@@ -1266,6 +1570,7 @@ export default function App() {
           storage.saveLocalStats(cloudData.stats, user.uid);
         }
         if (cloudData.articles !== undefined) {
+          articlesRef.current = cloudData.articles;
           setArticles(cloudData.articles);
           storage.saveLocalArticles(cloudData.articles, user.uid);
         }
@@ -1410,7 +1715,7 @@ export default function App() {
             initialMode={currentTab === 'quiz' ? 'cloze' : 'choice'}
             onUpdateWordReview={handleUpdateWordReview}
             onBatchUpdateReview={handleBatchUpdateReview}
-            onFinishReviewSession={(count) => recordActivity('reviewed', count)}
+            onFinishReviewSession={() => {}}
             onRecordQuizActivity={(score) => recordActivity('quizzes', 1)}
             onActiveStudyQuestionChange={setActiveStudyQuestion}
             onBack={() => setCurrentTab('home')}
@@ -1452,6 +1757,21 @@ export default function App() {
             initialArticleId={activeReaderArticleId}
             onActiveArticleChange={setActiveReaderArticleId}
             appSettings={settings}
+            categories={allCategories}
+            onAddCategory={handleAddCategory}
+            onRequestConfirm={(config) => {
+              setConfirmConfig({
+                isOpen: true,
+                title: config.title,
+                message: config.message,
+                type: config.type || 'warning',
+                confirmText: config.confirmText || '確定',
+                onConfirm: () => {
+                  setConfirmConfig((c) => ({ ...c, isOpen: false }));
+                  config.onConfirm();
+                }
+              });
+            }}
           />
         )}
 
@@ -1620,6 +1940,9 @@ export default function App() {
             onLinkGoogle={handleLinkGoogle}
             onSyncCloud={handleManualSync}
             onPullCloud={handlePullFromCloud}
+            onExportJSON={handleExportJSON}
+            onExportCSV={handleExportCSV}
+            onImportJSON={handleImportJSON}
             wordsCount={words.length}
             isSyncing={isSyncing}
             onOpenCustomizeHome={() => {

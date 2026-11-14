@@ -13,6 +13,19 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.8.1',
+    date: '2026-11-14',
+    type: 'fix',
+    changes: [
+      '☁️ 跨裝置雲端同步、離線編輯保護與刪除不復活：新增 lastSyncedAt 時間戳對帳與 mergeArticleRecords 智慧合併機制，防止跨裝置已刪除的單字或自訂文章在登入時復活；雲端 stats 改為整份覆寫杜絕過期統計鍵殘留；文章閱讀器（ArticleReaderView）新增、AI 生成、修改與刪除自訂文章皆即時同步至 Firestore。',
+      '🔐 隱私強化與多帳號本機資料完全隔離：雲端同步與 JSON 備份匯出全面排除 geminiApiKey（並以 deleteField() 清除雲端殘留金鑰）；signOut() 登出時為所有帳號完整清除該 UID 本機快取；將單字與句子解析快取、首頁每日目標（vocabmin_daily_target）、番茄鐘紀錄（vocabmin_pomo）與單字庫排序（vocabmin_list_sort）全面納入 uid 獨立命名空間。',
+      '🧠 SRS 間隔重複演算法與學習統計精準化：修正手動調升單字熟練度（Level）後答對卻因舊 interval 過小被降級的問題，並於編輯熟練度時自動校準對應天數區間；applySRSDecay 觸發衰減時重設 nextReview 避免每次重整重複扣分；修復學習中心（StudyHubView）一詞多義附帶更新與結算回呼造成的每日複習數（reviewed）雙倍計數問題，並新增「🎯 僅複習今日到期單字」篩選開關與到期優先排序。',
+      '🏷️ 多義詞批次標準化、分類計數統一與文章詞彙聯動：修復 handleBatchStandardizeWords 僅依 term 比對導致同字不同詞性釋義互相覆蓋的缺陷（改採 id ➔ term + pos ➔ 單一釋義 term 順序）；統一全系統（單字庫、分類管理、學習中心）以「不重複單字（unique term）」計算分類數量並正規化未分類標籤；刪除、清空或重命名單字時自動同步清理與更新文章內已標記的 savedWordTerms。',
+      '📦 設定頁資料備份還原與擴充套件自動同步：於設定彈窗新增「資料備份與匯入 / 匯出」面板，支援完整 JSON 備份匯出、8 欄含分類 CSV 匯出，以及相容 Chrome 擴充套件頂層陣列格式之 JSON 還原與批次解析；擴充套件（extension/background.js）點擊同步開啟新分頁時自動監聽載入完成並推送單字。',
+      '🛡️ 生產環境級 Firestore 安全規則（firestore.rules）與閱讀體驗優化：重構為預設全拒絕、嚴格 per-UID 權限驗證與欄位型別/長度/範圍校驗（涵蓋 data、words、articles 子集合並禁止寫入 geminiApiKey）；同時優化語音合成（tts.ts 支援中英雙語發音、Markdown 符號清理與中斷狀態回呼）及內建精選文章繁體中文測驗詳解。'
+    ]
+  },
+  {
     version: '1.8.0',
     date: '2026-10-24',
     type: 'feat',

@@ -758,6 +758,33 @@ async function handleSyncToVocabMinTab(words) {
     }
   }
 
-  await chrome.tabs.create({ url: targetDomain });
-  return { success: true, tabOpened: true, message: '已為您開啟 VocabMin，請於網頁中點擊同步。' };
+  const newTab = await chrome.tabs.create({ url: targetDomain });
+  await new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve();
+    };
+    const timeoutId = setTimeout(finish, 15000);
+    const onUpdated = (tabId, changeInfo) => {
+      if (tabId === newTab.id && changeInfo.status === 'complete') {
+        clearTimeout(timeoutId);
+        setTimeout(finish, 1000);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+
+  try {
+    await chrome.tabs.sendMessage(newTab.id, {
+      action: 'VOCABMIN_SYNC_WORDS_BULK',
+      words: words
+    });
+    return { success: true, tabOpened: true, message: '已開啟 VocabMin 並自動完成單字同步！' };
+  } catch {
+    return { success: true, tabOpened: true, message: '已為您開啟 VocabMin，請於網頁中點擊同步。' };
+  }
 }

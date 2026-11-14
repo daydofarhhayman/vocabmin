@@ -61,6 +61,8 @@ export interface AppSettings {
   appNickname?: string; // 個性化空間自訂名稱
   geminiApiKey?: string; // 自訂 Google Gemini API Key
   customCategories?: string[]; // 使用者自訂單字庫分類清單
+  speechRate?: number; // 語音朗讀預設語速
+  voiceURI?: string; // 語音朗讀指定聲音 URI
   // Backward compatibility optional fields
   mergeReview?: boolean;
   autoPlayAudio?: boolean;

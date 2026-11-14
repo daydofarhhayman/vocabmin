@@ -19,7 +19,11 @@ import {
   ShieldAlert,
   Lock,
   Unlock,
-  KeyRound
+  KeyRound,
+  Download,
+  Upload,
+  FileSpreadsheet,
+  FileJson
 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
@@ -40,6 +44,9 @@ interface SettingsModalProps {
   onLinkGoogle?: () => void;
   onOpenAI?: () => void;
   onOpenCustomizeHome?: () => void;
+  onExportJSON?: () => void;
+  onExportCSV?: () => void;
+  onImportJSON?: (file: File) => void;
   wordsCount?: number;
   isSyncing?: boolean;
 }
@@ -56,6 +63,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onPullCloud,
   onLinkGoogle,
   onOpenCustomizeHome,
+  onExportJSON,
+  onExportCSV,
+  onImportJSON,
   wordsCount,
   isSyncing
 }) => {
@@ -734,6 +744,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* ── 5.5 資料備份與匯入 / 匯出 ── */}
+          {(onExportJSON || onExportCSV || onImportJSON) && (
+            <div className="bg-slate-50 dark:bg-slate-900/40 rounded-2xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-700/70 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-black text-slate-800 dark:text-white flex items-center gap-2">
+                    <Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>資料備份與匯入 / 匯出</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    匯出單字庫與學習記錄（不含 API Key），或從 JSON 備份 / 擴充套件還原資料。
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                {onExportJSON && (
+                  <button
+                    type="button"
+                    onClick={onExportJSON}
+                    className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-bold transition shadow-xs cursor-pointer"
+                  >
+                    <FileJson className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>匯出完整備份 (JSON)</span>
+                  </button>
+                )}
+
+                {onExportCSV && (
+                  <button
+                    type="button"
+                    onClick={onExportCSV}
+                    className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-bold transition shadow-xs cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>匯出單字清單 (CSV)</span>
+                  </button>
+                )}
+
+                {onImportJSON && (
+                  <label className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-xs cursor-pointer">
+                    <Upload className="w-4 h-4" />
+                    <span>匯入 JSON 還原</span>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          onImportJSON(file);
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* ── 6. 關於與更新日誌 (About & Changelog) ── */}
           <AboutSection />

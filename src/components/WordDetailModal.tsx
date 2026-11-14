@@ -184,6 +184,8 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
         def: cleanDef,
         defEn: newDefEn.trim() || undefined,
         ex: newEx.trim() || undefined,
+        category:
+          group.category || group.entries.find((entry) => entry.category && entry.category.trim())?.category,
         level: 0,
         interval: 1,
         easeFactor: 2.5
@@ -203,7 +205,7 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
     setIsAiLoading(true);
     setAiQueried(true);
 
-    const currentSettings = storage.getLocalSettings();
+    const currentSettings = storage.getLocalSettings(storage.getCurrentUser()?.uid);
     const apiKey = currentSettings?.geminiApiKey;
 
     try {
@@ -284,6 +286,8 @@ export const WordDetailModal: React.FC<WordDetailModalProps> = ({
         def: m.def.trim(),
         defEn: m.defEn ? m.defEn.trim() : undefined,
         ex: m.ex ? m.ex.trim() : undefined,
+        category:
+          group.category || group.entries.find((entry) => entry.category && entry.category.trim())?.category,
         level: 0,
         interval: 1,
         easeFactor: 2.5

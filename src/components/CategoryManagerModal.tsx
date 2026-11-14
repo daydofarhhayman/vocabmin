@@ -36,14 +36,27 @@ export const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   const [editInput, setEditInput] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Calculate word counts for each category
+  // Calculate unique-term word counts for each category (matching WordListView)
   const categoryWordCounts = useMemo(() => {
+    const termCategoryMap = new Map<string, string | undefined>();
+
+    words.forEach((w) => {
+      const key = w.term.trim().toLowerCase();
+      if (!key) return;
+      const cat = (w.category || '').trim();
+      const validCat = cat && cat !== '未分類' && cat.toLowerCase() !== 'uncategorized' ? cat : undefined;
+      if (!termCategoryMap.has(key)) {
+        termCategoryMap.set(key, validCat);
+      } else if (!termCategoryMap.get(key) && validCat) {
+        termCategoryMap.set(key, validCat);
+      }
+    });
+
     const counts: Record<string, number> = {};
     let uncategorized = 0;
 
-    words.forEach((w) => {
-      const cat = (w.category || '').trim();
-      if (!cat || cat === '未分類') {
+    termCategoryMap.forEach((cat) => {
+      if (!cat) {
         uncategorized++;
       } else {
         counts[cat] = (counts[cat] || 0) + 1;

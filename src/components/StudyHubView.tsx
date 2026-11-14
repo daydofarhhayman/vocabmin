@@ -52,7 +52,7 @@ interface StudyHubViewProps {
   words: Word[];
   settings: AppSettings;
   initialMode?: 'choice' | 'cloze';
-  onUpdateWordReview: (wordId: string, updates: Partial<Word>) => void;
+  onUpdateWordReview: (wordId: string, updates: Partial<Word>, skipStatsCount?: boolean) => void;
   onBatchUpdateReview?: (updates: { id: string; data: Partial<Word> }[]) => void;
   onFinishReviewSession: (count: number) => void;
   onRecordQuizActivity: (score: number) => void;
@@ -117,24 +117,38 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   // 2.5 Category Filter ('all' = 全部, 'uncategorized' = 未分類, or custom category name)
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
+  const [onlyDueWords, setOnlyDueWords] = useState<boolean>(false);
+
   // Available categories union from settings and words
   const availableCategories = useMemo(() => {
     return getAllWordCategories(words, settings);
   }, [words, settings]);
 
-  // Word counts per category
+  // Unique-term word counts per category (matching WordListView)
   const categoryCounts = useMemo(() => {
+    const termCategoryMap = new Map<string, string | undefined>();
+    words.forEach((w) => {
+      const key = w.term.trim().toLowerCase();
+      if (!key) return;
+      const cat = (w.category || '').trim();
+      const validCat = cat && cat !== '未分類' && cat.toLowerCase() !== 'uncategorized' ? cat : undefined;
+      if (!termCategoryMap.has(key)) {
+        termCategoryMap.set(key, validCat);
+      } else if (!termCategoryMap.get(key) && validCat) {
+        termCategoryMap.set(key, validCat);
+      }
+    });
+
     const counts: Record<string, number> = {};
     let uncategorized = 0;
-    words.forEach((w) => {
-      const cat = (w.category || '').trim();
-      if (!cat || cat === '未分類') {
+    termCategoryMap.forEach((cat) => {
+      if (!cat) {
         uncategorized++;
       } else {
         counts[cat] = (counts[cat] || 0) + 1;
       }
     });
-    return { counts, uncategorized, total: words.length };
+    return { counts, uncategorized, total: termCategoryMap.size };
   }, [words]);
 
   // 3. Session Active State
@@ -168,34 +182,45 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
   const autoNextTimerRef = useRef<any>(null);
 
-  // Count words in each proficiency level (respecting chosen category)
+  // Count words in each proficiency level (respecting chosen category & due filter)
   const levelCounts = useMemo(() => {
     const counts = [0, 0, 0, 0];
+    const now = Date.now();
+    const cleanSelectedCat = selectedCategory.trim();
     words.forEach((w) => {
       // Category match
-      if (selectedCategory !== 'all') {
-        if (selectedCategory === 'uncategorized' && w.category && w.category !== '未分類') return;
-        if (selectedCategory !== 'uncategorized' && w.category !== selectedCategory) return;
+      if (cleanSelectedCat !== 'all') {
+        const cleanCat = (w.category || '').trim();
+        const isUncat = !cleanCat || cleanCat === '未分類' || cleanCat.toLowerCase() === 'uncategorized';
+        if (cleanSelectedCat === 'uncategorized' && !isUncat) return;
+        if (cleanSelectedCat !== 'uncategorized' && cleanCat !== cleanSelectedCat) return;
       }
+      if (onlyDueWords && (w.nextReview || 0) > now) return;
       const lvl = Math.min(3, Math.max(0, w.level || 0));
       counts[lvl]++;
     });
     return counts;
-  }, [words, selectedCategory]);
+  }, [words, selectedCategory, onlyDueWords]);
 
-  // Candidates based on selected levels and selected category
+  // Candidates based on selected levels, selected category, and due filter
   const filteredCandidates = useMemo(() => {
+    const now = Date.now();
+    const cleanSelectedCat = selectedCategory.trim();
     return words.filter((w) => {
       // Level filter
       const matchLevel = selectedLevels.includes(w.level || 0);
       if (!matchLevel) return false;
 
+      if (onlyDueWords && (w.nextReview || 0) > now) return false;
+
       // Category filter
-      if (selectedCategory === 'all') return true;
-      if (selectedCategory === 'uncategorized') return !w.category || w.category === '未分類';
-      return w.category === selectedCategory;
+      if (cleanSelectedCat === 'all') return true;
+      const cleanCat = (w.category || '').trim();
+      const isUncat = !cleanCat || cleanCat === '未分類' || cleanCat.toLowerCase() === 'uncategorized';
+      if (cleanSelectedCat === 'uncategorized') return isUncat;
+      return cleanCat === cleanSelectedCat;
     });
-  }, [words, selectedLevels, selectedCategory]);
+  }, [words, selectedLevels, selectedCategory, onlyDueWords]);
 
   // Toggle level checkbox
   const handleToggleLevel = (lvl: number) => {
@@ -277,13 +302,19 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
     };
   }, []);
 
-  // Start Review Session
+  // Start Review Session (prioritize due words first, then shuffle within each bucket)
   const handleStartSession = () => {
     if (filteredCandidates.length === 0) return;
 
-    // Shuffle and pick limit
-    const shuffled = [...filteredCandidates].sort(() => Math.random() - 0.5);
-    const chosen = shuffled.slice(0, Math.min(reviewLimit, shuffled.length));
+    const currentTime = Date.now();
+    const dueWords = filteredCandidates
+      .filter((w) => (w.nextReview || 0) <= currentTime)
+      .sort(() => Math.random() - 0.5);
+    const futureWords = filteredCandidates
+      .filter((w) => (w.nextReview || 0) > currentTime)
+      .sort(() => Math.random() - 0.5);
+    const prioritized = [...dueWords, ...futureWords];
+    const chosen = prioritized.slice(0, Math.min(reviewLimit, prioritized.length));
 
     // Construct questions
     const generatedQuestions: ReviewQuestion[] = chosen.map((w) => {
@@ -453,7 +484,7 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
       // Also boost the secondary polysemous entry so it reflects user mastery!
       if (secondaryMatch && secondaryMatch.id !== currentWord.id) {
         const secSrs = calculateNextReview(secondaryMatch, rating);
-        onUpdateWordReview(secondaryMatch.id, secSrs);
+        onUpdateWordReview(secondaryMatch.id, secSrs, true);
       }
 
       // Play audio on correct answer
@@ -921,15 +952,28 @@ export const StudyHubView: React.FC<StudyHubViewProps> = ({
               })}
             </div>
 
-            <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between px-1">
-              <span>
-                符合勾選條件的單字庫：
-                <strong className="text-slate-900 dark:text-white tabular-nums">
-                  {filteredCandidates.length}
-                </strong>{' '}
-                字
-              </span>
-              <span>複習後將依回答快慢自動更新間隔評級</span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 px-1">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                <span>
+                  符合勾選條件的單字庫：
+                  <strong className="text-slate-900 dark:text-white tabular-nums">
+                    {filteredCandidates.length}
+                  </strong>{' '}
+                  字
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOnlyDueWords((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer self-start sm:self-auto ${
+                  onlyDueWords
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>🎯 僅複習今日到期單字</span>
+              </button>
             </div>
           </div>
 

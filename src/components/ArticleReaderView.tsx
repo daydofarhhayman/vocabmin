@@ -11,9 +11,10 @@ import {
   SentenceAnalysisData,
   WordAnalysisData,
   ArticleChatMessage,
+  ArticleGrammarPoint,
   AppSettings
 } from '../types';
-import { storage, DEFAULT_READER_SETTINGS } from '../services/storage';
+import { storage, DEFAULT_READER_SETTINGS, getAllWordCategories } from '../services/storage';
 import { tts, FormattedVoiceOption } from '../services/tts';
 import {
   BookOpen,
@@ -74,6 +75,15 @@ interface ArticleReaderViewProps {
   articles?: Article[];
   onArticlesChange?: (updated: Article[]) => void;
   appSettings?: AppSettings;
+  categories?: string[];
+  onAddCategory?: (categoryName: string) => void;
+  onRequestConfirm?: (config: {
+    title: string;
+    message: string;
+    type?: 'danger' | 'warning' | 'info' | 'success';
+    confirmText?: string;
+    onConfirm: () => void;
+  }) => void;
 }
 
 interface InspectedWordData {
@@ -89,7 +99,80 @@ interface InspectedWordData {
   isLoading?: boolean;
   hasAILookup?: boolean;
   needsAILookup?: boolean;
+  sourceLabel?: string;
+  cambridgeBlocked?: boolean;
 }
+
+interface ImportedArticleMeta {
+  subtitle?: string;
+  author?: string;
+  source?: string;
+  summary?: string;
+  keyVocabulary?: ArticleKeyWord[];
+  quiz?: ArticleQuizQuestion[];
+  grammarPoints?: ArticleGrammarPoint[];
+}
+
+const isValidChineseDefClient = (def: string | undefined, term: string): boolean => {
+  if (!def || typeof def !== 'string') return false;
+  const trimmed = def.trim();
+  if (!trimmed) return false;
+  const cleanTerm = term.trim().toLowerCase();
+  if (trimmed.toLowerCase() === cleanTerm) return false;
+  if (/^【[^】]+】$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1).trim().toLowerCase();
+    if (inner === cleanTerm || /^[a-zA-Z0-9\s'-]+$/.test(inner)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const extractLemmaCandidates = (rawToken: string): string[] => {
+  const clean = rawToken.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '').toLowerCase();
+  if (!clean) return [];
+  const candidates = [clean];
+  // Possessive stripping
+  if (clean.endsWith("'s") || clean.endsWith("’s")) {
+    candidates.push(clean.slice(0, -2));
+  }
+  if (clean.length > 3 && clean.endsWith('s')) {
+    if (clean.endsWith('ies') && clean.length > 4) candidates.push(clean.slice(0, -3) + 'y');
+    if (clean.endsWith('es') && clean.length > 4) candidates.push(clean.slice(0, -2));
+    if (!clean.endsWith('ss')) candidates.push(clean.slice(0, -1));
+  }
+  if (clean.length > 4 && clean.endsWith('ed')) {
+    if (clean.endsWith('ied')) {
+      candidates.push(clean.slice(0, -3) + 'y');
+    } else {
+      const stem = clean.slice(0, -2);
+      candidates.push(stem);
+      candidates.push(stem + 'e');
+      if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) {
+        candidates.push(stem.slice(0, -1));
+      }
+    }
+  }
+  if (clean.length > 4 && clean.endsWith('ing')) {
+    const stem = clean.slice(0, -3);
+    candidates.push(stem);
+    candidates.push(stem + 'e');
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      candidates.push(stem.slice(0, -1));
+    }
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+};
+
+const splitIntoParagraphs = (text: string): string[] => {
+  if (!text || !text.trim()) return [];
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  const blocks = normalized.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (blocks.length === 1 && normalized.includes('\n') && normalized.length > 500) {
+    return normalized.split(/\n/).map((p) => p.trim()).filter(Boolean);
+  }
+  return blocks;
+};
 
 export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   userUid,
@@ -102,7 +185,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   onActiveArticleChange,
   articles: externalArticles,
   onArticlesChange,
-  appSettings
+  appSettings,
+  categories,
+  onAddCategory,
+  onRequestConfirm
 }) => {
   const effectiveApiKey = appSettings?.geminiApiKey || storage.getLocalSettings(userUid)?.geminiApiKey;
 
@@ -168,18 +254,29 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
   // Selected Text Lookup Pill
   const [selectedText, setSelectedText] = useState<string | null>(null);
+  const [selectedSentenceContext, setSelectedSentenceContext] = useState<string>('');
   const [selectionPosition, setSelectionPosition] = useState<{ x: number; y: number } | null>(null);
+
+  // Word Save Category & Inline Category Creation
+  const [selectedSaveCategory, setSelectedSaveCategory] = useState<string>('');
+  const [isAddingCategoryInReader, setIsAddingCategoryInReader] = useState(false);
+  const [newCategoryNameInReader, setNewCategoryNameInReader] = useState('');
 
   // Sentence Analysis Drawer & Background Cache
   const [analyzedSentence, setAnalyzedSentence] = useState<SentenceAnalysisData | null>(null);
   const [cachedSentenceMap, setCachedSentenceMap] = useState<Record<string, SentenceAnalysisData>>(() =>
-    storage.getLocalSentenceAnalyses()
+    storage.getLocalSentenceAnalyses(userUid)
   );
 
   // Cached Word Lookups (Background storage cache - instant and 0 quota)
   const [cachedWordMap, setCachedWordMap] = useState<Record<string, WordAnalysisData>>(() =>
-    storage.getLocalWordAnalyses()
+    storage.getLocalWordAnalyses(userUid)
   );
+
+  useEffect(() => {
+    setCachedSentenceMap(storage.getLocalSentenceAnalyses(userUid));
+    setCachedWordMap(storage.getLocalWordAnalyses(userUid));
+  }, [userUid]);
 
   // AI Reading Companion / Assistant (AI 伴讀導師)
   const [isAIChatDrawerOpen, setIsAIChatDrawerOpen] = useState(false);
@@ -216,6 +313,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const [importTranslation, setImportTranslation] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [isImportingByAI, setIsImportingByAI] = useState(false);
+  const [importedArticleMeta, setImportedArticleMeta] = useState<ImportedArticleMeta | null>(null);
 
   // AI Generate Article Modal
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
@@ -225,10 +323,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const [useUnmasteredWords, setUseUnmasteredWords] = useState(true);
   const [isGeneratingArticle, setIsGeneratingArticle] = useState(false);
 
-  // TTS Read-Aloud State
+  // TTS Read-Aloud State & Refs
   const [isPlayingTTS, setIsPlayingTTS] = useState(false);
   const [activeSpeechParagraph, setActiveSpeechParagraph] = useState<number | null>(null);
   const [activeSpeechSentenceId, setActiveSpeechSentenceId] = useState<string | null>(null);
+  const ttsSessionRef = useRef<number>(0);
+  const readerBodyRef = useRef<HTMLDivElement | null>(null);
+  const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const readerSettingsRef = useRef<ReaderSettings>(readerSettings);
+
+  useEffect(() => {
+    readerSettingsRef.current = readerSettings;
+  }, [readerSettings]);
+
+  const availableCategories = useMemo(
+    () => (categories && categories.length > 0 ? categories : getAllWordCategories(words)),
+    [categories, words]
+  );
 
   // In-app Notification Toast State
   const [readerToast, setReaderToast] = useState<string | null>(null);
@@ -237,7 +348,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     setTimeout(() => setReaderToast((curr) => (curr === msg ? null : curr)), 3000);
   };
 
-  // Fast Word Map for Instant Lookup & Matching
+  // Fast Word Map for Instant Lookup & Matching (also resolves inflected forms / lemmas)
   const wordLookupMap = useMemo(() => {
     const map = new Map<string, Word>();
     words.forEach((w) => {
@@ -249,6 +360,15 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     return map;
   }, [words]);
 
+  const findLibraryWord = (rawToken: string): Word | undefined => {
+    const candidates = extractLemmaCandidates(rawToken);
+    for (const c of candidates) {
+      const found = wordLookupMap.get(c);
+      if (found) return found;
+    }
+    return undefined;
+  };
+
   // Active Article Object
   const currentArticle = useMemo(() => {
     if (!activeArticleId) return null;
@@ -259,6 +379,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const updateSettings = (newSettings: Partial<ReaderSettings>) => {
     setReaderSettings((prev) => {
       const updated = { ...prev, ...newSettings };
+      readerSettingsRef.current = updated;
       storage.saveLocalReaderSettings(updated, userUid);
       storage.saveCloudReaderSettings(updated, userUid).catch(console.error);
       return updated;
@@ -268,6 +389,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   // Stop TTS on unmount or article change
   useEffect(() => {
     return () => {
+      ttsSessionRef.current += 1;
       tts.stop();
       setIsPlayingTTS(false);
       setActiveSpeechParagraph(null);
@@ -275,9 +397,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     };
   }, [activeArticleId]);
 
-  // Initialize AI Reading Companion message when active article changes
+  // Reset per-article drawers/modals & initialize AI Reading Companion when active article changes
   useEffect(() => {
+    setInspectedWord(null);
+    setAnalyzedSentence(null);
+    setSelectedText(null);
+    setSelectedSentenceContext('');
+    setIsQuizOpen(false);
+    setIsQuizSubmitted(false);
+    setQuizAnswers({});
+    setIsFlashcardOpen(false);
+    setIsVocabDrawerOpen(false);
+
     if (currentArticle) {
+      const validExistingVocab = Array.isArray(currentArticle.keyVocabulary)
+        ? currentArticle.keyVocabulary.filter((k) => isValidChineseDefClient(k.def, k.term))
+        : [];
+      setExtractedKeywords(validExistingVocab);
       setArticleChatMessages([
         {
           id: 'init-welcome',
@@ -287,78 +423,130 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         }
       ]);
     } else {
+      setExtractedKeywords([]);
       setArticleChatMessages([]);
       setIsAIChatDrawerOpen(false);
     }
   }, [activeArticleId]);
 
-  // Handle Text Selection for Phrase / Idiom Lookup & AI Query
+  // Auto-scroll AI Reading Companion to newest message
   useEffect(() => {
-    const handleMouseUp = () => {
+    if (isAIChatDrawerOpen) {
+      chatMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [articleChatMessages, isChatSending, isAIChatDrawerOpen]);
+
+  // Handle Text Selection for Phrase / Idiom Lookup & AI Query (scoped to English article body)
+  useEffect(() => {
+    const updateSelectionFromDom = () => {
       const selection = window.getSelection();
-      if (!selection || selection.isCollapsed) {
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
         setSelectedText(null);
+        setSelectedSentenceContext('');
         return;
       }
+
+      const range = selection.getRangeAt(0);
+      const containerEl = readerBodyRef.current;
+      if (!containerEl || !containerEl.contains(range.commonAncestorContainer)) {
+        setSelectedText(null);
+        setSelectedSentenceContext('');
+        return;
+      }
+
+      const anchorEl =
+        range.startContainer.nodeType === Node.ELEMENT_NODE
+          ? (range.startContainer as HTMLElement)
+          : range.startContainer.parentElement;
+      if (anchorEl?.closest('[data-bilingual-zh="true"]')) {
+        setSelectedText(null);
+        setSelectedSentenceContext('');
+        return;
+      }
+
       // Remove trailing/leading whitespace and newlines so double-click selection doesn't highlight trailing spaces
       const rawText = selection.toString().trim();
       if (rawText && rawText.length >= 1 && rawText.length <= 250 && !rawText.includes('\n')) {
-        const range = selection.getRangeAt(0);
         const rect = range.getBoundingClientRect();
+        const sentenceEl = anchorEl?.closest('[data-sentence]');
+        const surroundingSentence = sentenceEl?.getAttribute('data-sentence') || rawText;
         setSelectedText(rawText);
+        setSelectedSentenceContext(surroundingSentence);
         setSelectionPosition({
           x: rect.left + rect.width / 2,
           y: rect.top - 12
         });
       } else {
         setSelectedText(null);
+        setSelectedSentenceContext('');
       }
     };
 
-    document.addEventListener('mouseup', handleMouseUp);
+    const handleScrollDismiss = () => {
+      setSelectedText(null);
+    };
+
+    document.addEventListener('mouseup', updateSelectionFromDom);
+    document.addEventListener('touchend', updateSelectionFromDom);
+    window.addEventListener('scroll', handleScrollDismiss, true);
     return () => {
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mouseup', updateSelectionFromDom);
+      document.removeEventListener('touchend', updateSelectionFromDom);
+      window.removeEventListener('scroll', handleScrollDismiss, true);
     };
   }, []);
 
-  // Update Article in Local Storage & State
+  // Update Article in Local & Cloud Storage & State
   const handleUpdateArticle = (updatedArticle: Article) => {
     const updatedList = storage.saveArticle(updatedArticle, userUid);
     setArticles(updatedList);
     onArticlesChange?.(updatedList);
+    storage.saveCloudArticle(updatedArticle, userUid).catch(console.error);
   };
 
-  // Inspect Word Click with Instant Cache & Background AI Auto-Enrichment
+  // Inspect Word Click with Instant Cache & Immediate AI/Dictionary Lookup
   const handleWordClick = async (rawWord: string, sentenceContext: string, forceRefresh = false) => {
     const cleanTerm = rawWord.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '').trim();
     if (!cleanTerm || cleanTerm.length < 1) return;
 
     const lowerTerm = cleanTerm.toLowerCase();
-    const existing = wordLookupMap.get(lowerTerm);
+    const existing = findLibraryWord(cleanTerm);
+    const localWordCache = storage.getLocalWordAnalyses(userUid);
     const cachedAnalysis = !forceRefresh
-      ? (cachedWordMap[lowerTerm] || storage.getLocalWordAnalyses()[lowerTerm])
+      ? (cachedWordMap[lowerTerm] || localWordCache[lowerTerm])
       : null;
 
-    // Pronounce term with TTS using chosen voice
-    tts.speak(cleanTerm, {
-      rate: readerSettings.speechRate || 1.0,
-      voiceURI: readerSettings.voiceURI
-    });
+    setIsAddingCategoryInReader(false);
+    setNewCategoryNameInReader('');
+    setSelectedSaveCategory(existing?.category || '');
 
-    // 1. If in user's library, instant display
+    // Do not interrupt active full-article or sentence TTS playback when tapping a word
+    if (!isPlayingTTS) {
+      tts.speak(cleanTerm, {
+        rate: readerSettingsRef.current.speechRate || 1.0,
+        voiceURI: readerSettingsRef.current.voiceURI
+      });
+    }
+
+    // 1. If in user's library (including inflected lemma match), instant display
     if (existing) {
+      const matchedCache =
+        cachedWordMap[existing.term.toLowerCase()] ||
+        localWordCache[existing.term.toLowerCase()] ||
+        cachedAnalysis;
       setInspectedWord({
         term: existing.term,
         pos: existing.pos,
         def: existing.def,
-        defEn: existing.defEn || cachedAnalysis?.defEn || '',
-        phonetic: cachedAnalysis?.phonetic || '',
-        example: existing.ex || cachedAnalysis?.ex || '',
-        exampleZh: cachedAnalysis?.exZh || '',
+        defEn: existing.defEn || matchedCache?.defEn || '',
+        phonetic: matchedCache?.phonetic || '',
+        example: existing.ex || matchedCache?.ex || '',
+        exampleZh: matchedCache?.exZh || '',
         sentenceContext: sentenceContext.trim(),
         existingWord: existing,
         isLoading: false,
-        hasAILookup: true
+        hasAILookup: true,
+        sourceLabel: '我的單字庫'
       });
       setCustomDefEdit(existing.def);
       setIsEditingDef(false);
@@ -368,14 +556,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       return;
     }
 
-    // 2. If cached in local storage from previous query, instant display (0 AI quota!)
-    const isCachedDefValid =
-      cachedAnalysis &&
-      cachedAnalysis.def &&
-      cachedAnalysis.def.trim().toLowerCase() !== lowerTerm &&
-      cachedAnalysis.def.trim().length > 0;
-
-    if (isCachedDefValid) {
+    // 2. If cached in local storage (with valid Chinese definition), instant display (0 AI quota!)
+    if (cachedAnalysis && isValidChineseDefClient(cachedAnalysis.def, cleanTerm)) {
       setInspectedWord({
         term: cleanTerm,
         pos: cachedAnalysis.pos || 'n.',
@@ -387,7 +569,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         sentenceContext: sentenceContext.trim(),
         existingWord: undefined,
         isLoading: false,
-        hasAILookup: true
+        hasAILookup: true,
+        sourceLabel: '本地快取（免耗額度）'
       });
       setCustomDefEdit(cachedAnalysis.def);
       setIsEditingDef(false);
@@ -397,7 +580,38 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       return;
     }
 
-    // 3. Brand-new word: show placeholder. Auto-fetch only if autoAILookup is enabled.
+    // 2.5 Check current article pre-extracted keyVocabulary before spending AI quota
+    const articleVocabHit = !forceRefresh
+      ? currentArticle?.keyVocabulary?.find(
+          (k) =>
+            k.term.trim().toLowerCase() === lowerTerm &&
+            isValidChineseDefClient(k.def, k.term)
+        )
+      : undefined;
+    if (articleVocabHit) {
+      setInspectedWord({
+        term: articleVocabHit.term,
+        pos: (articleVocabHit.pos as POS) || 'n.',
+        def: articleVocabHit.def,
+        defEn: articleVocabHit.defEn || '',
+        phonetic: '',
+        example: articleVocabHit.ex || sentenceContext.trim(),
+        exampleZh: '',
+        sentenceContext: sentenceContext.trim(),
+        existingWord: undefined,
+        isLoading: false,
+        hasAILookup: true,
+        sourceLabel: '本篇精選生詞'
+      });
+      setCustomDefEdit(articleVocabHit.def);
+      setIsEditingDef(false);
+      setCustomExEdit(articleVocabHit.ex || sentenceContext.trim());
+      setIsEditingEx(false);
+      setShowOriginalContext(false);
+      return;
+    }
+
+    // 3. Brand-new word tapped by user: show loading and fetch immediately
     setInspectedWord({
       term: cleanTerm,
       pos: 'n.',
@@ -408,9 +622,9 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       exampleZh: '',
       sentenceContext: sentenceContext.trim(),
       existingWord: undefined,
-      isLoading: appSettings?.autoAILookup === true, // only show spinner if auto mode
+      isLoading: true,
       hasAILookup: true,
-      needsAILookup: appSettings?.autoAILookup !== true // flag: waiting for manual trigger
+      needsAILookup: false
     });
     setCustomDefEdit('');
     setIsEditingDef(false);
@@ -418,27 +632,24 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     setIsEditingEx(false);
     setShowOriginalContext(false);
 
-    // Only auto-fetch if user has enabled autoAILookup in settings
-    if (appSettings?.autoAILookup !== true) return;
-
     try {
       const res = await fetch('/api/ai/article-lookup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(appSettings?.geminiApiKey ? { 'x-gemini-api-key': appSettings.geminiApiKey } : {})
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
         },
         body: JSON.stringify({
           word: cleanTerm,
           sentence: sentenceContext,
           forceRefresh,
-          apiKey: appSettings?.geminiApiKey
+          apiKey: effectiveApiKey
         })
       });
 
       if (res.ok) {
         const data = await res.json();
-        const validDef = data.def && data.def.trim().toLowerCase() !== lowerTerm ? data.def : '';
+        const validDef = isValidChineseDefClient(data.def, cleanTerm) ? data.def.trim() : '';
         const analysisData: WordAnalysisData = {
           term: data.term || cleanTerm,
           pos: (data.pos as POS) || 'n.',
@@ -451,9 +662,9 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           cachedAt: Date.now()
         };
 
-        // Cache in background only if definition is valid
+        // Cache in background only if Chinese definition is valid
         if (validDef) {
-          storage.saveWordAnalysis(cleanTerm, analysisData);
+          storage.saveWordAnalysis(cleanTerm, analysisData, userUid);
           setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
         }
 
@@ -469,8 +680,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             example: analysisData.ex,
             exampleZh: analysisData.exZh,
             isLoading: false,
-            needsAILookup: false,
-            hasAILookup: true
+            needsAILookup: !validDef,
+            hasAILookup: true,
+            sourceLabel: data.sourceLabel || (data.fromCache ? '快取詞庫' : 'AI 與權威詞典深度解析'),
+            cambridgeBlocked: Boolean(data.cambridgeBlocked)
           };
         });
         setCustomDefEdit(validDef);
@@ -504,19 +717,19 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(appSettings?.geminiApiKey ? { 'x-gemini-api-key': appSettings.geminiApiKey } : {})
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
         },
         body: JSON.stringify({
           word: cleanTerm,
           sentence: inspectedWord.sentenceContext,
           forceRefresh: true,
-          apiKey: appSettings?.geminiApiKey
+          apiKey: effectiveApiKey
         })
       });
 
       if (res.ok) {
         const data = await res.json();
-        const validDef = data.def && data.def.trim().toLowerCase() !== lowerTerm ? data.def : '';
+        const validDef = isValidChineseDefClient(data.def, cleanTerm) ? data.def.trim() : '';
         const analysisData: WordAnalysisData = {
           term: data.term || cleanTerm,
           pos: (data.pos as POS) || 'n.',
@@ -530,7 +743,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         };
 
         if (validDef) {
-          storage.saveWordAnalysis(cleanTerm, analysisData);
+          storage.saveWordAnalysis(cleanTerm, analysisData, userUid);
           setCachedWordMap((prev) => ({ ...prev, [lowerTerm]: analysisData }));
         }
 
@@ -545,8 +758,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             example: analysisData.ex,
             exampleZh: analysisData.exZh,
             isLoading: false,
-            needsAILookup: false,
-            hasAILookup: true
+            needsAILookup: !validDef,
+            hasAILookup: true,
+            sourceLabel: data.sourceLabel || 'AI 與權威詞典深度解析',
+            cambridgeBlocked: Boolean(data.cambridgeBlocked)
           } : null
         );
         setCustomDefEdit(validDef);
@@ -561,26 +776,37 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   };
 
   // Send message to AI Reading Companion
-  const handleSendArticleChat = async (customPrompt?: string, contextOverride?: string) => {
-    if (!currentArticle) return;
+  const handleSendArticleChat = async (customPrompt?: string, contextOverride?: string, isRetry = false) => {
+    if (!currentArticle || isChatSending) return;
     const promptToSend = (customPrompt || chatInputText).trim();
-    const ctx = contextOverride || chatSelectedContext;
+    const ctx = contextOverride !== undefined ? contextOverride : chatSelectedContext;
     if (!promptToSend && !ctx) return;
 
     const userMsgContent = promptToSend || (ctx ? `請幫我詳細解析這段文字在文章中的含義、語境與文法：「${ctx}」` : '請為我導讀這篇文章');
 
-    const userMsg: ArticleChatMessage = {
-      id: `usr-${Date.now()}`,
-      role: 'user',
-      content: userMsgContent,
-      timestamp: Date.now(),
-      highlightedSentence: ctx || undefined
-    };
+    let baseHistory = articleChatMessages;
+    let newHistory: ArticleChatMessage[];
+    if (isRetry) {
+      // Remove trailing error notice so retry replaces it cleanly without duplicating user bubble
+      const last = baseHistory[baseHistory.length - 1];
+      if (last && last.role === 'model' && last.id.startsWith('err-')) {
+        baseHistory = baseHistory.slice(0, -1);
+      }
+      newHistory = baseHistory;
+    } else {
+      const userMsg: ArticleChatMessage = {
+        id: `usr-${Date.now()}`,
+        role: 'user',
+        content: userMsgContent,
+        timestamp: Date.now(),
+        highlightedSentence: ctx || undefined
+      };
+      newHistory = [...baseHistory, userMsg];
+      setChatInputText('');
+      setChatSelectedContext(null);
+    }
 
-    const newHistory = [...articleChatMessages, userMsg];
     setArticleChatMessages(newHistory);
-    setChatInputText('');
-    setChatSelectedContext(null);
     setIsChatSending(true);
 
     try {
@@ -588,7 +814,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(appSettings?.geminiApiKey ? { 'x-gemini-api-key': appSettings.geminiApiKey } : {})
+          ...(effectiveApiKey ? { 'x-gemini-api-key': effectiveApiKey } : {})
         },
         body: JSON.stringify({
           article: {
@@ -601,16 +827,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           messages: newHistory.map((m) => ({ role: m.role, content: m.content })),
           userPrompt: userMsgContent,
           selectedContext: ctx || undefined,
-          apiKey: appSettings?.geminiApiKey
+          apiKey: effectiveApiKey
         })
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.reply) {
         const modelMsg: ArticleChatMessage = {
           id: `mod-${Date.now()}`,
           role: 'model',
-          content: data.reply || '已完成文章解析。',
+          content: data.reply,
           timestamp: Date.now(),
           suggestedWords: data.suggestedWords || []
         };
@@ -619,7 +845,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         const errorMsg: ArticleChatMessage = {
           id: `err-${Date.now()}`,
           role: 'model',
-          content: 'AI 伴讀導師暫時繁忙，請稍候重試。',
+          content: data?.error || data?.reply || 'AI 伴讀導師暫時繁忙，請稍候重試。',
           timestamp: Date.now()
         };
         setArticleChatMessages([...newHistory, errorMsg]);
@@ -643,9 +869,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     if (!inspectedWord || !currentArticle) return;
 
     const termToSave = inspectedWord.term.trim();
-    const defToSave = isEditingDef && customDefEdit.trim()
-      ? customDefEdit.trim()
-      : (inspectedWord.def || inspectedWord.term);
+    const candidateDef = isEditingDef ? customDefEdit.trim() : (inspectedWord.def || '').trim();
+    if (!isValidChineseDefClient(candidateDef, termToSave)) {
+      setIsEditingDef(true);
+      showReaderToast('⚠️ 尚未取得有效繁體中文釋義，請點選重新查詢或手動填寫後再收錄。');
+      return;
+    }
+
+    const defToSave = candidateDef;
     const exToSave = isEditingEx && customExEdit.trim()
       ? customExEdit.trim()
       : (inspectedWord.example || inspectedWord.sentenceContext || `Context from article: ${currentArticle.title}`);
@@ -663,7 +894,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
     if (isExactDefAlreadyInLib) {
       // Just record to article saved terms if not recorded
-      if (!currentArticle.savedWordTerms.includes(termToSave)) {
+      if (!currentArticle.savedWordTerms.some((t) => t.toLowerCase() === cleanLower)) {
         const updatedSaved = [...currentArticle.savedWordTerms, termToSave];
         handleUpdateArticle({
           ...currentArticle,
@@ -674,13 +905,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       return;
     }
 
-    // Create new word with concise flashcard example sentence
+    // Create new word with concise flashcard example sentence & chosen category
     const newWord: Partial<Word> = {
       term: termToSave,
       pos: inspectedWord.pos,
       def: defToSave,
       defEn: inspectedWord.defEn || '',
       ex: exToSave,
+      category: selectedSaveCategory.trim() || undefined,
       level: 0,
       interval: 1,
       easeFactor: 2.5
@@ -689,7 +921,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     onAddWords([newWord]);
 
     // Update article saved terms
-    const updatedTerms = currentArticle.savedWordTerms.includes(termToSave)
+    const updatedTerms = currentArticle.savedWordTerms.some((t) => t.toLowerCase() === cleanLower)
       ? currentArticle.savedWordTerms
       : [...currentArticle.savedWordTerms, termToSave];
 
@@ -707,7 +939,19 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       });
     } catch {}
 
+    showReaderToast(`✅ 已收錄「${termToSave}」至單字庫`);
     setInspectedWord(null);
+  };
+
+  // Remove a saved term badge from the current article's savedWordTerms
+  const handleRemoveSavedWordTerm = (termToRemove: string) => {
+    if (!currentArticle) return;
+    const clean = termToRemove.trim().toLowerCase();
+    handleUpdateArticle({
+      ...currentArticle,
+      savedWordTerms: currentArticle.savedWordTerms.filter((t) => t.trim().toLowerCase() !== clean)
+    });
+    showReaderToast(`已從本篇移除「${termToRemove}」標記`);
   };
 
   // Analyze Sentence Grammar & Sentence Structure (Per Sentence or Segment)
@@ -719,12 +963,18 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
     // 1. Check local background cache & article saved analyses first (saves AI quota!)
     if (!forceRefresh) {
-      const cached =
-        currentArticle?.sentenceAnalyses?.[cleanKey] ||
-        cachedSentenceMap[cleanKey] ||
-        storage.getLocalSentenceAnalyses()[cleanKey];
+      const articleCached = currentArticle?.sentenceAnalyses?.[cleanKey];
+      const localCached = cachedSentenceMap[cleanKey] || storage.getLocalSentenceAnalyses(userUid)[cleanKey];
+      const cached = articleCached || localCached;
 
-      if (cached && (cached.grammarBreakdown || cached.translation)) {
+      if (
+        cached &&
+        cached.translation &&
+        cached.grammarBreakdown &&
+        !cached.translation.includes('暫時無法連線至 AI') &&
+        !cached.translation.includes('解析暫時無法完成') &&
+        !cached.grammarBreakdown.includes('分析服務暫時繁忙')
+      ) {
         setAnalyzedSentence({
           ...cached,
           sentence: clean,
@@ -759,12 +1009,12 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         })
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && !data?.error && !data?.isOfflineFallback && data?.translation && data?.grammarBreakdown) {
         const analysisData: SentenceAnalysisData = {
           sentence: clean,
-          translation: data.translation || '',
-          grammarBreakdown: data.grammarBreakdown || '',
+          translation: data.translation,
+          grammarBreakdown: data.grammarBreakdown,
           vocabularyNotes: data.vocabularyNotes || [],
           learningTip: data.learningTip || '',
           isLoading: false,
@@ -775,7 +1025,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         setAnalyzedSentence(analysisData);
 
         // Save in background local storage cache
-        storage.saveSentenceAnalysis(clean, analysisData);
+        storage.saveSentenceAnalysis(clean, analysisData, userUid);
         setCachedSentenceMap((prev) => ({ ...prev, [cleanKey]: analysisData }));
 
         // Also persist inside current article record
@@ -790,38 +1040,64 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           handleUpdateArticle(updatedArticle);
         }
       } else {
+        const errMsg = data?.error || data?.translation || '句型解析暫時失敗，請點擊上方重試或檢查 API Key';
         setAnalyzedSentence((prev) =>
-          prev ? { ...prev, translation: '解析暫時無法完成，請稍後重試', isLoading: false } : null
+          prev
+            ? {
+                ...prev,
+                translation: errMsg,
+                grammarBreakdown: '系統未寫入失敗快取，您可點擊右上角重新解析。',
+                isLoading: false
+              }
+            : null
         );
       }
     } catch (err) {
       console.error('Analyze sentence error:', err);
-      setAnalyzedSentence((prev) => (prev ? { ...prev, isLoading: false } : null));
+      setAnalyzedSentence((prev) =>
+        prev
+          ? {
+              ...prev,
+              translation: '網路連線異常，解析暫時無法完成，請稍後重試。',
+              grammarBreakdown: '請確認網路或後端服務正常後點擊重新解析。',
+              isLoading: false
+            }
+          : null
+      );
     }
   };
 
   // TTS Read Single Specific Sentence
   const handleSpeakSingleSentence = (sentenceText: string, sentenceKey: string) => {
     if (activeSpeechSentenceId === sentenceKey && isPlayingTTS) {
+      ttsSessionRef.current += 1;
       tts.stop();
       setIsPlayingTTS(false);
       setActiveSpeechSentenceId(null);
       return;
     }
 
+    const sessionId = ++ttsSessionRef.current;
     tts.stop();
     setIsPlayingTTS(true);
     setActiveSpeechParagraph(null);
     setActiveSpeechSentenceId(sentenceKey);
 
     tts.speak(sentenceText, {
-      rate: readerSettings.speechRate || 1.0,
-      voiceURI: readerSettings.voiceURI,
+      rate: readerSettingsRef.current.speechRate || 1.0,
+      voiceURI: readerSettingsRef.current.voiceURI,
       onEnd: () => {
+        if (ttsSessionRef.current !== sessionId) return;
+        setIsPlayingTTS(false);
+        setActiveSpeechSentenceId(null);
+      },
+      onCancel: () => {
+        if (ttsSessionRef.current !== sessionId) return;
         setIsPlayingTTS(false);
         setActiveSpeechSentenceId(null);
       },
       onError: () => {
+        if (ttsSessionRef.current !== sessionId) return;
         setIsPlayingTTS(false);
         setActiveSpeechSentenceId(null);
       }
@@ -831,15 +1107,17 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   // TTS Read Starting from a Specific Paragraph
   const handleStartSpeechFrom = (startIndex: number) => {
     if (!currentArticle) return;
-    const paragraphs = currentArticle.content.split(/\n\s*\n/).filter(Boolean);
+    const paragraphs = splitIntoParagraphs(currentArticle.content);
     if (startIndex >= paragraphs.length || startIndex < 0) return;
 
+    const sessionId = ++ttsSessionRef.current;
     tts.stop();
     setIsPlayingTTS(true);
     setActiveSpeechSentenceId(null);
     let currentIdx = startIndex;
 
     const playNext = () => {
+      if (ttsSessionRef.current !== sessionId) return;
       if (currentIdx >= paragraphs.length) {
         setIsPlayingTTS(false);
         setActiveSpeechParagraph(null);
@@ -850,13 +1128,20 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       const text = paragraphs[currentIdx];
 
       tts.speak(text, {
-        rate: readerSettings.speechRate || 1.0,
-        voiceURI: readerSettings.voiceURI,
+        rate: readerSettingsRef.current.speechRate || 1.0,
+        voiceURI: readerSettingsRef.current.voiceURI,
         onEnd: () => {
+          if (ttsSessionRef.current !== sessionId) return;
           currentIdx++;
           playNext();
         },
+        onCancel: () => {
+          if (ttsSessionRef.current !== sessionId) return;
+          setIsPlayingTTS(false);
+          setActiveSpeechParagraph(null);
+        },
         onError: () => {
+          if (ttsSessionRef.current !== sessionId) return;
           setIsPlayingTTS(false);
           setActiveSpeechParagraph(null);
         }
@@ -869,6 +1154,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   // TTS Toggle Play / Pause Full Article
   const handleTogglePlayTTS = () => {
     if (isPlayingTTS) {
+      ttsSessionRef.current += 1;
       tts.stop();
       setIsPlayingTTS(false);
       return;
@@ -879,6 +1165,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
   // TTS Stop
   const handleStopTTS = () => {
+    ttsSessionRef.current += 1;
     tts.stop();
     setIsPlayingTTS(false);
     setActiveSpeechParagraph(null);
@@ -895,24 +1182,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   // TTS Next Paragraph
   const handleNextSpeechParagraph = () => {
     if (!currentArticle) return;
-    const paragraphs = currentArticle.content.split(/\n\s*\n/).filter(Boolean);
+    const paragraphs = splitIntoParagraphs(currentArticle.content);
     const currentIdx = activeSpeechParagraph ?? 0;
     const nextIdx = Math.min(paragraphs.length - 1, currentIdx + 1);
     handleStartSpeechFrom(nextIdx);
   };
 
   // Extract Keywords from Article
-  const handleExtractKeywords = async () => {
+  const handleExtractKeywords = async (forceRefresh = false) => {
     if (!currentArticle) return;
     setIsVocabDrawerOpen(true);
 
     const existingVocab = currentArticle.keyVocabulary;
     const hasValidVocab =
+      !forceRefresh &&
       Array.isArray(existingVocab) &&
       existingVocab.length > 0 &&
-      existingVocab.every(
-        (k) => k.def && k.def.trim().toLowerCase() !== k.term.trim().toLowerCase()
-      );
+      existingVocab.every((k) => isValidChineseDefClient(k.def, k.term));
 
     if (hasValidVocab) {
       setExtractedKeywords(existingVocab);
@@ -933,9 +1219,11 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         })
       });
 
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
-        const list = data.vocabulary || [];
+        const list = (data.vocabulary || []).filter((k: ArticleKeyWord) =>
+          Boolean(k?.term && (isValidChineseDefClient(k.def, k.term) || k.defEn))
+        );
         setExtractedKeywords(list);
         handleUpdateArticle({
           ...currentArticle,
@@ -943,7 +1231,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         });
         showReaderToast(`✨ 成功提煉 ${list.length} 個核心學術單字！`);
       } else {
-        showReaderToast('提煉關鍵單字失敗，請稍候重試。');
+        showReaderToast(data?.error || '提煉關鍵單字失敗，請稍候重試。');
       }
     } catch (err) {
       console.error('Extract keywords error:', err);
@@ -969,18 +1257,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           apiKey: effectiveApiKey
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.translationZh) {
-          handleUpdateArticle({
-            ...currentArticle,
-            translationZh: data.translationZh
-          });
-          updateSettings({ showBilingual: true });
-          showReaderToast('🌐 雙語全文翻譯已生成並切換為對照模式！');
-        }
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.translationZh) {
+        handleUpdateArticle({
+          ...currentArticle,
+          translationZh: data.translationZh
+        });
+        updateSettings({ showBilingual: true });
+        showReaderToast('🌐 雙語全文翻譯已生成並切換為對照模式！');
       } else {
-        showReaderToast('翻譯文章失敗，請檢查 API Key 或稍後重試。');
+        showReaderToast(data?.error || '翻譯文章失敗，請檢查 API Key 或稍後重試。');
       }
     } catch (e) {
       console.error('Translation error:', e);
@@ -1007,20 +1293,18 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           apiKey: effectiveApiKey
         })
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.quiz && data.quiz.length > 0) {
-          handleUpdateArticle({
-            ...currentArticle,
-            quiz: data.quiz
-          });
-          setIsQuizOpen(true);
-          setIsQuizSubmitted(false);
-          setQuizAnswers({});
-          showReaderToast('📝 閱讀理解測驗已生成！');
-        }
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(data?.quiz) && data.quiz.length > 0) {
+        handleUpdateArticle({
+          ...currentArticle,
+          quiz: data.quiz
+        });
+        setIsQuizOpen(true);
+        setIsQuizSubmitted(false);
+        setQuizAnswers({});
+        showReaderToast('📝 閱讀理解測驗已生成！');
       } else {
-        showReaderToast('生成測驗失敗，請稍後重試。');
+        showReaderToast(data?.error || '生成測驗失敗，請稍後重試。');
       }
     } catch (e) {
       console.error('Generate quiz error:', e);
@@ -1034,18 +1318,24 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
   const handleBatchAddKeywords = (keywordsToBatch: ArticleKeyWord[]) => {
     if (!currentArticle || keywordsToBatch.length === 0) return;
 
-    const newWords: Partial<Word>[] = keywordsToBatch.map((k) => {
-      const safeDef =
-        k.def && k.def.trim().toLowerCase() !== k.term.trim().toLowerCase()
-          ? k.def.trim()
-          : k.defEn || k.term;
+    const validItems = keywordsToBatch.filter(
+      (k) => isValidChineseDefClient(k.def, k.term) || (k.defEn && k.defEn.trim().length > 0)
+    );
 
+    if (validItems.length === 0) {
+      showReaderToast('⚠️ 所選生詞尚無有效繁中或英文釋義，請點擊「🔄 重新提煉」或從文章內點擊查詢。');
+      return;
+    }
+
+    const newWords: Partial<Word>[] = validItems.map((k) => {
+      const safeDef = isValidChineseDefClient(k.def, k.term) ? k.def.trim() : k.defEn!.trim();
       return {
         term: k.term,
         pos: k.pos || 'n.',
         def: safeDef,
         defEn: k.defEn || '',
         ex: k.ex || `From article: ${currentArticle.title}`,
+        category: selectedSaveCategory.trim() || undefined,
         level: 0,
         interval: 1,
         easeFactor: 2.5
@@ -1054,9 +1344,15 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
     onAddWords(newWords);
 
-    const updatedTerms = Array.from(
-      new Set([...currentArticle.savedWordTerms, ...keywordsToBatch.map((k) => k.term)])
-    );
+    const existingLower = new Set(currentArticle.savedWordTerms.map((t) => t.trim().toLowerCase()));
+    const updatedTerms = [...currentArticle.savedWordTerms];
+    for (const k of validItems) {
+      const low = k.term.trim().toLowerCase();
+      if (!existingLower.has(low)) {
+        existingLower.add(low);
+        updatedTerms.push(k.term);
+      }
+    }
 
     handleUpdateArticle({
       ...currentArticle,
@@ -1066,6 +1362,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     try {
       confetti({ particleCount: 35, spread: 60 });
     } catch {}
+
+    const skippedCount = keywordsToBatch.length - validItems.length;
+    showReaderToast(
+      skippedCount > 0
+        ? `✅ 已收錄 ${validItems.length} 個單字（略過 ${skippedCount} 個缺釋義項目）`
+        : `✅ 已成功收錄 ${validItems.length} 個生詞至單字庫！`
+    );
   };
 
   // AI Generate Article
@@ -1097,6 +1400,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         const updatedList = storage.saveArticle(newArt, userUid);
         setArticles(updatedList);
         onArticlesChange?.(updatedList);
+        storage.saveCloudArticle(newArt, userUid).catch(console.error);
         setActiveArticleId(newArt.id);
         setIsGenerateModalOpen(false);
         setGenTopic('');
@@ -1123,7 +1427,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       return;
     }
 
-    const currentSettings = storage.getLocalSettings();
+    const currentSettings = storage.getLocalSettings(userUid);
     const apiKey = appSettings?.geminiApiKey || currentSettings?.geminiApiKey;
 
     setIsImportingByAI(true);
@@ -1158,6 +1462,15 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
       if (art.category && ['Tech', 'Science', 'Story', 'News', 'Business', 'Daily', 'Custom'].includes(art.category)) {
         setImportCategory(art.category as ArticleCategory);
       }
+      setImportedArticleMeta({
+        subtitle: art.subtitle,
+        author: art.author,
+        source: art.source || cleanUrl || undefined,
+        summary: art.summary,
+        keyVocabulary: Array.isArray(art.keyVocabulary) ? art.keyVocabulary : undefined,
+        quiz: Array.isArray(art.quiz) ? art.quiz : undefined,
+        grammarPoints: Array.isArray(art.grammarPoints) ? art.grammarPoints : undefined
+      });
       showReaderToast('✨ AI 已完成文章擷取與雙語翻譯排版！請檢視後點擊確認建立。');
     } catch (err: any) {
       showReaderToast(err?.message || 'AI 擷取文章時發生錯誤，請稍後重試');
@@ -1176,15 +1489,43 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     const wordsCount = importContent.split(/\s+/).filter(Boolean).length;
     const readTime = Math.max(1, Math.round(wordsCount / 120));
 
+    const prebuiltAnalyses: Record<string, SentenceAnalysisData> = {};
+    if (Array.isArray(importedArticleMeta?.grammarPoints)) {
+      importedArticleMeta.grammarPoints.forEach((gp) => {
+        if (gp?.sentence && (gp.structure || gp.explanation)) {
+          const cleanSent = gp.sentence.trim();
+          const key = cleanSent.toLowerCase();
+          prebuiltAnalyses[key] = {
+            sentence: cleanSent,
+            translation: gp.structure || gp.grammarType || '重點句型結構解析',
+            grammarBreakdown: gp.explanation,
+            vocabularyNotes: [],
+            learningTip: gp.grammarType ? `句型核心分類：${gp.grammarType}` : '',
+            isLoading: false,
+            fromCache: true,
+            cachedAt: Date.now()
+          };
+        }
+      });
+    }
+
     const newArt: Article = {
       id: `art-custom-${Date.now()}`,
       title: importTitle.trim(),
+      subtitle: importedArticleMeta?.subtitle || undefined,
+      author: importedArticleMeta?.author || undefined,
+      source: importedArticleMeta?.source || (importUrl.trim() || undefined),
+      summary: importedArticleMeta?.summary || undefined,
       level: importLevel,
       category: importCategory,
       content: importContent.trim(),
       translationZh: importTranslation.trim() || undefined,
       wordCount: wordsCount,
       readTimeMinutes: readTime,
+      keyVocabulary: importedArticleMeta?.keyVocabulary,
+      quiz: importedArticleMeta?.quiz,
+      grammarPoints: importedArticleMeta?.grammarPoints,
+      sentenceAnalyses: Object.keys(prebuiltAnalyses).length > 0 ? prebuiltAnalyses : undefined,
       savedWordTerms: [],
       isCustom: true
     };
@@ -1192,12 +1533,14 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     const updated = storage.saveArticle(newArt, userUid);
     setArticles(updated);
     onArticlesChange?.(updated);
+    storage.saveCloudArticle(newArt, userUid).catch(console.error);
     setActiveArticleId(newArt.id);
     setIsImportModalOpen(false);
     setImportTitle('');
     setImportContent('');
     setImportTranslation('');
     setImportUrl('');
+    setImportedArticleMeta(null);
   };
 
   // Filtered Articles Shelf
@@ -1219,17 +1562,22 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
     });
   }, [articles, searchQuery, categoryFilter, levelFilter]);
 
-  // Split paragraph text into individual sentences for granular per-sentence playback & grammar analysis
+  // Split paragraph text into individual sentences (avoiding common abbreviations & decimals)
   const splitParagraphIntoSentences = (text: string): { id: number; text: string }[] => {
     if (!text || !text.trim()) return [];
-    // Sentence regex ending with period, exclamation, question mark (with optional quotes)
+    const DOT_TOKEN = '\u0000';
+    let safeText = text
+      .replace(/(\d)\.(\d)/g, `$1${DOT_TOKEN}$2`)
+      .replace(/\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|Inc|Ltd|Fig|No|Vol|Dept|Est|Approx)\./gi, `$1${DOT_TOKEN}`)
+      .replace(/\b(e\.g|i\.e|U\.S|U\.K|Ph\.D|a\.m|p\.m)\./gi, (m) => m.replace(/\./g, DOT_TOKEN));
+
     const sentenceRegex = /[^.!?]+[.!?]+["'”’)]?|[^.!?\n]+$/g;
-    const matches = text.match(sentenceRegex);
+    const matches = safeText.match(sentenceRegex);
     if (!matches || matches.length === 0) {
       return [{ id: 0, text: text.trim() }];
     }
     return matches
-      .map((s, idx) => ({ id: idx, text: s.trim() }))
+      .map((s, idx) => ({ id: idx, text: s.replaceAll(DOT_TOKEN, '.').trim() }))
       .filter((item) => item.text.length > 0);
   };
 
@@ -1256,7 +1604,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         {sentences.map((sent, sIndex) => {
           const sentenceKey = `${pIndex}-${sIndex}`;
           const isThisSentencePlaying = activeSpeechSentenceId === sentenceKey && isPlayingTTS;
-          const tokens = sent.text.split(/(\s+|[.,!?;:"()—]+)/);
+          const tokens = sent.text.split(/(\s+|[.,!?;:"()—–“”/]+)/);
           const cleanSentKey = sent.text.trim().toLowerCase();
           const isSentenceAnalyzed = Boolean(
             currentArticle?.sentenceAnalyses?.[cleanSentKey] ||
@@ -1266,6 +1614,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           return (
             <span
               key={`s-${sentenceKey}`}
+              data-sentence={sent.text}
               className={`inline rounded-xl transition-all duration-200 py-0.5 px-1 mr-1.5 ${
                 isThisSentencePlaying
                   ? 'bg-indigo-100/90 dark:bg-indigo-900/60 ring-2 ring-indigo-500 text-indigo-950 dark:text-indigo-100 font-medium'
@@ -1274,20 +1623,20 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             >
               {/* Sentence Word Tokens */}
               {tokens.map((token, tIndex) => {
-                const isWord = /^[a-zA-Z0-9'-]+$/.test(token);
+                const isWord = /^[a-zA-Z0-9'’-]+$/.test(token);
                 if (!isWord) {
                   return <span key={`t-${sentenceKey}-${tIndex}`}>{token}</span>;
                 }
 
-                const lower = token.toLowerCase();
-                const existingWord = wordLookupMap.get(lower);
-                const isSavedInArticle = currentArticle?.savedWordTerms.some(
-                  (t) => t.toLowerCase() === lower
+                const existingWord = findLibraryWord(token);
+                const lemmaCandidates = extractLemmaCandidates(token);
+                const isSavedInArticle = currentArticle?.savedWordTerms.some((t) =>
+                  lemmaCandidates.includes(t.trim().toLowerCase())
                 );
 
                 // Determine visual styling
                 let wordStyle =
-                  'rounded px-0.5 transition-colors duration-150 inline select-text md:cursor-text cursor-pointer active:bg-indigo-100 dark:active:bg-indigo-900/60 ';
+                  'rounded px-0.5 transition-colors duration-150 inline select-text cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/40 active:bg-indigo-100 dark:active:bg-indigo-900/60 ';
 
                 if (isSavedInArticle && showSavedWordsHighlight) {
                   wordStyle +=
@@ -1309,17 +1658,12 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   <span
                     key={`w-${sentenceKey}-${tIndex}`}
                     onClick={(e) => {
-                      // On mobile / tablet (touch device or screen width < 1024), single tap pops up word inspector
-                      const isTouchOrMobile =
-                        'ontouchstart' in window ||
-                        navigator.maxTouchPoints > 0 ||
-                        window.matchMedia('(pointer: coarse)').matches ||
-                        window.innerWidth < 1024;
-
-                      if (isTouchOrMobile) {
-                        e.stopPropagation();
-                        handleWordClick(token, sent.text);
+                      const sel = window.getSelection();
+                      if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+                        return;
                       }
+                      e.stopPropagation();
+                      handleWordClick(token, sent.text);
                     }}
                     className={wordStyle}
                   >
@@ -1386,8 +1730,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
   // 1. DETAIL / READING VIEW
   if (currentArticle) {
-    const paragraphs = currentArticle.content.split(/\n\s*\n/).filter(Boolean);
-    const translationParagraphs = (currentArticle.translationZh || '').split(/\n\s*\n/).filter(Boolean);
+    const paragraphs = splitIntoParagraphs(currentArticle.content);
+    const translationParagraphs = splitIntoParagraphs(currentArticle.translationZh || '');
 
     // Font styles based on settings
     const fontSizeClass =
@@ -1437,7 +1781,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                 e.preventDefault();
               }}
               onClick={() => {
-                handleWordClick(selectedText, selectedText);
+                handleWordClick(selectedText, selectedSentenceContext || selectedText);
                 setSelectedText(null);
               }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-full text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95 flex items-center gap-1 shrink-0"
@@ -1712,7 +2056,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
                 {/* Article Vocab / Saved Words */}
                 <button
-                  onClick={handleExtractKeywords}
+                  onClick={() => handleExtractKeywords(false)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/60 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold transition shadow-sm relative"
                   title="檢視本篇生詞庫與重點單字"
                 >
@@ -2230,9 +2574,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         )}
 
         {/* Article Body Content */}
-        <div className={`${fontSizeClass} ${fontFamilyClass} ${lineSpacingClass} text-slate-800 dark:text-slate-100 select-text`}>
+        <div
+          ref={readerBodyRef}
+          className={`${fontSizeClass} ${fontFamilyClass} ${lineSpacingClass} text-slate-800 dark:text-slate-100 select-text`}
+        >
           {paragraphs.map((para, idx) => {
             const zhPara = translationParagraphs[idx];
+            const isLastPara = idx === paragraphs.length - 1;
+            const remainingZh = isLastPara && translationParagraphs.length > paragraphs.length
+              ? translationParagraphs.slice(paragraphs.length)
+              : [];
             const isCurrentlyPlayingThisPara = isPlayingTTS && activeSpeechParagraph === idx;
 
             return (
@@ -2276,9 +2627,15 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                 )}
 
                 {/* Bilingual Chinese Translation if enabled */}
-                {readerSettings.showBilingual && zhPara && (
-                  <div className="mt-2.5 p-3 rounded-xl bg-slate-100/60 dark:bg-slate-900/60 border-l-2 border-indigo-400 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed font-sans">
-                    {zhPara}
+                {readerSettings.showBilingual && (zhPara || remainingZh.length > 0) && (
+                  <div
+                    data-bilingual-zh="true"
+                    className="mt-2.5 p-3 rounded-xl bg-slate-100/60 dark:bg-slate-900/60 border-l-2 border-indigo-400 text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed font-sans space-y-2"
+                  >
+                    {zhPara && <p>{zhPara}</p>}
+                    {remainingZh.map((extraZh, eIdx) => (
+                      <p key={`extra-zh-${eIdx}`}>{extraZh}</p>
+                    ))}
                   </div>
                 )}
               </div>
@@ -2290,7 +2647,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
         <div className="mt-12 pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button
-              onClick={handleExtractKeywords}
+              onClick={() => handleExtractKeywords(false)}
               className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-2 shadow-md transition"
             >
               <Bookmark className="w-4 h-4" />
@@ -2409,12 +2766,12 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                       </div>
                     ) : (
                       <div>
-                        {inspectedWord.def && inspectedWord.def.trim().toLowerCase() !== inspectedWord.term.trim().toLowerCase() ? (
+                        {isValidChineseDefClient(inspectedWord.def, inspectedWord.term) ? (
                           <p className="text-base text-slate-800 dark:text-slate-100">{inspectedWord.def}</p>
                         ) : (
                           <div className="space-y-1.5 py-1">
                             <p className="text-xs text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
-                              ⚠️ 尚未獲取精準中文釋義
+                              ⚠️ 尚未獲取精準中文釋義（可點「自訂釋義」手動填寫或重新查詢）
                             </p>
                             <button
                               onClick={() => handleAILookupForCurrentWord()}
@@ -2425,15 +2782,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                             </button>
                           </div>
                         )}
-                        <div className="flex items-center gap-2 mt-1.5">
-                          {cachedWordMap[inspectedWord.term.toLowerCase()] ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80">
-                              ⚡ 已存儲（免耗額度）
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/80">
-                              <Sparkles className="w-2.5 h-2.5" />
-                              AI 與權威詞典深度解析
+                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                              inspectedWord.existingWord || cachedWordMap[inspectedWord.term.toLowerCase()]
+                                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200/80 dark:border-emerald-800/80'
+                                : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-200/80 dark:border-indigo-800/80'
+                            }`}
+                          >
+                            <Sparkles className="w-2.5 h-2.5" />
+                            {inspectedWord.sourceLabel ||
+                              (cachedWordMap[inspectedWord.term.toLowerCase()]
+                                ? '⚡ 已存儲（免耗額度）'
+                                : 'AI 與權威詞典深度解析')}
+                          </span>
+                          {inspectedWord.cambridgeBlocked && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                              （劍橋官網連線受限，已自動使用備援解析）
                             </span>
                           )}
                         </div>
@@ -2578,14 +2943,105 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <button
-                    onClick={handleSaveInspectedWord}
-                    disabled={inspectedWord.isLoading}
-                    className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-extrabold text-sm shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 transition disabled:opacity-50"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>一鍵收錄至單字庫 (收錄易記短例句)</span>
-                  </button>
+                  <div className="space-y-2.5">
+                    {/* Category Selection before Saving */}
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                          單字分類（選填）
+                        </span>
+                        {!isAddingCategoryInReader && (
+                          <button
+                            type="button"
+                            onClick={() => setIsAddingCategoryInReader(true)}
+                            className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            + 新增分類
+                          </button>
+                        )}
+                      </div>
+                      {isAddingCategoryInReader ? (
+                        <div className="flex gap-1.5">
+                          <input
+                            type="text"
+                            value={newCategoryNameInReader}
+                            onChange={(e) => setNewCategoryNameInReader(e.target.value)}
+                            placeholder="輸入新分類名稱..."
+                            className="flex-1 px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cleanCat = newCategoryNameInReader.trim();
+                              if (cleanCat) {
+                                onAddCategory?.(cleanCat);
+                                setSelectedSaveCategory(cleanCat);
+                              }
+                              setNewCategoryNameInReader('');
+                              setIsAddingCategoryInReader(false);
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold"
+                          >
+                            確定
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewCategoryNameInReader('');
+                              setIsAddingCategoryInReader(false);
+                            }}
+                            className="px-2 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedSaveCategory}
+                          onChange={(e) => {
+                            if (e.target.value === '__ADD_NEW__') {
+                              setIsAddingCategoryInReader(true);
+                            } else {
+                              setSelectedSaveCategory(e.target.value);
+                            }
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">未分類（預設）</option>
+                          {availableCategories.map((cat) => (
+                            <option key={cat} value={cat}>
+                              {cat}
+                            </option>
+                          ))}
+                          <option value="__ADD_NEW__">+ 新增自訂分類...</option>
+                        </select>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={handleSaveInspectedWord}
+                      disabled={
+                        inspectedWord.isLoading ||
+                        !isValidChineseDefClient(
+                          isEditingDef ? customDefEdit : inspectedWord.def,
+                          inspectedWord.term
+                        )
+                      }
+                      className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-extrabold text-sm shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>
+                        {inspectedWord.isLoading
+                          ? '正在查詢釋義中...'
+                          : isValidChineseDefClient(
+                              isEditingDef ? customDefEdit : inspectedWord.def,
+                              inspectedWord.term
+                            )
+                          ? '一鍵收錄至單字庫 (收錄易記短例句)'
+                          : '請先查詢或填寫中文釋義後收錄'}
+                      </span>
+                    </button>
+                  </div>
                 )}
 
                 <div className="flex gap-2 pt-1">
@@ -2974,7 +3430,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                             onClick={() => {
                               const lastUserMsg = [...articleChatMessages].reverse().find((m) => m.role === 'user');
                               if (lastUserMsg) {
-                                handleSendArticleChat(lastUserMsg.content, lastUserMsg.highlightedSentence);
+                                handleSendArticleChat(lastUserMsg.content, lastUserMsg.highlightedSentence, true);
                               }
                             }}
                             className="text-[10px] text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 flex items-center gap-1 font-semibold bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-lg border border-rose-200 dark:border-rose-800 transition active:scale-95"
@@ -2986,7 +3442,12 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                         ) : (
                           <>
                             <button
-                              onClick={() => tts.speak(msg.content.slice(0, 200))}
+                              onClick={() =>
+                                tts.speak(msg.content, {
+                                  lang: 'zh-TW',
+                                  rate: readerSettings.speechRate || 1.0
+                                })
+                              }
                               className="text-[10px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-0.5"
                               title="語音朗讀"
                             >
@@ -2996,6 +3457,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                             <button
                               onClick={() => {
                                 navigator.clipboard.writeText(msg.content);
+                                showReaderToast('📋 已複製伴讀回覆內容');
                               }}
                               className="text-[10px] text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-0.5"
                               title="複製內容"
@@ -3017,6 +3479,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     <span>AI 伴讀導師正在研讀文章語境與為您整理分析...</span>
                   </div>
                 )}
+                <div ref={chatMessagesEndRef} />
               </div>
 
               {/* Bottom Context Pill & Input Form */}
@@ -3121,33 +3584,56 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                       </button>
 
                       {currentArticle.savedWordTerms.map((term) => {
-                        const wordObj = wordLookupMap.get(term.toLowerCase());
+                        const low = term.toLowerCase();
+                        const wordObj = wordLookupMap.get(low);
+                        const cachedObj = cachedWordMap[low];
+                        const kvObj =
+                          extractedKeywords.find((k) => k.term.toLowerCase() === low) ||
+                          currentArticle.keyVocabulary?.find((k) => k.term.toLowerCase() === low);
+                        const displayPos = wordObj?.pos || cachedObj?.pos || kvObj?.pos;
+                        const displayDef =
+                          wordObj?.def ||
+                          (isValidChineseDefClient(cachedObj?.def, term) ? cachedObj?.def : '') ||
+                          (isValidChineseDefClient(kvObj?.def, term) ? kvObj?.def : '') ||
+                          cachedObj?.defEn ||
+                          kvObj?.defEn ||
+                          '點擊文章單字可重新查詢';
                         return (
                           <div
                             key={term}
-                            className="p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/50 dark:border-amber-900/40 flex items-center justify-between"
+                            className="p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/50 dark:border-amber-900/40 flex items-center justify-between gap-2"
                           >
-                            <div>
+                            <div className="min-w-0">
                               <div className="flex items-center gap-2">
-                                <span className="font-black text-sm text-slate-900 dark:text-white">
+                                <span className="font-black text-sm text-slate-900 dark:text-white truncate">
                                   {term}
                                 </span>
-                                {wordObj && (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200/80 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200">
-                                    {wordObj.pos}
+                                {displayPos && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200/80 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 shrink-0">
+                                    {displayPos}
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                                {wordObj?.def || '已收錄生詞'}
+                              <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-2">
+                                {displayDef}
                               </p>
                             </div>
-                            <button
-                              onClick={() => tts.speak(term, { rate: 1.0 })}
-                              className="p-2 rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:scale-105 transition"
-                            >
-                              <Volume2 className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => tts.speak(term, { rate: readerSettings.speechRate || 1.0, voiceURI: readerSettings.voiceURI })}
+                                className="p-2 rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:scale-105 transition"
+                                title="發音朗讀"
+                              >
+                                <Volume2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleRemoveSavedWordTerm(term)}
+                                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition"
+                                title="從本篇生詞標記移除"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -3157,19 +3643,32 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
                 {/* 2. Key Vocabulary / AI Extracted Keywords */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between gap-2 mb-2">
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                       ✨ 本文推薦核心關鍵詞 (CEFR)
                     </h4>
-                    {extractedKeywords.length > 0 && (
-                      <button
-                        onClick={() => handleBatchAddKeywords(extractedKeywords)}
-                        className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>一鍵全部收錄</span>
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2.5">
+                      {extractedKeywords.length > 0 && (
+                        <>
+                          <button
+                            onClick={() => handleExtractKeywords(true)}
+                            disabled={isExtractingVocab}
+                            className="text-[11px] font-bold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 flex items-center gap-1 disabled:opacity-50"
+                            title="重新以 AI 提煉本篇關鍵詞"
+                          >
+                            <RotateCcw className={`w-3 h-3 ${isExtractingVocab ? 'animate-spin' : ''}`} />
+                            <span>重新提煉</span>
+                          </button>
+                          <button
+                            onClick={() => handleBatchAddKeywords(extractedKeywords)}
+                            className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>一鍵全部收錄</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
 
                   {isExtractingVocab ? (
@@ -3179,7 +3678,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     </div>
                   ) : extractedKeywords.length === 0 ? (
                     <button
-                      onClick={handleExtractKeywords}
+                      onClick={() => handleExtractKeywords(false)}
                       className="w-full py-3 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 hover:border-indigo-500 hover:text-indigo-600 transition flex items-center justify-center gap-1.5"
                     >
                       <Sparkles className="w-4 h-4 text-indigo-500" />
@@ -3214,7 +3713,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                                 )}
                               </div>
                               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                                {kw.def && kw.def.trim().toLowerCase() !== kw.term.trim().toLowerCase() ? (
+                                {isValidChineseDefClient(kw.def, kw.term) ? (
                                   kw.def
                                 ) : (
                                   <span className="text-amber-500 dark:text-amber-400 font-medium text-[11px]">
@@ -3284,12 +3783,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     <p className="text-[10px] text-slate-400">共 {currentArticle.quiz.length} 題測驗</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => setIsQuizOpen(false)}
-                  className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  ✕
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={handleGenerateQuiz}
+                    disabled={isGeneratingQuiz}
+                    className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-600 dark:text-indigo-400 text-[11px] font-bold flex items-center gap-1 transition disabled:opacity-50"
+                    title="由 AI 重新針對本文出一份新題目"
+                  >
+                    <RotateCcw className={`w-3 h-3 ${isGeneratingQuiz ? 'animate-spin' : ''}`} />
+                    <span>{isGeneratingQuiz ? '出題中...' : 'AI 重新出題'}</span>
+                  </button>
+                  <button
+                    onClick={() => setIsQuizOpen(false)}
+                    className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-6 mb-6">
@@ -3420,8 +3930,22 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
         {/* Flashcards Review Modal for Saved Words */}
         {isFlashcardOpen && currentArticle.savedWordTerms.length > 0 && (() => {
-          const currentTerm = currentArticle.savedWordTerms[flashcardIndex];
-          const wordObj = wordLookupMap.get(currentTerm?.toLowerCase());
+          const safeIndex = Math.min(flashcardIndex, currentArticle.savedWordTerms.length - 1);
+          const currentTerm = currentArticle.savedWordTerms[safeIndex];
+          const lowTerm = (currentTerm || '').toLowerCase();
+          const libWord = wordLookupMap.get(lowTerm);
+          const cachedWord = cachedWordMap[lowTerm];
+          const kvWord =
+            extractedKeywords.find((k) => k.term.toLowerCase() === lowTerm) ||
+            currentArticle.keyVocabulary?.find((k) => k.term.toLowerCase() === lowTerm);
+          const flashPos = libWord?.pos || cachedWord?.pos || kvWord?.pos;
+          const flashDef =
+            libWord?.def ||
+            (isValidChineseDefClient(cachedWord?.def, currentTerm) ? cachedWord?.def : '') ||
+            (isValidChineseDefClient(kvWord?.def, currentTerm) ? kvWord?.def : '') ||
+            '尚未找到中文釋義（可能已從單字庫移除）';
+          const flashDefEn = libWord?.defEn || cachedWord?.defEn || kvWord?.defEn;
+          const flashEx = libWord?.ex || cachedWord?.ex || kvWord?.ex;
 
           return (
             <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
@@ -3436,7 +3960,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-mono font-bold text-slate-400">
-                      {flashcardIndex + 1} / {currentArticle.savedWordTerms.length}
+                      {safeIndex + 1} / {currentArticle.savedWordTerms.length}
                     </span>
                     <button
                       onClick={() => setIsFlashcardOpen(false)}
@@ -3463,16 +3987,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            tts.speak(currentTerm, { rate: 1.0 });
+                            tts.speak(currentTerm, { rate: readerSettings.speechRate || 1.0, voiceURI: readerSettings.voiceURI });
                           }}
                           className="p-2 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 hover:scale-110 transition"
                         >
                           <Volume2 className="w-4 h-4" />
                         </button>
                       </div>
-                      {wordObj?.pos && (
+                      {flashPos && (
                         <span className="inline-block px-2.5 py-0.5 rounded-md text-xs font-black bg-amber-200/80 dark:bg-amber-900/80 text-amber-800 dark:text-amber-200">
-                          {wordObj.pos}
+                          {flashPos}
                         </span>
                       )}
                       <p className="text-xs text-slate-400 pt-3">
@@ -3488,7 +4012,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            tts.speak(currentTerm, { rate: 1.0 });
+                            tts.speak(currentTerm, { rate: readerSettings.speechRate || 1.0, voiceURI: readerSettings.voiceURI });
                           }}
                           className="p-1.5 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300"
                         >
@@ -3496,16 +4020,16 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                         </button>
                       </div>
                       <h4 className="text-xl font-black text-slate-900 dark:text-white">
-                        {wordObj?.def || '已收錄生詞'}
+                        {flashDef}
                       </h4>
-                      {wordObj?.defEn && (
+                      {flashDefEn && (
                         <p className="text-xs text-slate-500 dark:text-slate-400 italic">
-                          {wordObj.defEn}
+                          {flashDefEn}
                         </p>
                       )}
-                      {wordObj?.ex && (
+                      {flashEx && (
                         <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300 italic text-left">
-                          "{wordObj.ex}"
+                          "{flashEx}"
                         </div>
                       )}
                     </div>
@@ -3515,7 +4039,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                 {/* Navigation Buttons */}
                 <div className="flex items-center justify-between gap-3 pt-2">
                   <button
-                    disabled={flashcardIndex === 0}
+                    disabled={safeIndex === 0}
                     onClick={() => {
                       setFlashcardIndex((prev) => Math.max(0, prev - 1));
                       setIsFlashcardFlipped(false);
@@ -3531,7 +4055,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     {isFlashcardFlipped ? '反轉回正面' : '翻牌'}
                   </button>
                   <button
-                    disabled={flashcardIndex === currentArticle.savedWordTerms.length - 1}
+                    disabled={safeIndex === currentArticle.savedWordTerms.length - 1}
                     onClick={() => {
                       setFlashcardIndex((prev) =>
                         Math.min(currentArticle.savedWordTerms.length - 1, prev + 1)
@@ -3547,9 +4071,9 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
             </div>
           );
         })()}
-        {/* Floating Quick Action Pill when collapsed (always accessible while reading) */}
+        {/* Floating Quick Action Pill when collapsed (centered so it never overlaps FloatingAIAssistant) */}
         {isTopBarCollapsed && (
-          <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2 animate-enter">
+          <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 animate-enter">
             {isPlayingTTS && (
               <div className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-amber-500 text-white text-xs font-bold shadow-lg shadow-amber-500/25">
                 <button onClick={handleTogglePlayTTS} title="暫停/播放">
@@ -3571,6 +4095,13 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
               <Sparkles className="w-3.5 h-3.5" />
               <span>展開功能欄</span>
             </button>
+          </div>
+        )}
+
+        {/* Reader In-app Toast (also visible during reading mode) */}
+        {readerToast && (
+          <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[70] bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 px-5 py-2.5 rounded-full shadow-2xl text-xs sm:text-sm font-bold flex items-center gap-2 animate-enter pointer-events-none backdrop-blur-md">
+            <span>{readerToast}</span>
           </div>
         )}
       </div>
@@ -3634,7 +4165,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
         {/* Categories Pills */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-          {['All', 'Science', 'Tech', 'Story', 'Daily', 'Business', 'Custom'].map((cat) => (
+          {['All', 'Science', 'Tech', 'Story', 'News', 'Daily', 'Business', 'Custom'].map((cat) => (
             <button
               key={cat}
               onClick={() => setCategoryFilter(cat)}
@@ -3652,6 +4183,8 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                 ? '前沿科技'
                 : cat === 'Story'
                 ? '人文故事'
+                : cat === 'News'
+                ? '新聞時事'
                 : cat === 'Daily'
                 ? '生活休閒'
                 : cat === 'Business'
@@ -3663,7 +4196,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
           <span className="w-px h-5 bg-slate-300 dark:bg-slate-700 shrink-0 mx-1"></span>
 
           {/* CEFR Level filter */}
-          {['All', 'B1', 'B2', 'C1'].map((lvl) => (
+          {['All', 'A2', 'B1', 'B2', 'C1', 'C2'].map((lvl) => (
             <button
               key={lvl}
               onClick={() => setLevelFilter(lvl)}
@@ -3727,10 +4260,23 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm(`確定要刪除「${art.title}」嗎？`)) {
+                          const executeDelete = () => {
                             const updated = storage.deleteArticle(art.id, userUid);
                             setArticles(updated);
                             onArticlesChange?.(updated);
+                            storage.deleteCloudArticle(art.id, userUid).catch(console.error);
+                            showReaderToast(`已刪除文章《${art.title}》`);
+                          };
+                          if (onRequestConfirm) {
+                            onRequestConfirm({
+                              title: '刪除自訂文章',
+                              message: `確定要從書架刪除《${art.title}》嗎？刪除後將無法復原。`,
+                              type: 'danger',
+                              confirmText: '確認刪除',
+                              onConfirm: executeDelete
+                            });
+                          } else if (window.confirm(`確定要刪除「${art.title}」嗎？`)) {
+                            executeDelete();
                           }
                         }}
                         className="p-1 rounded-lg text-slate-300 hover:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
@@ -3790,7 +4336,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                 </h3>
               </div>
               <button
-                onClick={() => setIsImportModalOpen(false)}
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setImportedArticleMeta(null);
+                }}
                 className="p-1.5 rounded-full text-slate-400 hover:text-slate-600"
               >
                 ✕
@@ -3894,6 +4443,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     <option value="Tech">前沿科技</option>
                     <option value="Science">科普探索</option>
                     <option value="Story">人文故事</option>
+                    <option value="News">新聞時事</option>
                     <option value="Business">商業趨勢</option>
                     <option value="Daily">生活日常</option>
                   </select>
@@ -3934,7 +4484,10 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                   確認建立並開始閱讀
                 </button>
                 <button
-                  onClick={() => setIsImportModalOpen(false)}
+                  onClick={() => {
+                    setIsImportModalOpen(false);
+                    setImportedArticleMeta(null);
+                  }}
                   className="px-5 py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs"
                 >
                   取消
@@ -4025,6 +4578,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
                     <option value="Science">科普宇宙</option>
                     <option value="Tech">前沿科技</option>
                     <option value="Story">人文哲思</option>
+                    <option value="News">新聞時事</option>
                     <option value="Business">商業趨勢</option>
                     <option value="Daily">生活休閒</option>
                   </select>
@@ -4084,7 +4638,7 @@ export const ArticleReaderView: React.FC<ArticleReaderViewProps> = ({
 
       {/* Reader In-app Toast */}
       {readerToast && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 px-5 py-2.5 rounded-full shadow-2xl text-xs sm:text-sm font-bold flex items-center gap-2 animate-enter pointer-events-none backdrop-blur-md">
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[70] bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 px-5 py-2.5 rounded-full shadow-2xl text-xs sm:text-sm font-bold flex items-center gap-2 animate-enter pointer-events-none backdrop-blur-md">
           <span>{readerToast}</span>
         </div>
       )}

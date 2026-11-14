@@ -18,7 +18,7 @@ import {
 import { Word, WordGroup, AppSettings, POS } from '../types';
 import { TRANSLATIONS } from '../utils/translations';
 import { tts } from '../services/tts';
-import { getAllWordCategories } from '../services/storage';
+import { storage, getAllWordCategories } from '../services/storage';
 import { WordDetailModal } from './WordDetailModal';
 import { CategoryManagerModal } from './CategoryManagerModal';
 
@@ -62,11 +62,12 @@ export const WordListView: React.FC<WordListViewProps> = ({
   const [posFilter, setPosFilter] = useState<string>('ALL');
   const [levelFilter, setLevelFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
+  const sortStorageKey = `vocabmin_list_sort_${storage.getCurrentUser()?.uid || 'guest'}`;
   const [sortBy, setSortBy] = useState<
     'time' | 'alpha' | 'category' | 'category-desc' | 'category-uncat' | 'level' | 'level-asc' | 'due'
   >(() => {
     try {
-      const saved = localStorage.getItem('vocabmin_list_sort');
+      const saved = localStorage.getItem(sortStorageKey);
       if (
         saved &&
         [
@@ -120,7 +121,9 @@ export const WordListView: React.FC<WordListViewProps> = ({
         entries.reduce((acc, curr) => acc + (curr.interval || 1), 0) / entries.length
       );
       // Dominant category of the entries
-      const category = entries.find((e) => e.category && e.category.trim())?.category;
+      const category = entries.find(
+        (e) => e.category && e.category.trim() && e.category.trim() !== '未分類'
+      )?.category?.trim();
 
       return {
         term: entries[0].term,
@@ -141,10 +144,11 @@ export const WordListView: React.FC<WordListViewProps> = ({
     const counts: Record<string, number> = {};
     let uncategorized = 0;
     groupedWords.forEach((g) => {
-      if (!g.category || g.category === '未分類') {
+      const cleanCat = (g.category || '').trim();
+      if (!cleanCat || cleanCat === '未分類') {
         uncategorized++;
       } else {
-        counts[g.category] = (counts[g.category] || 0) + 1;
+        counts[cleanCat] = (counts[cleanCat] || 0) + 1;
       }
     });
     return { counts, uncategorized, total: groupedWords.length };
@@ -183,9 +187,13 @@ export const WordListView: React.FC<WordListViewProps> = ({
     // Category filter
     if (categoryFilter !== 'ALL') {
       if (categoryFilter === 'UNCATEGORIZED') {
-        result = result.filter((g) => !g.category || g.category === '未分類');
+        result = result.filter((g) => {
+          const cleanCat = (g.category || '').trim();
+          return !cleanCat || cleanCat === '未分類';
+        });
       } else {
-        result = result.filter((g) => g.category === categoryFilter);
+        const cleanFilter = categoryFilter.trim();
+        result = result.filter((g) => (g.category || '').trim() === cleanFilter);
       }
     }
 
@@ -397,7 +405,7 @@ export const WordListView: React.FC<WordListViewProps> = ({
                 const val = e.target.value as any;
                 setSortBy(val);
                 try {
-                  localStorage.setItem('vocabmin_list_sort', val);
+                  localStorage.setItem(sortStorageKey, val);
                 } catch {}
                 setCurrentPage(1);
               }}

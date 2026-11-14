@@ -54,6 +54,7 @@ interface ParsedWordItem {
   def: string;
   defEn?: string;
   ex?: string;
+  category?: string;
   selected: boolean;
   alreadyExists: boolean;
 }
@@ -290,7 +291,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     const controller = new AbortController();
     lookupAbortRef.current = controller;
 
-    const currentSettings = storage.getLocalSettings();
+    const currentSettings = storage.getLocalSettings(storage.getCurrentUser()?.uid);
     const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     setIsAllMeaningsLoading(true);
@@ -571,6 +572,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
           def: w.def || '',
           defEn: w.defEn,
           ex: w.ex,
+          category: w.category,
           selected: true,
           alreadyExists: existingTermsMap.has((w.term || '').trim().toLowerCase())
         }));
@@ -596,7 +598,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
 
       setBatchStatusMessage(`🔄 正在為 ${uniqueTerms.length} 個單字批次查詢權威中文釋義與例句...`);
 
-      const currentSettings = storage.getLocalSettings();
+      const currentSettings = storage.getLocalSettings(storage.getCurrentUser()?.uid);
       const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
       // Parallel lookup in chunks of 5 with progress feedback
@@ -661,7 +663,7 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     setIsBatchParsing(true);
     setBatchStatusMessage('🧠 AI 正在閱讀段落並為您提煉關鍵生詞與釋義...');
 
-    const currentSettings = storage.getLocalSettings();
+    const currentSettings = storage.getLocalSettings(storage.getCurrentUser()?.uid);
     const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     try {
@@ -721,19 +723,23 @@ export const AddWordModal: React.FC<AddWordModalProps> = ({
     if (!selectedItems.length) return;
 
     const cleanCategory = selectedCategory.trim();
-    const finalCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
+    const overrideCategory = !cleanCategory || cleanCategory === '未分類' ? undefined : cleanCategory;
 
-    const newWords: Partial<Word>[] = selectedItems.map((item) => ({
-      term: item.term.trim(),
-      pos: item.pos,
-      def: item.def.trim(),
-      defEn: item.defEn,
-      ex: item.ex,
-      category: finalCategory,
-      level: 0,
-      interval: 1,
-      easeFactor: 2.5
-    }));
+    const newWords: Partial<Word>[] = selectedItems.map((item) => {
+      const itemCat = (item.category || '').trim();
+      const fallbackCategory = itemCat && itemCat !== '未分類' ? itemCat : undefined;
+      return {
+        term: item.term.trim(),
+        pos: item.pos,
+        def: item.def.trim(),
+        defEn: item.defEn,
+        ex: item.ex,
+        category: overrideCategory || fallbackCategory,
+        level: 0,
+        interval: 1,
+        easeFactor: 2.5
+      };
+    });
 
     onAddWords(newWords);
     setParsedWordsList([]);

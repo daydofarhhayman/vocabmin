@@ -16,7 +16,9 @@ export function calculateNextReview(word: Word, rating: number): {
   nextReview: number;
 } {
   const now = Date.now();
-  let currentInterval = word.interval || 0;
+  const minIntervalForLevel =
+    word.level >= 3 ? 60 : word.level === 2 ? 14 : word.level === 1 ? 3 : 0;
+  let currentInterval = Math.max(word.interval || 0, minIntervalForLevel);
   let easeFactor = word.easeFactor || 2.5;
   let newInterval = 1;
 
@@ -99,7 +101,9 @@ export function applySRSDecay(words: Word[]): { updated: Word[]; count: number }
         return {
           ...w,
           level: newLevel,
-          interval: Math.max(1, Math.round(w.interval * 0.7))
+          interval: Math.max(1, Math.round(w.interval * 0.7)),
+          // Reset overdue baseline to now so subsequent refreshes do not decay again before review
+          nextReview: now
         };
       }
     }

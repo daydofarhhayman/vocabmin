@@ -70,7 +70,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     const cleanTerm = term.trim();
     if (!cleanTerm || isAiLoading) return;
 
-    const currentSettings = storage.getLocalSettings();
+    const currentSettings = storage.getLocalSettings(storage.getCurrentUser()?.uid);
     const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     setIsAiLoading(true);
@@ -132,7 +132,7 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
     const cleanTerm = term.trim();
     if (!cleanTerm || isAiFetchMeaningsLoading) return;
 
-    const currentSettings = storage.getLocalSettings();
+    const currentSettings = storage.getLocalSettings(storage.getCurrentUser()?.uid);
     const apiKey = propApiKey || currentSettings?.geminiApiKey;
 
     setIsAiFetchMeaningsLoading(true);
@@ -288,7 +288,22 @@ export const EditWordModal: React.FC<EditWordModalProps> = ({
 
   const handleChange = (index: number, field: keyof DefinitionRow, value: any) => {
     setDefinitions((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, [field]: value } : item))
+      prev.map((item, i) => {
+        if (i !== index) return item;
+        if (field === 'level') {
+          const newLvl = Number(value) || 0;
+          const adjustedInterval =
+            newLvl >= 3
+              ? Math.max(item.interval || 1, 60)
+              : newLvl === 2
+              ? Math.min(59, Math.max(14, item.interval || 14))
+              : newLvl === 1
+              ? Math.min(13, Math.max(3, item.interval || 3))
+              : 1;
+          return { ...item, level: newLvl, interval: adjustedInterval };
+        }
+        return { ...item, [field]: value };
+      })
     );
   };
 

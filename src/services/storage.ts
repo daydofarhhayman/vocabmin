@@ -205,7 +205,6 @@ export class StorageService {
   }
 
   public async signOut(): Promise<void> {
-    const wasAnonymous = this.currentUser?.isAnonymous;
     const uid = this.currentUser?.uid;
     if (firebaseAuth) {
       try {
@@ -214,8 +213,7 @@ export class StorageService {
         console.warn('SignOut warning:', e);
       }
     }
-    // Only wipe local storage if it was a temporary anonymous guest session
-    if (wasAnonymous && uid) {
+    if (uid) {
       this.clearUserDataForUid(uid);
     }
     this.currentUser = null;
@@ -245,6 +243,16 @@ export class StorageService {
   private getReaderSettingsKey(uid?: string): string {
     const id = uid || this.currentUser?.uid;
     return id ? `vocabmin_reader_settings_${id}` : STORAGE_KEYS.READER_SETTINGS;
+  }
+
+  private getSentenceAnalysesKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid || 'guest';
+    return `${STORAGE_KEYS.SENTENCE_ANALYSES}_${id}`;
+  }
+
+  private getWordAnalysesKey(uid?: string): string {
+    const id = uid || this.currentUser?.uid || 'guest';
+    return `${STORAGE_KEYS.WORD_ANALYSES}_${id}`;
   }
 
   // Clear data for a specific user ID
@@ -426,19 +434,67 @@ export class StorageService {
     }
   }
 
-  public getLocalSentenceAnalyses(): Record<string, SentenceAnalysisData> {
+  private isCorruptSentenceAnalysis(val: unknown): boolean {
+    if (!val || typeof val !== 'object') return true;
+    const v = val as Record<string, unknown>;
+    if (v.isOfflineFallback) return true;
+    const translation = typeof v.translation === 'string' ? v.translation.trim() : '';
+    const breakdown = typeof v.grammarBreakdown === 'string' ? v.grammarBreakdown.trim() : '';
+    if (!translation || !breakdown) return true;
+    const combined = `${translation} ${breakdown}`;
+    return (
+      combined.includes('暫時無法連線至 AI') ||
+      combined.includes('分析服務暫時繁忙') ||
+      combined.includes('解析暫時無法完成')
+    );
+  }
+
+  private isValidWordAnalysisDef(termKey: string, def?: string): boolean {
+    if (!def || typeof def !== 'string') return false;
+    const trimmed = def.trim();
+    if (!trimmed) return false;
+    const cleanKey = termKey.trim().toLowerCase();
+    if (trimmed.toLowerCase() === cleanKey) return false;
+    if (/^【[^】]+】$/.test(trimmed)) {
+      const inner = trimmed.slice(1, -1).trim().toLowerCase();
+      if (inner === cleanKey || /^[a-zA-Z0-9\s'-]+$/.test(inner)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  public getLocalSentenceAnalyses(uid?: string): Record<string, SentenceAnalysisData> {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.SENTENCE_ANALYSES);
+      const storageKey = this.getSentenceAnalysesKey(uid);
+      const data = localStorage.getItem(storageKey);
       if (data) {
-        return JSON.parse(data);
+        const parsed = JSON.parse(data);
+        const cleaned: Record<string, SentenceAnalysisData> = {};
+        let purged = false;
+        for (const [key, val] of Object.entries(parsed)) {
+          if (!this.isCorruptSentenceAnalysis(val)) {
+            cleaned[key] = val as SentenceAnalysisData;
+          } else {
+            purged = true;
+          }
+        }
+        if (purged) {
+          localStorage.setItem(storageKey, JSON.stringify(cleaned));
+        }
+        return cleaned;
       }
     } catch {}
     return {};
   }
 
-  public saveSentenceAnalysis(sentence: string, analysis: SentenceAnalysisData): void {
+  public saveSentenceAnalysis(sentence: string, analysis: SentenceAnalysisData, uid?: string): void {
     try {
-      const all = this.getLocalSentenceAnalyses();
+      if (this.isCorruptSentenceAnalysis(analysis)) {
+        return;
+      }
+      const storageKey = this.getSentenceAnalysesKey(uid);
+      const all = this.getLocalSentenceAnalyses(uid);
       const cleanKey = sentence.trim().toLowerCase();
       all[cleanKey] = {
         ...analysis,
@@ -452,24 +508,31 @@ export class StorageService {
               .slice(0, 300)
           )
         : all;
-      localStorage.setItem(STORAGE_KEYS.SENTENCE_ANALYSES, JSON.stringify(bounded));
+      localStorage.setItem(storageKey, JSON.stringify(bounded));
     } catch (e) {
       console.error('Failed to save sentence analysis locally:', e);
     }
   }
 
-  public getLocalWordAnalyses(): Record<string, WordAnalysisData> {
+  public getLocalWordAnalyses(uid?: string): Record<string, WordAnalysisData> {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.WORD_ANALYSES);
+      const storageKey = this.getWordAnalysesKey(uid);
+      const data = localStorage.getItem(storageKey);
       if (data) {
         const parsed = JSON.parse(data);
         const cleaned: Record<string, WordAnalysisData> = {};
+        let purged = false;
         for (const [key, val] of Object.entries(parsed)) {
           const v = val as WordAnalysisData;
-          // Purge corrupt cache entries where Chinese definition is just the English term itself or empty
-          if (v && v.def && v.def.trim().toLowerCase() !== key.trim().toLowerCase() && v.def.trim().length > 0) {
+          // Purge corrupt cache entries where Chinese definition is empty, placeholder, or just the English term itself
+          if (v && this.isValidWordAnalysisDef(key, v.def)) {
             cleaned[key] = v;
+          } else {
+            purged = true;
           }
+        }
+        if (purged) {
+          localStorage.setItem(storageKey, JSON.stringify(cleaned));
         }
         return cleaned;
       }
@@ -477,14 +540,15 @@ export class StorageService {
     return {};
   }
 
-  public saveWordAnalysis(term: string, analysis: WordAnalysisData): void {
+  public saveWordAnalysis(term: string, analysis: WordAnalysisData, uid?: string): void {
     try {
       const cleanKey = term.trim().toLowerCase();
-      // Never store corrupt entry where Chinese definition is just the English term itself or empty
-      if (!analysis.def || analysis.def.trim().toLowerCase() === cleanKey) {
+      // Never store corrupt entry where Chinese definition is empty, placeholder, or just the English term itself
+      if (!this.isValidWordAnalysisDef(cleanKey, analysis.def)) {
         return;
       }
-      const all = this.getLocalWordAnalyses();
+      const storageKey = this.getWordAnalysesKey(uid);
+      const all = this.getLocalWordAnalyses(uid);
       all[cleanKey] = {
         ...analysis,
         cachedAt: Date.now()
@@ -497,7 +561,7 @@ export class StorageService {
               .slice(0, 300)
           )
         : all;
-      localStorage.setItem(STORAGE_KEYS.WORD_ANALYSES, JSON.stringify(bounded));
+      localStorage.setItem(storageKey, JSON.stringify(bounded));
     } catch (e) {
       console.error('Failed to save word analysis locally:', e);
     }
@@ -511,18 +575,24 @@ export class StorageService {
     articles?: Article[];
     homeConfig?: any;
     readerSettings?: ReaderSettings;
+    lastSyncedAt?: number;
   } | null> {
     const uid = this.getResolvedUid(fallbackUid);
     if (!uid || !firestoreDb) return null;
 
     try {
-      // 1. Settings
+      // 1. Settings (keep geminiApiKey strictly local on this device)
+      const localSettings = this.getLocalSettings(uid);
       let cloudSettings: AppSettings | undefined;
       const settingsSnap = await getDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'));
       if (settingsSnap.exists()) {
-        cloudSettings = { ...DEFAULT_SETTINGS, ...settingsSnap.data() } as AppSettings;
+        const remote = settingsSnap.data() as AppSettings;
+        cloudSettings = {
+          ...DEFAULT_SETTINGS,
+          ...remote,
+          geminiApiKey: localSettings.geminiApiKey || remote.geminiApiKey || ''
+        } as AppSettings;
       } else {
-        const localSettings = this.getLocalSettings(uid);
         cloudSettings = localSettings;
         this.saveCloudSettings(localSettings, uid).catch(console.error);
       }
@@ -615,7 +685,8 @@ export class StorageService {
         settings: cloudSettings,
         articles: cloudArticles,
         homeConfig: cloudHomeConfig,
-        readerSettings: cloudReaderSettings
+        readerSettings: cloudReaderSettings,
+        lastSyncedAt: typeof metaData?.lastSyncedAt === 'number' ? metaData.lastSyncedAt : undefined
       };
     } catch (e) {
       console.error('Error syncing from cloud:', e);
@@ -641,15 +712,12 @@ export class StorageService {
     }
 
     try {
-      // 1. Settings & Stats & Meta (Clean JSON to eliminate undefined values that crash Firestore)
-      const cleanSettings = JSON.parse(JSON.stringify(settings));
+      // 1. Settings & Stats & Meta (Clean JSON to eliminate undefined values; never upload geminiApiKey)
+      const { geminiApiKey: _omitKey, ...cloudSafeSettings } = settings;
+      const cleanSettings = JSON.parse(JSON.stringify(cloudSafeSettings));
       const cleanStats = JSON.parse(JSON.stringify(stats));
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), cleanSettings, { merge: true });
-      if (Object.keys(cleanStats).length === 0) {
-        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), {});
-      } else {
-        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), cleanStats, { merge: true });
-      }
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), { ...cleanSettings, geminiApiKey: deleteField() }, { merge: true });
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), cleanStats);
 
       if (homeConfig) {
         const cleanHome = JSON.parse(JSON.stringify(homeConfig));
@@ -786,6 +854,26 @@ export class StorageService {
     }
   }
 
+  public async saveCloudArticle(article: Article, fallbackUid?: string): Promise<void> {
+    const uid = this.getResolvedUid(fallbackUid);
+    if (!uid || !firestoreDb || !article?.id) return;
+
+    try {
+      const cleanArt = JSON.parse(JSON.stringify(article));
+      await setDoc(doc(firestoreDb, 'users', uid, 'articles', article.id), cleanArt, { merge: true });
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          hasArticlesSynced: true,
+          lastArticleUpdated: Date.now()
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error('Failed to save cloud article:', e);
+    }
+  }
+
   public async saveCloudArticles(articles: Article[], fallbackUid?: string): Promise<void> {
     const uid = this.getResolvedUid(fallbackUid);
     if (!uid || !firestoreDb) return;
@@ -876,6 +964,14 @@ export class StorageService {
         chunk.forEach((ref) => batch.delete(ref));
         await batch.commit();
       }
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        {
+          wordCount: Math.max(0, snap.size - toDelete.length),
+          lastSyncedAt: Date.now()
+        },
+        { merge: true }
+      );
     } catch (e) {
       console.error('Failed to delete cloud words by term:', e);
     }
@@ -886,6 +982,11 @@ export class StorageService {
     if (!uid || !firestoreDb) return;
     try {
       await deleteDoc(doc(firestoreDb, 'users', uid, 'words', wordId));
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        { lastSyncedAt: Date.now() },
+        { merge: true }
+      );
     } catch (e) {
       console.error('Failed to delete cloud word by id:', e);
     }
@@ -897,6 +998,11 @@ export class StorageService {
     try {
       const cleanUpdates = JSON.parse(JSON.stringify(updates));
       await setDoc(doc(firestoreDb, 'users', uid, 'words', wordId), cleanUpdates, { merge: true });
+      await setDoc(
+        doc(firestoreDb, 'users', uid, 'data', 'meta'),
+        { lastSyncedAt: Date.now() },
+        { merge: true }
+      );
     } catch (e) {
       console.error('Failed to update cloud word:', e);
     }
@@ -1234,8 +1340,9 @@ export class StorageService {
     const uid = this.getResolvedUid(fallbackUid);
     if (!uid || !firestoreDb) return;
     try {
-      const clean = JSON.parse(JSON.stringify(settings));
-      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), clean, { merge: true });
+      const { geminiApiKey: _omitKey, ...cloudSafeSettings } = settings;
+      const clean = JSON.parse(JSON.stringify(cloudSafeSettings));
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'settings'), { ...clean, geminiApiKey: deleteField() }, { merge: true });
     } catch (e) {
       console.error('Failed to save cloud settings:', e);
     }
@@ -1246,11 +1353,7 @@ export class StorageService {
     if (!uid || !firestoreDb) return;
     try {
       const clean = JSON.parse(JSON.stringify(stats));
-      if (Object.keys(clean).length === 0) {
-        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), {});
-      } else {
-        await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), clean, { merge: true });
-      }
+      await setDoc(doc(firestoreDb, 'users', uid, 'data', 'stats'), clean);
     } catch (e) {
       console.error('Failed to save cloud stats:', e);
     }
@@ -1278,7 +1381,7 @@ export class StorageService {
     }
   }
 
-  // Safe Export JSON without memory leak
+  // Safe Export JSON without memory leak (strips sensitive geminiApiKey)
   public exportJSON(
     words: Word[],
     stats: DailyStats,
@@ -1286,10 +1389,11 @@ export class StorageService {
     articles?: Article[],
     homeConfig?: any
   ): void {
+    const { geminiApiKey: _omitKey, ...exportSafeSettings } = settings;
     const backup = {
       vocab_data: words,
       vocab_stats: stats,
-      settings: settings,
+      settings: exportSafeSettings,
       articles: articles || [],
       homeConfig: homeConfig || undefined,
       version: '7.2-react',
@@ -1311,15 +1415,17 @@ export class StorageService {
 
   // Safe Export CSV without memory leak
   public exportCSV(words: Word[]): void {
-    const headers = ['Word', 'POS', 'Chinese Definition', 'English Definition', 'Example', 'Level', 'Interval'];
+    const headers = ['Word', 'POS', 'Chinese Definition', 'English Definition', 'Example', 'Level', 'Interval', 'Category'];
+    const escapeCell = (val: string) => `"${val.replace(/"/g, '""')}"`;
     const rows = words.map((w) => [
-      `"${(w.term || '').replace(/"/g, '""')}"`,
-      `"${(w.pos || 'n.').replace(/"/g, '""')}"`,
-      `"${(w.def || '').replace(/"/g, '""')}"`,
-      `"${(w.defEn || '').replace(/"/g, '""')}"`,
-      `"${(w.ex || '').replace(/"/g, '""')}"`,
+      escapeCell(w.term || ''),
+      escapeCell(w.pos || 'n.'),
+      escapeCell(w.def || ''),
+      escapeCell(w.defEn || ''),
+      escapeCell(w.ex || ''),
       w.level || 0,
-      w.interval || 1
+      w.interval || 1,
+      escapeCell(w.category || '')
     ]);
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
@@ -1327,7 +1433,7 @@ export class StorageService {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `vocabmin_words_${this.getLocalDateString()}.csv`;
+    a.download = `vocabmin_words_${getLocalDateString()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1335,13 +1441,8 @@ export class StorageService {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  // Bulk parser for CSV and TSV (Excel paste)
+  // Bulk parser for JSON, CSV and TSV (Excel paste / Chrome Extension export)
   public parseBulkText(text: string): { added: Word[]; skipped: number; invalid: number } {
-    const lines = text.split(/\r?\n/);
-    const result: Word[] = [];
-    let skipped = 0;
-    let invalid = 0;
-
     const detectPOS = (str: string): POS => {
       if (!str) return 'n.';
       const clean = str.toLowerCase().replace(/[^a-z]/g, '');
@@ -1352,6 +1453,60 @@ export class StorageService {
       if (clean === 'phr' || clean === 'phrase') return 'phr.';
       return 'other';
     };
+
+    const trimmedAll = text.trim();
+    if (trimmedAll.startsWith('[') || trimmedAll.startsWith('{')) {
+      try {
+        const parsedJson = JSON.parse(trimmedAll);
+        const items: any[] | null = Array.isArray(parsedJson)
+          ? parsedJson
+          : Array.isArray(parsedJson?.vocab_data)
+          ? parsedJson.vocab_data
+          : Array.isArray(parsedJson?.words)
+          ? parsedJson.words
+          : null;
+
+        if (items) {
+          const addedFromJson: Word[] = [];
+          let invalidJson = 0;
+          const now = Date.now();
+          items.forEach((item, index) => {
+            const term = String(item?.term || item?.word || '').trim();
+            const def = String(item?.def || item?.meaning || '').trim();
+            if (!term || !def) {
+              invalidJson++;
+              return;
+            }
+            const levelNum = Math.min(3, Math.max(0, Number(item?.level) || 0));
+            const intervalNum = Math.max(1, Number(item?.interval) || 1);
+            const rawCat = String(item?.category || '').trim();
+            addedFromJson.push({
+              id: 'w-' + now + '-' + Math.random().toString(36).substring(2, 7) + '-' + index,
+              term,
+              pos: detectPOS(String(item?.pos || 'n.')),
+              def,
+              defEn: String(item?.defEn || '').trim() || undefined,
+              ex: String(item?.ex || item?.example || '').trim(),
+              category: rawCat && rawCat !== '未分類' ? rawCat : undefined,
+              level: levelNum,
+              interval: intervalNum,
+              easeFactor: Number(item?.easeFactor) || 2.5,
+              timestamp: Number(item?.timestamp) || now,
+              lastReview: Number(item?.lastReview) || now,
+              nextReview: Number(item?.nextReview) || now + intervalNum * 86400000
+            });
+          });
+          return { added: addedFromJson, skipped: 0, invalid: invalidJson };
+        }
+      } catch {
+        // Fall through to CSV/TSV parser if JSON parsing fails
+      }
+    }
+
+    const lines = text.split(/\r?\n/);
+    const result: Word[] = [];
+    let skipped = 0;
+    let invalid = 0;
 
     const parseLine = (line: string): string[] => {
       if (line.includes('\t') && !line.includes('","')) {
@@ -1383,11 +1538,17 @@ export class StorageService {
     lines.forEach((line, index) => {
       const trimmed = line.trim();
       if (!trimmed) return;
-      if (index === 0 && (trimmed.toLowerCase().includes('word,pos') || trimmed.toLowerCase().includes('word\tpos'))) {
+
+      const cols = parseLine(trimmed);
+      if (
+        index === 0 &&
+        (trimmed.toLowerCase().includes('word,pos') ||
+          trimmed.toLowerCase().includes('word\tpos') ||
+          (cols[0]?.toLowerCase() === 'word' && cols[1]?.toLowerCase() === 'pos'))
+      ) {
         return; // skip header
       }
 
-      const cols = parseLine(trimmed);
       if (cols.length < 2) {
         invalid++;
         return;
@@ -1396,10 +1557,23 @@ export class StorageService {
       const term = cols[0];
       let pos: POS = 'n.';
       let def = '';
+      let defEn = '';
       let ex = '';
       let level = 0;
+      let interval = 1;
+      let category: string | undefined;
 
-      if (cols.length >= 5) {
+      if (cols.length >= 6) {
+        // Aligns with exportCSV: Word, POS, Chinese Def, English Def, Example, Level, Interval, Category
+        pos = detectPOS(cols[1]);
+        def = cols[2];
+        defEn = cols[3];
+        ex = cols[4];
+        level = parseInt(cols[5]) || 0;
+        interval = Math.max(1, parseInt(cols[6]) || 1);
+        const rawCat = (cols[7] || '').trim();
+        category = rawCat && rawCat !== '未分類' ? rawCat : undefined;
+      } else if (cols.length === 5) {
         pos = detectPOS(cols[1]);
         def = cols[2];
         ex = cols[3];
@@ -1429,13 +1603,15 @@ export class StorageService {
           term,
           pos,
           def,
+          defEn: defEn || undefined,
           ex,
+          category,
           level: Math.min(3, Math.max(0, level)),
-          interval: 1,
+          interval,
           easeFactor: 2.5,
           timestamp: now,
           lastReview: now,
-          nextReview: now + 86400000
+          nextReview: now + interval * 86400000
         });
       } else {
         invalid++;

@@ -327,6 +327,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
   const handleSaveSingleWord = (item: RecommendedWordItem) => {
     const cleanTerm = item.term.trim();
     if (!cleanTerm) return;
+    const cleanCat = (item.category || '').trim();
     onAddWords([
       {
         term: cleanTerm,
@@ -334,7 +335,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
         def: item.def.trim(),
         defEn: (item.defEn || '').trim(),
         ex: (item.ex || '').trim(),
-        category: item.category || '未分類'
+        category: cleanCat && cleanCat !== '未分類' ? cleanCat : undefined
       }
     ]);
     setSavedTermsToast((prev) => ({ ...prev, [cleanTerm.toLowerCase()]: true }));
@@ -1699,7 +1700,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
                     workshopResult.words.forEach((w) =>
                       handleSaveSingleWord({
                         ...w,
-                        category: w.category || workshopResult.SuggestedCategory || '未分類'
+                        category: w.category || workshopResult.SuggestedCategory || undefined
                       })
                     );
                   }}
@@ -1739,7 +1740,7 @@ export const AIAssistantView: React.FC<AIAssistantViewProps> = ({
                             onClick={() =>
                               handleSaveSingleWord({
                                 ...w,
-                                category: w.category || workshopResult.SuggestedCategory || '未分類'
+                                category: w.category || workshopResult.SuggestedCategory || undefined
                               })
                             }
                             disabled={isSaved}

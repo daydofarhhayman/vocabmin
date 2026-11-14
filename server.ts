@@ -277,6 +277,24 @@ async function generateWithModelFallback(
   throw errorToThrow;
 }
 
+// Helper: Validate that a Traditional Chinese definition is genuine and not a raw/placeholder token
+function isValidChineseDef(def: string | undefined, word: string): boolean {
+  if (!def) return false;
+  const trimmed = def.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  const wLower = word.trim().toLowerCase();
+  if (
+    lower === wLower ||
+    trimmed === `【${word.trim()}】` ||
+    trimmed === `【${wLower}】` ||
+    /^【[a-zA-Z0-9\s'-]+】$/.test(trimmed)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // Helper: Reliable bilingual word details lookup (Google Translate + Datamuse linguistic dictionary)
 // Ensures that Traditional Chinese definition, English definition, and POS are ALWAYS accurately populated,
 // even if AI quota is exhausted, key is not provided, or AI service is temporarily unavailable.
@@ -429,7 +447,7 @@ async function fetchBilingualWordDetails(
   return {
     term: cleanWord,
     pos: pos || 'n.',
-    def: defZh || `【${cleanWord}】`,
+    def: isValidChineseDef(defZh, cleanWord) ? defZh.trim() : '',
     defEn: defEn || `Definition and usage for "${cleanWord}" in context.`,
     phonetic,
     ex: ex || `This is an example sentence using ${cleanWord}.`,
@@ -1331,10 +1349,20 @@ app.post('/api/ai/import-article', async (req, res) => {
     if (url && typeof url === 'string' && url.startsWith('http')) {
       sourceName = url;
       const fetched = await fetchExternalUrlContent(url);
-      if (fetched && fetched.text) {
-        sourceContent = fetched.text;
+      if (fetched && fetched.text && fetched.text.trim().length >= 40) {
+        if (!sourceContent) {
+          sourceContent = fetched.text;
+        }
         articleTitle = fetched.title;
+      } else if (!sourceContent || sourceContent.trim().length < 20) {
+        return res.status(422).json({
+          error: '無法直接從該網址擷取文章內文（目標網站可能設有防爬蟲保護或需動態載入）。請直接複製網頁中的英文文章段落並貼至下方「英文內文」欄位，再點擊 AI 智慧擷取！'
+        });
       }
+    }
+
+    if (!sourceContent && !topic) {
+      return res.status(400).json({ error: '請輸入文章網址或貼上英文文章內文。' });
     }
 
     const requestedLevel = level || 'B2';
@@ -1377,6 +1405,7 @@ CRITICAL REQUIREMENTS:
 
     const config = {
       temperature: 0.35,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -1436,7 +1465,7 @@ CRITICAL REQUIREMENTS:
       }
     };
 
-    const response = await generateWithModelFallback(ai, config, prompt);
+    const response = await generateWithModelFallback(ai, config, prompt, undefined, 28000);
     const parsed = JSON.parse(response.text || '{}');
     const wordCount = (parsed.content || '').split(/\s+/).filter(Boolean).length;
     const readTimeMinutes = Math.max(1, Math.round(wordCount / 120));
@@ -1447,10 +1476,10 @@ CRITICAL REQUIREMENTS:
         let def = (kv.def || '').trim();
         let defEn = (kv.defEn || '').trim();
         let pos = kv.pos || 'n.';
-        if (!def || def.toLowerCase() === (kv.term || '').toLowerCase() || !defEn) {
+        if (!isValidChineseDef(def, kv.term || '') || !defEn) {
           try {
             const enriched = await fetchBilingualWordDetails(kv.term);
-            if (!def || def.toLowerCase() === (kv.term || '').toLowerCase()) {
+            if (!isValidChineseDef(def, kv.term || '') && isValidChineseDef(enriched.def, kv.term || '')) {
               def = enriched.def;
             }
             if (!defEn) {
@@ -1464,7 +1493,7 @@ CRITICAL REQUIREMENTS:
         return {
           term: kv.term,
           pos,
-          def,
+          def: isValidChineseDef(def, kv.term || '') ? def : '',
           defEn,
           level: kv.level || 'B2',
           ex: kv.ex || `Review how "${kv.term}" is used in context.`
@@ -1579,13 +1608,15 @@ app.post('/api/ai/article-lookup', async (req, res) => {
 
   if (!forceRefresh && wordLookupCache.has(cacheKey)) {
     const cached = wordLookupCache.get(cacheKey);
-    // Ensure cached entry is strictly valid (def is not just the English term, defEn is present)
-    if (cached && cached.def && cached.def.toLowerCase() !== cleanWord.toLowerCase() && cached.defEn) {
+    // Ensure cached entry is strictly valid (def is genuine Chinese, not English or 【word】 placeholder)
+    if (cached && isValidChineseDef(cached.def, cleanWord) && cached.defEn) {
       return res.json({
         ...cached,
         term: cleanWord,
         fromCache: true
       });
+    } else {
+      wordLookupCache.delete(cacheKey);
     }
   }
 
@@ -1649,7 +1680,9 @@ app.post('/api/ai/article-lookup', async (req, res) => {
           : '劍橋英漢辭典 (Cambridge Dictionary)'
       };
 
-      setCacheWithLimit(wordLookupCache, cacheKey, cambridgePayload);
+      if (isValidChineseDef(cambridgePayload.def, cleanWord)) {
+        setCacheWithLimit(wordLookupCache, cacheKey, cambridgePayload);
+      }
       return res.json({
         ...cambridgePayload,
         fromCache: false
@@ -1666,14 +1699,16 @@ app.post('/api/ai/article-lookup', async (req, res) => {
     const fallback = await fetchBilingualWordDetails(cleanWord, sentence);
     const fallbackWithSource = {
       ...fallback,
-      meanings: [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }],
+      meanings: fallback.def ? [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }] : [],
       source: 'dictionary',
       cambridgeBlocked,
       sourceLabel: cambridgeBlocked
         ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由雙語辭典備援'
         : '雙語辭典備援 (Google Dictionary)'
     };
-    setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
+    if (isValidChineseDef(fallbackWithSource.def, cleanWord)) {
+      setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
+    }
     return res.json({
       ...fallbackWithSource,
       fromCache: false
@@ -1696,6 +1731,7 @@ Provide accurate contextual details in JSON:
 
     const config = {
       temperature: 0.2,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -1718,9 +1754,9 @@ Provide accurate contextual details in JSON:
     let defEn = (parsed.defEn || '').trim();
 
     // Guard against AI returning the English word as defZh, or missing defEn
-    if (!defZh || defZh.toLowerCase() === cleanWord.toLowerCase() || !defEn) {
+    if (!isValidChineseDef(defZh, cleanWord) || !defEn) {
       const enriched = await fetchBilingualWordDetails(cleanWord, sentence);
-      if (!defZh || defZh.toLowerCase() === cleanWord.toLowerCase()) {
+      if (!isValidChineseDef(defZh, cleanWord) && isValidChineseDef(enriched.def, cleanWord)) {
         defZh = enriched.def;
       }
       if (!defEn) {
@@ -1728,30 +1764,36 @@ Provide accurate contextual details in JSON:
       }
     }
 
+    const safeDefZh = isValidChineseDef(defZh, cleanWord) ? defZh : '';
+
     const resultToCache = {
       term: parsed.term || cleanWord,
       status: 'valid',
       pos: parsed.pos || 'n.',
-      def: defZh,
+      def: safeDefZh,
       defEn: defEn,
       phonetic: parsed.phonetic || '',
       ex: parsed.ex || `Learning ${cleanWord} helps improve your vocabulary.`,
       exZh: parsed.exZh || '',
-      meanings: [
-        {
-          pos: parsed.pos || 'n.',
-          def: defZh,
-          defEn: defEn,
-          ex: parsed.ex || `Learning ${cleanWord} helps improve your vocabulary.`
-        }
-      ],
+      meanings: safeDefZh
+        ? [
+            {
+              pos: parsed.pos || 'n.',
+              def: safeDefZh,
+              defEn: defEn,
+              ex: parsed.ex || `Learning ${cleanWord} helps improve your vocabulary.`
+            }
+          ]
+        : [],
       source: 'ai',
       cambridgeBlocked,
       sourceLabel: cambridgeBlocked
         ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由 Gemini AI 參照劍橋標準解析'
         : 'Gemini AI 智能解析 (劍橋未收錄 · AI 生成)'
     };
-    setCacheWithLimit(wordLookupCache, cacheKey, resultToCache);
+    if (isValidChineseDef(resultToCache.def, cleanWord)) {
+      setCacheWithLimit(wordLookupCache, cacheKey, resultToCache);
+    }
 
     return res.json({
       ...resultToCache,
@@ -1762,14 +1804,16 @@ Provide accurate contextual details in JSON:
     const fallback = await fetchBilingualWordDetails(cleanWord, sentence);
     const fallbackWithSource = {
       ...fallback,
-      meanings: [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }],
+      meanings: fallback.def ? [{ pos: fallback.pos, def: fallback.def, defEn: fallback.defEn, ex: fallback.ex }] : [],
       source: 'dictionary',
       cambridgeBlocked,
       sourceLabel: cambridgeBlocked
         ? '劍橋官網防爬蟲攔截 (HTTP 403) · 已自動由雙語辭典備援'
         : '雙語辭典備援 (Google Dictionary)'
     };
-    setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
+    if (isValidChineseDef(fallbackWithSource.def, cleanWord)) {
+      setCacheWithLimit(wordLookupCache, cacheKey, fallbackWithSource);
+    }
     return res.json({
       ...fallbackWithSource,
       fromCache: false
@@ -2780,16 +2824,24 @@ app.post('/api/ai/analyze-sentence', async (req, res) => {
       const trRes = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(cleanSentence)}`);
       if (trRes.ok) {
         const trData = await trRes.json();
-        trans = trData[0]?.[0]?.[0] || '';
+        if (Array.isArray(trData?.[0])) {
+          trans = trData[0].map((seg: any) => seg?.[0] || '').join('').trim();
+        }
       }
     } catch {}
+    if (!trans) {
+      return res.status(503).json({
+        error: '尚未配置 Gemini API Key，請先於設定中輸入金鑰以啟用 AI 句型文法拆解。'
+      });
+    }
     return res.json({
       sentence: cleanSentence,
-      translation: trans || cleanSentence,
-      grammarBreakdown: '句子主幹與修飾成分分析（離線/詞典模式）',
+      translation: trans,
+      grammarBreakdown: '尚未配置 Gemini API Key，僅提供基本中文翻譯（於「設定」輸入金鑰即可啟用完整句型文法拆解）。',
       vocabularyNotes: [],
-      learningTip: '可點擊單字查詢個別釋義',
-      fromCache: false
+      learningTip: '可點擊句中單字查詢個別釋義，或在設定頁面填入個人 Gemini API Key。',
+      fromCache: false,
+      isOfflineFallback: true
     });
   }
 
@@ -2807,6 +2859,7 @@ Provide detailed, insightful structural breakdown in Traditional Chinese (繁體
 
     const config = {
       temperature: 0.3,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -2840,7 +2893,9 @@ Provide detailed, insightful structural breakdown in Traditional Chinese (繁體
       vocabularyNotes: parsed.vocabularyNotes || [],
       learningTip: parsed.learningTip || ''
     };
-    setCacheWithLimit(sentenceAnalysisCache, cacheKey, resultToCache);
+    if (resultToCache.translation && resultToCache.grammarBreakdown) {
+      setCacheWithLimit(sentenceAnalysisCache, cacheKey, resultToCache);
+    }
 
     return res.json({
       ...resultToCache,
@@ -2848,13 +2903,12 @@ Provide detailed, insightful structural breakdown in Traditional Chinese (繁體
     });
   } catch (err: any) {
     console.warn('Sentence analysis error:', err?.message || err);
-    return res.json({
-      sentence: cleanSentence,
-      translation: '暫時無法連線至 AI 解析伺服器',
-      grammarBreakdown: '分析服務暫時繁忙，請稍後重試。',
-      vocabularyNotes: [],
-      learningTip: '',
-      fromCache: false
+    const parsedErr = parseGeminiApiError(err);
+    return res.status(parsedErr.statusCode).json({
+      error: parsedErr.userMessage,
+      reason: parsedErr.reason,
+      details: parsedErr.details,
+      suggestion: parsedErr.suggestion
     });
   }
 });
@@ -2942,6 +2996,7 @@ CRITICAL TEACHING GUIDELINES:
     const config = {
       systemInstruction,
       temperature: 0.35,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -3028,6 +3083,7 @@ Requirements:
 
     const config = {
       temperature: 0.5,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -3076,32 +3132,36 @@ Requirements:
       }
     };
 
-    const response = await generateWithModelFallback(ai, config, prompt);
+    const response = await generateWithModelFallback(ai, config, prompt, undefined, 28000);
     const parsed = JSON.parse(response.text || '{}');
     const wordCount = (parsed.content || '').split(/\s+/).filter(Boolean).length;
     const readTimeMinutes = Math.max(1, Math.round(wordCount / 120));
 
-    // Guarantee all keyVocabulary items have valid def and defEn
+    // Guarantee all keyVocabulary items have valid def and defEn in parallel
     const rawKeyVocab = Array.isArray(parsed.keyVocabulary) ? parsed.keyVocabulary : [];
-    const sanitizedKeyVocab: any[] = [];
-    for (const kv of rawKeyVocab) {
-      if (kv && kv.term) {
-        let defZh = (kv.def || '').trim();
-        let defEn = (kv.defEn || '').trim();
-        if (!defZh || defZh.toLowerCase() === kv.term.toLowerCase() || !defEn) {
-          try {
-            const enriched = await fetchBilingualWordDetails(kv.term);
-            if (!defZh || defZh.toLowerCase() === kv.term.toLowerCase()) defZh = enriched.def;
-            if (!defEn) defEn = enriched.defEn;
-          } catch {}
-        }
-        sanitizedKeyVocab.push({
-          ...kv,
-          def: defZh || `【${kv.term}】`,
-          defEn: defEn || `English definition for ${kv.term}`
-        });
-      }
-    }
+    const sanitizedKeyVocab = (
+      await Promise.all(
+        rawKeyVocab.map(async (kv: any) => {
+          if (!kv || !kv.term) return null;
+          let defZh = (kv.def || '').trim();
+          let defEn = (kv.defEn || '').trim();
+          if (!isValidChineseDef(defZh, kv.term) || !defEn) {
+            try {
+              const enriched = await fetchBilingualWordDetails(kv.term);
+              if (!isValidChineseDef(defZh, kv.term) && isValidChineseDef(enriched.def, kv.term)) {
+                defZh = enriched.def;
+              }
+              if (!defEn) defEn = enriched.defEn;
+            } catch {}
+          }
+          return {
+            ...kv,
+            def: isValidChineseDef(defZh, kv.term) ? defZh : '',
+            defEn: defEn || `English definition for ${kv.term}`
+          };
+        })
+      )
+    ).filter(Boolean);
 
     return res.json({
       id: `art-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -3158,9 +3218,10 @@ function extractCandidateWordsFromText(text: string, limit = 8): string[] {
 
 // Helper: Translate text to Traditional Chinese via Google Translate fallback
 async function fallbackTranslateToZh(text: string): Promise<string> {
-  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0);
+  const rawParas = text.split(/\n\s*\n/).filter(p => p.trim().length > 0);
+  const paragraphs = rawParas.length > 1 ? rawParas : text.split(/\n/).filter(p => p.trim().length > 0);
   const translatedParas: string[] = [];
-  for (const para of paragraphs.slice(0, 8)) {
+  for (const para of paragraphs.slice(0, 40)) {
     try {
       const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-TW&dt=t&q=${encodeURIComponent(para.trim())}`;
       const res = await fetch(url);
@@ -3175,9 +3236,9 @@ async function fallbackTranslateToZh(text: string): Promise<string> {
         }
       }
     } catch {}
-    translatedParas.push(para);
+    translatedParas.push('');
   }
-  return translatedParas.join('\n\n');
+  return translatedParas.filter(Boolean).length > 0 ? translatedParas.join('\n\n') : '';
 }
 
 // API: Extract Vocabulary from any user-provided text
@@ -3199,7 +3260,7 @@ app.post('/api/ai/extract-vocabulary', async (req, res) => {
         return {
           term: word,
           pos: details.pos || 'n.',
-          def: details.def || word,
+          def: isValidChineseDef(details.def, word) ? details.def : '',
           defEn: details.defEn || '',
           level: 'B2',
           ex: details.ex || `Review how "${word}" is used in context.`
@@ -3226,6 +3287,7 @@ ${text.slice(0, 25000)}
 
     const config = {
       temperature: 0.2,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.ARRAY,
@@ -3252,11 +3314,11 @@ ${text.slice(0, 25000)}
         let defEn = (v.defEn || '').trim();
         let pos = v.pos || 'other';
 
-        if (!def || def.toLowerCase() === (v.term || '').toLowerCase() || !defEn) {
+        if (!isValidChineseDef(def, v.term || '') || !defEn) {
           try {
             const fallback = await fetchBilingualWordDetails(v.term);
-            if (!def || def.toLowerCase() === (v.term || '').toLowerCase()) {
-              def = fallback.def || def;
+            if (!isValidChineseDef(def, v.term || '') && isValidChineseDef(fallback.def, v.term || '')) {
+              def = fallback.def;
             }
             if (!defEn) {
               defEn = fallback.defEn || defEn;
@@ -3269,7 +3331,7 @@ ${text.slice(0, 25000)}
         return {
           term: v.term,
           pos,
-          def,
+          def: isValidChineseDef(def, v.term || '') ? def : '',
           defEn,
           level: v.level || 'B2',
           ex: v.ex || `Review how "${v.term}" is used in context.`
@@ -3286,7 +3348,7 @@ ${text.slice(0, 25000)}
         return {
           term: word,
           pos: details.pos || 'n.',
-          def: details.def || word,
+          def: isValidChineseDef(details.def, word) ? details.def : '',
           defEn: details.defEn || '',
           level: 'B2',
           ex: details.ex || `Review how "${word}" is used in context.`
@@ -3307,6 +3369,9 @@ app.post('/api/ai/translate-article', async (req, res) => {
   const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
   if (!ai) {
     const fallbackZh = await fallbackTranslateToZh(content);
+    if (!fallbackZh) {
+      return res.status(503).json({ error: '尚未配置 Gemini API Key，且備援翻譯服務暫時無法連線。' });
+    }
     return res.json({ translationZh: fallbackZh });
   }
 
@@ -3325,6 +3390,7 @@ Return JSON with:
 
     const config = {
       temperature: 0.3,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -3335,17 +3401,24 @@ Return JSON with:
       }
     };
 
-    const response = await generateWithModelFallback(ai, config, prompt);
+    const response = await generateWithModelFallback(ai, config, prompt, undefined, 25000);
     const parsed = JSON.parse(response.text || '{}');
     const translation = parsed.translationZh || '';
     if (!translation) {
       const fallbackZh = await fallbackTranslateToZh(content);
+      if (!fallbackZh) {
+        return res.status(502).json({ error: 'AI 翻譯未回傳有效內容，請稍後重試。' });
+      }
       return res.json({ translationZh: fallbackZh });
     }
     return res.json({ translationZh: translation });
   } catch (err: any) {
     console.warn('Translate article AI error, using fallback:', err?.message || err);
     const fallbackZh = await fallbackTranslateToZh(content);
+    if (!fallbackZh) {
+      const parsedErr = parseGeminiApiError(err);
+      return res.status(parsedErr.statusCode).json({ error: parsedErr.userMessage, details: parsedErr.details });
+    }
     return res.json({ translationZh: fallbackZh });
   }
 });
@@ -3359,26 +3432,14 @@ app.post('/api/ai/generate-quiz', async (req, res) => {
 
   const ai = getAIClient((req.headers['x-gemini-api-key'] as string) || req.body?.apiKey);
   if (!ai) {
-    return res.json({
-      quiz: [
-        {
-          question: `What is the primary subject or theme discussed in "${title || 'the article'}"?`,
-          options: [
-            'The central perspectives and key developments presented in the passage.',
-            'A completely unrelated historical myth from ancient civilizations.',
-            'A fictional fairy tale designed strictly for young infants.',
-            'An instructional manual for assembling household appliances.'
-          ],
-          correctAnswerIndex: 0,
-          explanation: '文章主旨圍繞文本所陳述的核心觀點與發展脈絡展開。'
-        }
-      ]
+    return res.status(503).json({
+      error: '尚未配置 Gemini API Key，請先於「設定」輸入金鑰以生成閱讀理解測驗。'
     });
   }
 
   try {
     const prompt = `You are an English language testing expert.
-Create 2 or 3 multiple-choice reading comprehension and vocabulary questions based on this article.
+Create 3 multiple-choice reading comprehension and vocabulary questions based on this article.
 Title: "${title || 'English Reading'}"
 Content:
 """
@@ -3387,12 +3448,13 @@ ${content.slice(0, 20000)}
 
 For each question provide:
 - "question": clear question in English testing either main idea, specific fact, inference, or context vocabulary
-- "options": exactly 4 options in English
+- "options": exactly 4 distinct options in English
 - "correctAnswerIndex": number 0 to 3
 - "explanation": concise explanation in Traditional Chinese (繁體中文) citing why the correct answer is right.`;
 
     const config = {
       temperature: 0.3,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.ARRAY,
@@ -3414,23 +3476,18 @@ For each question provide:
 
     const response = await generateWithModelFallback(ai, config, prompt);
     const parsed = JSON.parse(response.text || '[]');
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return res.status(502).json({ error: 'AI 生成測驗回傳格式不完整，請點擊重試。' });
+    }
     return res.json({ quiz: parsed });
   } catch (err: any) {
-    console.warn('Generate quiz AI error, providing fallback quiz:', err?.message || err);
-    return res.json({
-      quiz: [
-        {
-          question: `What is the primary subject or theme discussed in "${title || 'the article'}"?`,
-          options: [
-            'The central perspectives and key developments presented in the passage.',
-            'A completely unrelated historical myth from ancient civilizations.',
-            'A fictional fairy tale designed strictly for young infants.',
-            'An instructional manual for assembling household appliances.'
-          ],
-          correctAnswerIndex: 0,
-          explanation: '文章主旨圍繞文本所陳述的核心觀點與發展脈絡展開。'
-        }
-      ]
+    console.error('Generate quiz AI error:', err?.message || err);
+    const parsedErr = parseGeminiApiError(err);
+    return res.status(parsedErr.statusCode).json({
+      error: parsedErr.userMessage,
+      reason: parsedErr.reason,
+      details: parsedErr.details,
+      suggestion: parsedErr.suggestion
     });
   }
 });
